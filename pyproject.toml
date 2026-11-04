@@ -1,0 +1,24 @@
+[project]
+name = "code-index"
+version = "0.1.0"
+description = "Indexador de código (git/GitHub) com CocoIndex, Voyage Code e pgvector, com CLI e servidor MCP"
+authors = [
+    { name = "Pedro Luiz Mossi", email = "pedroluizmossi@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "asyncpg>=0.32.0",
+    "cocoindex>=1.1.0",
+    "litellm>=1.108.0",
+    "mcp[cli]>=2.3.0",
+    "pgvector>=0.5.1",
+    "python-dotenv>=1.2.4",
+]
+
+[project.scripts]
+code-index = "code_index.cli:main"
+code-index-mcp = "code_index.mcp_server:main"
+
+[build-system]
+requires = ["uv_build>=0.12.23,<0.13.0"]
+build-backend = "uv_build"

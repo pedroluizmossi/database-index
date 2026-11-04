@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "code-index": {
+      "command": "uv",
+      "args": ["run", "--directory", "/home/pedro/Projetos/database-index", "code-index-mcp"]
+    }
+  }
+}

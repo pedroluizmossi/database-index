@@ -4,6 +4,11 @@ Incremental: o CocoIndex memoiza por arquivo e por chunk, então após um
 `git pull` só os arquivos alterados são re-chunkados e só chunks novos
 geram chamadas de embedding. Repos removidos do repos.toml têm suas linhas
 apagadas automaticamente.
+
+Custo de mudanças: o embedding é memoizado pelo próprio LiteLLMEmbedder.embed (chave =
+modelo + parâmetros + texto), independente destas funções. Alterar/mover este módulo
+faz o CocoIndex revarrer e re-chunkar, mas só textos novos vão para a Voyage.
+Mantenha estáveis: app name, ContextKeys, subpath ("repo", nome) e o schema da tabela.
 """
 
 from __future__ import annotations
@@ -13,8 +18,6 @@ from dataclasses import dataclass
 from typing import Annotated
 
 import asyncpg
-from numpy.typing import NDArray
-
 import cocoindex as coco
 from cocoindex.connectors import localfs, postgres
 from cocoindex.ops.litellm import LiteLLMEmbedder
@@ -22,10 +25,12 @@ from cocoindex.ops.text import RecursiveSplitter, detect_code_language
 from cocoindex.resources.chunk import Chunk
 from cocoindex.resources.file import FileLike, PatternFilePathMatcher
 from cocoindex.resources.id import IdGenerator
+from numpy.typing import NDArray
 
-from .config import DATABASE_URL, MAX_FILE_BYTES, PG_SCHEMA, TABLE_NAME, Repo
+from ..domain.models import Repo
+from ..infra import llm
+from ..settings import get_settings
 from .content import CONTENT_LOGIC, redact, skip_reason
-from .embedding import close_litellm_clients, make_embedder
 
 PG_DB = coco.ContextKey[asyncpg.Pool]("code_index_db")
 EMBEDDER = coco.ContextKey[LiteLLMEmbedder]("code_index_embedder", detect_change=True)
@@ -47,13 +52,14 @@ class CodeChunk:
 
 @coco.lifespan
 async def _lifespan(builder: coco.EnvironmentBuilder) -> AsyncIterator[None]:
-    async with asyncpg.create_pool(DATABASE_URL) as pool:
+    settings = get_settings()
+    async with asyncpg.create_pool(settings.database_url) as pool:
         builder.provide(PG_DB, pool)
-        builder.provide(EMBEDDER, make_embedder())
+        builder.provide(EMBEDDER, llm.make_embedder(settings))
         try:
             yield
         finally:
-            await close_litellm_clients()
+            await llm.close_clients()
 
 
 @coco.fn
@@ -92,7 +98,7 @@ async def process_file(
         text = await file.read_text()
     except UnicodeDecodeError:
         return
-    if not text.strip() or len(text.encode()) > MAX_FILE_BYTES:
+    if not text.strip() or len(text.encode()) > get_settings().max_file_bytes:
         return
     language = detect_code_language(filename=file.file_path.path.name) or ""
     if skip_reason(path, language, text):
@@ -114,40 +120,41 @@ async def index_repo(repo: Repo, revision: str, table: postgres.TableTarget[Code
     """Memoizado por (repo, revision): se o commit não mudou, o repo nem é percorrido
     e as linhas já gravadas são mantidas. Por isso o custo de um sync é proporcional
     aos repos que mudaram, não ao tamanho da org."""
+    root = repo.local_path(get_settings().repos_dir)
     files = localfs.walk_dir(
-        repo.local_path,
+        root,
         recursive=True,
         path_matcher=PatternFilePathMatcher(
             included_patterns=list(repo.include),
             excluded_patterns=repo.all_excludes,
         ),
     )
-    await coco.mount_each(process_file, files.items(), repo.name, str(repo.local_path), table)
+    await coco.mount_each(process_file, files.items(), repo.name, str(root), table)
 
 
 @coco.fn
 async def app_main(repos: list[tuple[Repo, str]]) -> None:
     """`repos` = todos os repos que devem existir no índice, com sua revisão.
     Repo ausente da lista tem suas linhas apagadas."""
+    settings = get_settings()
     table = await postgres.mount_table_target(
         PG_DB,
-        table_name=TABLE_NAME,
+        table_name=settings.chunks_table,
         table_schema=await postgres.TableSchema.from_class(
             CodeChunk, primary_key=["repo", "path", "id"]
         ),
-        pg_schema_name=PG_SCHEMA,
+        pg_schema_name=settings.pg_schema,
     )
     table.declare_vector_index(column="embedding", metric="cosine", method="hnsw")
-    qualified = f'"{PG_SCHEMA}"."{TABLE_NAME}"'
     table.declare_sql_command_attachment(
         name="fts_index",
-        setup_sql=f"CREATE INDEX IF NOT EXISTS code_chunks_fts ON {qualified} "
+        setup_sql=f"CREATE INDEX IF NOT EXISTS code_chunks_fts ON {settings.chunks_table_qualified} "
         f"USING gin (to_tsvector('simple', code))",
-        teardown_sql=f'DROP INDEX IF EXISTS "{PG_SCHEMA}".code_chunks_fts',
+        teardown_sql=f'DROP INDEX IF EXISTS "{settings.pg_schema}".code_chunks_fts',
     )
     for repo, revision in repos:
         await coco.mount(coco.component_subpath("repo", repo.name), index_repo, repo, revision, table)
 
 
-def build_app(repos: list[tuple[Repo, str]]) -> coco.App:
-    return coco.App(coco.AppConfig(name="CodeIndex"), app_main, repos=repos)
+def build_app(plan: list[tuple[Repo, str]]) -> coco.App:
+    return coco.App(coco.AppConfig(name="CodeIndex"), app_main, repos=plan)

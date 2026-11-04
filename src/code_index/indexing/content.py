@@ -57,7 +57,10 @@ def _is_placeholder(value: str) -> bool:
     v = value.strip()
     return (v.startswith(("${", "{{", "%(", "#{", "<", "$")) or v.lower() in {"changeme", "password", "secret", "null", "none", "true", "false"}
             or v.isupper() and "_" in v  # nomes de variável, ex.: DB_PASSWORD
-            or re.fullmatch(r"[A-Za-z]+(?:[_.-][A-Za-z]+)*", v) is not None  # identificador: AccessKeyId, auth_token_key
+            # identificador (exige forma de identificador; palavra solta como "mysecretpassword" É mascarada)
+            or re.fullmatch(r"[a-z]+(?:[A-Z][a-z0-9]*)+", v) is not None        # camelCase: outputTokenCount
+            or re.fullmatch(r"(?:[A-Z][a-z0-9]+){2,}", v) is not None           # PascalCase: AccessKeyId
+            or re.fullmatch(r"[A-Za-z]+(?:[_.-][A-Za-z]+)+", v) is not None     # com separador: auth_token_key
             or re.fullmatch(r"\d+[smhdSMHD]?", v) is not None  # número/duração: 15552000, 30d
             or re.fullmatch(r"[a-z0-9]+(?:[_.-][a-z0-9]+){2,}", v) is not None  # chave i18n: platform.x.cloud9_y
             or re.fullmatch(r"(?i)(string|integer|int|long|double|boolean|bool|binary|date|datetime|object|number|uuid|blob|any)(\?|\[\])*", v) is not None)  # tipo (SDL)

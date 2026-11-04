@@ -24,6 +24,7 @@ repos.toml ──git clone/fetch──▶ .repos/<nome> ──CocoIndex──▶
 docker compose up -d          # Postgres 17 + pgvector em localhost:5432
 cp .env.example .env          # preencha VOYAGE_API_KEY
 uv sync
+cp repos.example.toml repos.toml   # opcional: ou use `code-index repo add` / `org add`
 ```
 
 ## Uso
@@ -32,25 +33,25 @@ uv sync
 
 ```bash
 uv run code-index repo add pallets/itsdangerous            # org/repo do GitHub, URL git ou diretório
-uv run code-index index snr-functions-backend              # indexa agora: nome curto, org/repo ou org__repo
-uv run code-index index senior-sistemas/snr-iassist outro-repo
+uv run code-index index meu-backend                         # indexa agora: nome curto, org/repo ou org__repo
+uv run code-index index minha-org/meu-servico outro-repo
 uv run code-index index https://github.com/org/novo.git    # nome desconhecido: registra e indexa
 ```
 
 ### Orgs do GitHub, aos poucos
 
 ```bash
-uv run code-index org add senior-sistemas                  # só descobre os repos (sem custo de embedding)
-uv run code-index org add outra-org --match "snr-*" --skip "*-legacy" --max-size-mb 200
+uv run code-index org add minha-org                        # só descobre os repos (sem custo de embedding)
+uv run code-index org add outra-org --match "api-*" --skip "*-legacy" --max-size-mb 200
 uv run code-index org list                                 # progresso: indexed / pending / error / ignored
 
 uv run code-index sync --dry-run -b 5                      # mostra o próximo lote, sem custo
 uv run code-index sync -b 5                                # indexa até 5: alterados > pendentes > com erro
 uv run code-index watch -b 5 --interval 900                # avança a fila aos poucos e acompanha pushes
 
-uv run code-index repo list -s pending -o senior-sistemas
-uv run code-index repo remove senior-sistemas__repo-x       # repo de org: marca como ignorado
-uv run code-index repo unignore senior-sistemas__repo-x
+uv run code-index repo list -s pending -o minha-org
+uv run code-index repo remove minha-org__repo-x       # repo de org: marca como ignorado
+uv run code-index repo unignore minha-org__repo-x
 ```
 
 O estado fica em `code_index.repos` (commit indexado, revisão, último push, erro). Um sync só
@@ -61,13 +62,13 @@ Um `[[repo]]` avulso com o mesmo nome de um repo da org tem precedência (filtro
 
 ### Arquivos ignorados e conteúdo filtrado
 
-Por padrão ficam de fora (`config.py`: `DEFAULT_EXCLUDE`, `TEST_EXCLUDE` e `NOISE_EXCLUDE`):
+Por padrão ficam de fora (`domain/file_patterns.py`: `DEFAULT_EXCLUDE`, `TEST_EXCLUDE` e `NOISE_EXCLUDE`):
 - dependências, builds, minificados, lockfiles;
 - **testes de todas as linguagens** (`src/test`, `tests/`, `__tests__`, `*Test.java`, `*.spec.ts`,
   `test_*.py`, `*_test.go`, `*Tests.cs`, `*_spec.rb`...);
 - `CHANGELOG*`/`CHANGES*`/`HISTORY*`, **`openapi.*`/`swagger.*`** (OpenAPI é indexado por outra fonte)
   e migrations de outros bancos (`migration/**/H2|Oracle|SqlServer|MySql`). Fica só a de PostgreSql;
-- conteúdo (`content.py`): CRDs do Kubernetes e yaml/json/xml acima de 100 KB.
+- conteúdo (`indexing/content.py`): CRDs do Kubernetes e yaml/json/xml acima de 100 KB.
 
 Traduções e pastas `spec/` continuam indexadas.
 
@@ -78,7 +79,8 @@ sai com `***` no lugar de:
 - credenciais em URLs e connection strings.
 
 Blocos PEM e blobs base64 viram `<... omitido>`. Variáveis (`${X}`, `{{ }}`), nomes de
-constante, chaves de i18n, números e tipos não são mascarados. Editar `content.py` faz o próximo
+constante (camelCase, PascalCase, com `_`/`.`/`-`), chaves de i18n, números e tipos não são
+mascarados. A mesma máscara vale para `show` e para a tool `read_file_lines` do MCP. Editar `indexing/content.py` faz o próximo
 `sync` reaplicar as regras a todos os repos, reembedando só os trechos que mudaram.
 
 Use `--exclude` em `repo add` ou `org add` para somar padrões (`extra_exclude` no `repos.toml`).
@@ -86,8 +88,8 @@ Use `--exclude` em `repo add` ou `org add` para somar padrões (`extra_exclude` 
 ### Filtrar e priorizar a org por linguagem
 
 ```bash
-code-index org set senior-sistemas --languages Java TypeScript Go   # filtra e define a prioridade
-code-index org set senior-sistemas --languages                      # sem argumentos: remove o filtro
+code-index org set minha-org --languages Java TypeScript Go   # filtra e define a prioridade
+code-index org set minha-org --languages                      # sem argumentos: remove o filtro
 code-index org list                                                 # mostra a distribuição por linguagem
 ```
 A linguagem é a principal do repo segundo o GitHub (`none` = sem linguagem detectada). Repos que
@@ -97,9 +99,9 @@ saem pelo filtro têm os chunks apagados no próximo sync.
 
 ```bash
 uv run code-index search "onde o token expirado é rejeitado"
-uv run code-index search -m keyword UpdateAllLambdasRuntimeHandler -r senior-sistemas__snr-functions-backend
+uv run code-index search -m keyword UserRepository -r minha-org__meu-backend
 uv run code-index search "criação de tabela" -l sql -p "**/migration/**"
-uv run code-index show senior-sistemas__snr-functions-backend/functions.sdl:381-404
+uv run code-index show minha-org__meu-backend/src/main/App.java:10-40
 uv run code-index search "..." --no-rerank                 # só busca híbrida
 ```
 
@@ -107,20 +109,146 @@ Pipeline de busca: vetor (top 80) + full-text (top 80) são combinados por RRF. 
 (`RERANK_CANDIDATES`) vão para o reranker (`RERANK_MODEL=voyage/rerank-2.5`), que devolve os top-k:
 8 na CLI (`-k`) e 8 no MCP (`top_k`). Se o rerank falhar, a resposta usa a ordem híbrida.
 
-## MCP (Claude Code)
+## Servidor HTTP: API REST + MCP
 
-O `.mcp.json` na raiz já registra o servidor para este projeto. Para usar em qualquer projeto:
+`code-index serve` sobe num único processo:
+- a API REST em `/api/v1` (documentação interativa em `/docs`);
+- o login Google em `/auth`;
+- o MCP (Streamable HTTP) em `/mcp`.
+
+Não existe mais MCP via stdio.
 
 ```bash
-claude mcp add --scope user code-index -- uv run --directory /home/pedro/Projetos/database-index code-index-mcp
+# .env: CODE_INDEX_AUTH_SECRET (obrigatório), GOOGLE_CLIENT_ID/SECRET, CODE_INDEX_ADMIN_EMAILS, CODE_INDEX_PUBLIC_URL
+uv run code-index serve                      # escuta em 127.0.0.1:8765; ponha um proxy com TLS na frente
 ```
 
-Ferramentas: `search_code`, `read_file_lines`, `list_repos` (filtros por status/org/nome) e
-`reindex` (nomes específicos ou um lote dos pendentes).
+O comando `code-index` vive no ambiente do projeto: use `uv run code-index ...` na pasta do projeto, ou
+instale-o globalmente com `uv tool install -e .` (editável: acompanha o código).
+
+### Autenticação e permissões
+
+| Quem | Como entra | Scopes |
+|---|---|---|
+| Pessoa autorizada (e-mail em `GOOGLE_ALLOWED_EMAILS`/admins, ou domínio Workspace em `GOOGLE_ALLOWED_DOMAIN`) | `GET /auth/login` (Google OIDC + PKCE; valida assinatura, `nonce` e `email_verified`) → cookie de sessão | `search:read`; admins: todos |
+| Agent / automação | `Authorization: Bearer cix_...` | os do token |
+
+**Scopes:**
+- `search:read`: busca, leitura de arquivos e listagens, inclusive todo o MCP;
+- `index:write`: sync e reindex, que geram custo na Voyage;
+- `admin`: gerencia orgs, repos e auditoria, e implica os demais scopes.
+
+**Tokens de agent:**
+- O valor é mostrado só uma vez. No banco fica apenas o HMAC-SHA256 com `CODE_INDEX_AUTH_SECRET`.
+- Têm validade (padrão de 90 dias) e podem ser revogados.
+- **Só pessoas logadas pelo Google emitem tokens** (`POST /api/v1/tokens`), e só com scopes que elas já têm.
+  Um token nunca emite outro.
+- O primeiro token (bootstrap) é emitido pelo operador no servidor:
+  ```bash
+  uv run code-index token create "claude-code" --owner voce@gmail.com            # search:read
+  uv run code-index token create "ci-indexador" --owner voce@gmail.com --scopes search:read index:write
+  uv run code-index token list [--all]
+  uv run code-index token revoke <id>
+  ```
+
+**Outras proteções:**
+- **Hosts e origens:** o header `Host` precisa estar na lista permitida (proteção contra DNS rebinding na API
+  e no MCP).
+- **CSRF:** requisições autenticadas por cookie que alteram estado exigem `Origin` igual a `CODE_INDEX_PUBLIC_URL`.
+- **Token só no header:** token na URL não é aceito.
+- **Registro de repos:** `sync`/`reindex` só registram repos desconhecidos para admins. Com `index:write`
+  dá para indexar apenas repos já cadastrados.
+- **Rate limit por token:** leitura 120/min, busca 30/min, sync 6/hora (configurável).
+- **Auditoria:** fica em `code_index.audit_log`, com quem, ação, parâmetros, status e IP. Nunca grava
+  tokens nem o conteúdo retornado. Admins consultam em `GET /api/v1/audit`.
+- **Segredos mascarados:** respostas de busca e de leitura de arquivo saem com a mesma máscara do índice.
+
+### API REST (resumo)
+
+| Método e rota | Scope |
+|---|---|
+| `GET /api/v1/me` | search:read |
+| `POST /api/v1/search` · `GET /api/v1/files/{repo}/{path}` | search:read |
+| `GET /api/v1/repos` · `GET /api/v1/orgs` | search:read |
+| `POST /api/v1/sync` (job em background) · `GET /api/v1/sync/jobs/{id}` | index:write |
+| `POST/DELETE /api/v1/repos…` · `POST/PATCH/DELETE /api/v1/orgs…` · `GET /api/v1/audit` | admin |
+| `GET/POST/DELETE /api/v1/tokens` | sessão Google (emitir); dono ou admin (revogar) |
+
+### MCP no Claude Code
+
+Os tokens de agent servem para o MCP. O `.mcp.json` deste projeto lê `CODE_INDEX_URL` e `CODE_INDEX_TOKEN`
+do ambiente. Para usar em qualquer projeto:
+
+```bash
+claude mcp add --scope user --transport http code-index https://<host>/mcp \
+  --header "Authorization: Bearer cix_..."
+```
+
+Ferramentas: `search_code`, `read_file_lines`, `list_repos` (com `search:read`) e `reindex` (exige
+`index:write`).
+
+### Login Google: configuração
+
+1. No Google Cloud Console (pode ser um projeto pessoal), crie um OAuth client do tipo *Web application*.
+   Na tela de consentimento, use *External* em modo *Testing* e adicione a sua conta como *test user*.
+   Assim só contas cadastradas conseguem passar pelo Google.
+2. Em *Authorized redirect URI*, coloque `<CODE_INDEX_PUBLIC_URL>/auth/callback`
+   (local: `http://127.0.0.1:8765/auth/callback`).
+3. No `.env`, preencha `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` e quem pode entrar:
+   - `CODE_INDEX_ADMIN_EMAILS`: admins, que entram com todos os scopes;
+   - `GOOGLE_ALLOWED_EMAILS`: outras contas, que entram só com leitura;
+   - `GOOGLE_ALLOWED_DOMAIN` (opcional): um domínio Google Workspace inteiro, validado pelo claim `hd`.
+
+   Sem nenhuma dessas configurações, ninguém entra.
+
+Depois do login, o `/docs` funciona como painel: as chamadas usam o cookie de sessão.
+
+## Arquitetura
+
+```
+src/code_index/
+  settings.py        Settings (pydantic-settings: env/.env) + bootstrap() de runtime
+  domain/            puro, sem I/O: models, file_patterns (o que indexar), policies (lote, nomes)
+  infra/             mundo externo: db (pool + migrations sql/NNN_*.sql), repo_store, chunk_store,
+                     config_file (repos.toml), git, github, llm (LiteLLM: embed/rerank)
+  sources/           de onde vêm os repos (RepoSource): github_org; ponto de extensão p/ novas fontes
+  indexing/          content (máscara/skip), code_flow (app CocoIndex), orchestrator (sync em etapas)
+  retrieval/         search (híbrida + rerank), files (leitura com máscara)
+  services.py        casos de uso: ÚNICO ponto usado pelas interfaces
+  interfaces/        cli.py e http/ (app FastAPI, mcp em /mcp, security): só parsing/formatação
+  domain/auth.py     scopes e regras de emissão de token (puro)
+  infra/auth_store   tokens (hash HMAC) e auditoria; infra/google_oidc: login Google
+```
+
+Regras:
+- **Direção das dependências:** `interfaces → services → indexing/retrieval/sources → infra → domain/settings`.
+  O `domain` não importa nada do projeto.
+- **Configuração:** sempre via `Settings` injetado. A única exceção é o lifespan do CocoIndex, que usa
+  `get_settings()`.
+- **Núcleo assíncrono:** há um só `asyncio.run` por comando, na CLI.
+- **Schema da tabela `repos`:** evolui com uma migration nova em `infra/sql/` (`NNN_descricao.sql`,
+  placeholder `{schema}`). A tabela `code_chunks` é gerenciada pelo CocoIndex.
+- **Nova fonte de dados** (ex.: OpenAPI): crie um `RepoSource`/fluxo próprio em `sources/` e `indexing/`
+  e exponha pelo `services.py`.
+- Mudar `indexing/code_flow.py` faz o CocoIndex revarrer e re-chunkar, mas os embeddings ficam no cache
+  pelo texto: só textos novos vão para a Voyage. Mantenha estáveis o nome do app, as ContextKeys, o
+  subpath `("repo", nome)` e o schema da tabela.
+
+## Desenvolvimento
+
+```bash
+uv run pytest -q                      # unitários + integração (a integração é pulada sem o Postgres)
+uv run pytest -q -m "not integration" # só unitários
+uv run mypy src
+```
+
+Os testes de integração usam o schema `code_index_test`, pastas temporárias e embeddings/rerank falsos.
+Não tocam no índice real e não chamam a Voyage.
 
 ## Notas
 
 - Trocar `EMBED_MODEL`/`EMBED_DIMENSIONS` invalida o cache de embeddings automaticamente:
   o próximo `sync` reembeda tudo (e cobra de novo na Voyage).
 - Estado incremental do CocoIndex fica em `.cocoindex/` (LMDB). Se apagá-lo, rode `sync --full`.
+- Todos os comandos (inclusive `repo add` e `show`) precisam do Postgres no ar.
 - Tabela: `code_index.code_chunks (repo, path, id, language, code, start_line, end_line, embedding)`.

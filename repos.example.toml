@@ -1,0 +1,19 @@
+# Copie para repos.toml (ignorado pelo git). Gerenciado por `code-index repo ...` / `code-index org ...`.
+#
+# [[org]]: org/usuário do GitHub; os repos são descobertos pela API e indexados em lotes.
+# [[org]]
+# name = "minha-org"
+# languages = ["Java", "TypeScript"]   # opcional: filtra e define a prioridade
+# match = ["api-*"]                    # opcional: globs de nome de repo
+# max_size_mb = 200                    # opcional
+#
+# [[repo]]: repositório avulso (url git) ou diretório local (path).
+# [[repo]]
+# name = "minha-org__meu-backend"
+# url = "https://github.com/minha-org/meu-backend.git"
+# branch = "main"                      # opcional
+# extra_exclude = ["**/out"]           # opcional: somados aos padrões
+#
+# [[repo]]
+# name = "projeto-local"
+# path = "/home/voce/projetos/projeto-local"

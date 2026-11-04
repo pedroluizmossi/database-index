@@ -2,7 +2,7 @@
 
 - Toda requisição exige `Authorization: Bearer cix_...` com scope `search:read`
   (o SDK do MCP responde 401/403 antes de chegar às tools).
-- `reindex` exige também `index:write` (gera custo na Voyage).
+- O MCP só lê: indexar (que gera custo na Voyage) fica na API e na interface, com confirmação.
 - Proteção contra DNS rebinding: só aceita os hosts/origens configurados.
 - Cada chamada de tool passa pelo rate limit e vai para a auditoria (sem o conteúdo retornado).
 """
@@ -21,7 +21,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 
-from ...domain.auth import ADMIN, INDEX_WRITE, SEARCH_READ, Principal
+from ...domain.auth import SEARCH_READ, Principal
 from ...services import CodeIndexService
 from ...settings import Settings
 from .security import RateLimiter, enforce_rate_limit, origin_of
@@ -169,23 +169,5 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
             return [r.to_dict() for r in await svc.list_repos(status=status, org=org, name=name)]
 
         return await run_tool("list_repos", {"status": status, "org": org, "name": name}, "read", None, fn)
-
-    @server.tool()
-    async def reindex(repos: list[str] | None = None, batch: int = 5) -> dict:
-        """Indexa repositórios (exige o scope index:write; gera custo de embedding).
-
-        Args:
-            repos: nomes a indexar agora ("org__repo", "org/repo" ou só "repo"). Se vazio,
-                processa um lote dos repos pendentes ou alterados.
-            batch: tamanho do lote quando `repos` é vazio (máx. 10).
-        """
-        batch = max(0, min(batch, 10))
-
-        async def fn(svc: CodeIndexService) -> dict:
-            principal = _current_principal()
-            res = await svc.sync(repos or None, batch=batch, progress=False, allow_register=principal.has(ADMIN))
-            return res.to_dict()
-
-        return await run_tool("reindex", {"repos": repos, "batch": batch}, "sync", INDEX_WRITE, fn)
 
     return server

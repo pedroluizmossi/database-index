@@ -11,6 +11,7 @@ Uso:
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections import Counter
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
@@ -28,12 +29,15 @@ from .infra.auth_store import AuditStore, TokenInfo, TokenStore
 from .infra.chunk_store import ChunkStore
 from .infra.config_file import ConfigFile
 from .infra.db import open_pool
+from .infra.job_store import JobRecord, JobStore
 from .infra.git import GitClient, resolve_github_token
 from .infra.github import GitHubClient
 from .infra.repo_store import RepoStore
 from .retrieval import files as retrieval_files
 from .retrieval.search import Searcher
 from .settings import Settings, get_settings
+
+log = logging.getLogger(__name__)
 
 
 def _iso_local(dt: datetime | None) -> str | None:
@@ -56,10 +60,14 @@ class CodeIndexService:
         searcher: Searcher,
         tokens: TokenStore,
         audit: AuditStore,
+        jobs: JobStore,
     ) -> None:
         self.settings = settings
         self._tokens = tokens
         self._audit = audit
+        self._jobs = jobs
+        self._job_lock = asyncio.Lock()  # checagem + criação de job, sem corrida entre requisições
+        self._job_tasks: set[asyncio.Task[None]] = set()
         self._repos = repos
         self._chunks = chunks
         self._config = config
@@ -323,6 +331,87 @@ class CodeIndexService:
         return self.settings.repos_dir / repo
 
 
+    # ------------------------------------------------------------ jobs de sync
+
+    async def start_sync(
+        self,
+        principal: Principal | None,
+        names: list[str] | None,
+        *,
+        batch: int,
+        do_discover: bool = True,
+        pull: bool = True,
+    ) -> JobRecord:
+        """Inicia uma indexação em segundo plano e devolve o job (já com id). Um por vez.
+
+        Levanta RuntimeError se já houver um job rodando.
+        """
+        actor = principal.actor if principal else "operador local"
+        params = {"repos": names, "batch": batch, "discover": do_discover, "pull": pull}
+        async with self._job_lock:
+            running = await self._jobs.running()
+            if running is not None:
+                raise RuntimeError(f"já existe um sync em andamento: job {running.id}")
+            job_id = await self._jobs.create(actor, params)
+            task = asyncio.create_task(self._run_job(job_id, principal, names, batch, do_discover, pull))
+            self._job_tasks.add(task)
+            task.add_done_callback(self._job_tasks.discard)
+        job = await self._jobs.get(job_id)
+        assert job is not None
+        return job
+
+    async def _run_job(
+        self,
+        job_id: str,
+        principal: Principal | None,
+        names: list[str] | None,
+        batch: int,
+        do_discover: bool,
+        pull: bool,
+    ) -> None:
+        status, result, error = "failed", None, None
+        try:
+            res = await self.sync(
+                names, batch=batch, do_discover=do_discover, pull=pull, progress=False,
+                allow_register=principal is None or principal.has(ADMIN),
+            )
+            status, result = "done", res.to_dict()
+        except asyncio.CancelledError:
+            error = "interrompido: o servidor foi encerrado durante a indexação"
+            await self._jobs.finish(job_id, status=status, result=None, error=error)
+            raise
+        except Exception as e:  # noqa: BLE001 - o erro vai para o job, não derruba o servidor
+            error = str(e)
+            log.exception("job de sync %s falhou", job_id)
+        await self._jobs.finish(job_id, status=status, result=result, error=error)
+        await self.audit(principal, "sync:job", params={"job": job_id, "status": status})
+
+    async def recover_interrupted_jobs(self) -> int:
+        """Marca como `failed` os jobs que ficaram `running` de um servidor que caiu.
+
+        Chamar SÓ na inicialização do servidor HTTP, o único processo que executa jobs.
+        Não pode rodar em `open_service()`: todo comando da CLI abre o serviço, e marcaria
+        como falho o job que um servidor ainda está executando.
+        """
+        n = await self._jobs.fail_interrupted("o servidor reiniciou durante a indexação")
+        if n:
+            log.warning("%d job(s) de sync interrompido(s) por reinício marcados como falhos", n)
+        return n
+
+    async def get_job(self, job_id: str) -> JobRecord | None:
+        return await self._jobs.get(job_id)
+
+    async def list_jobs(self, limit: int = 50) -> list[JobRecord]:
+        return await self._jobs.recent(limit)
+
+    async def shutdown(self) -> None:
+        """Encerra os jobs em andamento (marca como interrompidos). Chamado antes de fechar o pool."""
+        tasks = list(self._job_tasks)
+        for t in tasks:
+            t.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
     # ------------------------------------------------------------ autenticação
 
     async def authenticate(self, token: str) -> Principal | None:
@@ -431,6 +520,7 @@ async def open_service(settings: Settings | None = None) -> AsyncIterator[CodeIn
     try:
         token = resolve_github_token(settings)
         async with open_pool(settings) as pool:
+            jobs = JobStore(pool, settings)
             repos = RepoStore(pool, settings)
             chunks = ChunkStore(pool, settings)
             config = ConfigFile(settings.repos_file)
@@ -443,7 +533,7 @@ async def open_service(settings: Settings | None = None) -> AsyncIterator[CodeIn
                 github=GitHubClient(token),
             )
             searcher = Searcher(settings, chunks=chunks)
-            yield CodeIndexService(
+            svc = CodeIndexService(
                 settings,
                 repos=repos,
                 chunks=chunks,
@@ -453,6 +543,11 @@ async def open_service(settings: Settings | None = None) -> AsyncIterator[CodeIn
                 searcher=searcher,
                 tokens=TokenStore(pool, settings),
                 audit=AuditStore(pool, settings),
+                jobs=jobs,
             )
+            try:
+                yield svc
+            finally:
+                await svc.shutdown()  # antes de fechar o pool
     finally:
         await llm.close_clients()

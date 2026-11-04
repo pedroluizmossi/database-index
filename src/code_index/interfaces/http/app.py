@@ -9,19 +9,18 @@ Tokens só são emitidos por pessoas logadas via Google (cookie de sessão).
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import secrets
-import uuid
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from html import escape
+from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
-from fastapi.responses import JSONResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -42,7 +41,36 @@ from .security import (
 
 log = logging.getLogger(__name__)
 LOGIN_COOKIE = "cix_login"
+
+_PAGE_CSS = (
+    "body{margin:0;min-height:100dvh;display:grid;place-items:center;padding:24px;"
+    "font:16px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;background:#fafafa;color:#18181b}"
+    "main{max-width:440px;background:#fff;border:1px solid #e4e4e7;border-radius:16px;padding:28px}"
+    "h1{font-size:20px;margin:0 0 8px}p{margin:8px 0;color:#52525b}"
+    "a{color:#4f46e5;font-weight:500}"
+    "@media (prefers-color-scheme:dark){body{background:#09090b;color:#fafafa}"
+    "main{background:#18181b;border-color:#27272a}p{color:#a1a1aa}}"
+)
+
+
+def _login_page(status_code: int, title: str, message: str, *, retry: bool = True) -> HTMLResponse:
+    """Página de erro do login. Todo texto passa por escape: nada vindo do Google vira HTML."""
+    retry_link = '<a href="/auth/login">Tentar de novo</a> · ' if retry else ""
+    body = (
+        '<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        f"<title>{escape(title)}</title><style>{_PAGE_CSS}</style></head><body><main>"
+        f"<h1>{escape(title)}</h1><p>{escape(message)}</p>"
+        f'<p>{retry_link}<a href="/ui/">Voltar para a interface</a></p>'
+        "</main></body></html>"
+    )
+    return HTMLResponse(
+        body,
+        status_code=status_code,
+        headers={"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'"},
+    )
 LOGIN_MAX_AGE = 600
+UI_DIR = Path(__file__).resolve().parents[4] / "frontend" / "dist"  # build de `pnpm build` em frontend/
 
 
 # ------------------------------------------------------------------ modelos de entrada
@@ -98,66 +126,6 @@ class TokenIn(BaseModel):
     ttl_days: int | None = Field(None, ge=1, le=365)
 
 
-# ------------------------------------------------------------------ jobs de sync
-
-
-@dataclass
-class SyncJob:
-    id: str
-    requested_by: str
-    params: dict[str, Any]
-    status: Literal["running", "done", "failed"] = "running"
-    started_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat(timespec="seconds"))
-    finished_at: str | None = None
-    result: dict[str, Any] | None = None
-    error: str | None = None
-
-
-class SyncJobs:
-    """Um sync por vez (o orquestrador também trava); histórico curto em memória."""
-
-    def __init__(self, keep: int = 50) -> None:
-        self._jobs: dict[str, SyncJob] = {}
-        self._keep = keep
-        self._tasks: set[asyncio.Task[None]] = set()
-
-    def running(self) -> SyncJob | None:
-        return next((j for j in self._jobs.values() if j.status == "running"), None)
-
-    def get(self, job_id: str) -> SyncJob | None:
-        return self._jobs.get(job_id)
-
-    def start(self, svc: CodeIndexService, principal: Principal, body: SyncIn) -> SyncJob:
-        job = SyncJob(id=uuid.uuid4().hex, requested_by=principal.actor, params=body.model_dump())
-        self._jobs[job.id] = job
-        while len(self._jobs) > self._keep:
-            self._jobs.pop(next(iter(self._jobs)))
-
-        async def run() -> None:
-            try:
-                res = await svc.sync(
-                    body.repos or None, batch="default" if body.batch is None else body.batch,
-                    do_discover=body.discover, pull=body.pull, progress=False,
-                    allow_register=principal.has(ADMIN),
-                )
-                job.result, job.status = res.to_dict(), "done"
-            except Exception as e:  # noqa: BLE001 - erro vai para o job
-                job.error, job.status = str(e), "failed"
-                log.exception("job de sync %s falhou", job.id)
-            finally:
-                job.finished_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-                await svc.audit(principal, "sync:job", params={"job": job.id, "status": job.status})
-
-        task = asyncio.create_task(run())
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
-        return job
-
-    async def cancel_all(self) -> None:
-        for t in list(self._tasks):
-            t.cancel()
-
-
 # ------------------------------------------------------------------ app
 
 
@@ -172,7 +140,6 @@ def _http_error(e: Exception) -> HTTPException:
 def create_app(settings: Settings) -> FastAPI:
     secret = settings.require_auth_secret()
     limiter = RateLimiter()
-    jobs = SyncJobs()
     holder: dict[str, CodeIndexService] = {}
 
     def service() -> CodeIndexService:
@@ -190,12 +157,12 @@ def create_app(settings: Settings) -> FastAPI:
         async with AsyncExitStack() as stack:
             svc = await stack.enter_async_context(open_service(settings))
             holder["svc"] = app.state.service = svc
+            await svc.recover_interrupted_jobs()  # jobs órfãos de uma execução anterior do servidor
             await stack.enter_async_context(mcp.session_manager.run())
             try:
                 yield
             finally:
-                await jobs.cancel_all()
-                holder.pop("svc", None)
+                holder.pop("svc", None)  # open_service encerra os jobs em andamento
 
     app = FastAPI(
         title="code-index",
@@ -238,7 +205,7 @@ def create_app(settings: Settings) -> FastAPI:
         try:
             oidc = GoogleOIDC(settings)
         except RuntimeError as e:
-            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from None
+            return _login_page(503, "Login indisponível", str(e), retry=False)
         start = oidc.start()
         resp = RedirectResponse(start.url, status_code=302)
         resp.set_cookie(
@@ -251,22 +218,23 @@ def create_app(settings: Settings) -> FastAPI:
     async def callback(request: Request, code: str = "", state: str = "", error: str = "") -> Response:
         svc = get_service(request)
         if error:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"login cancelado: {error}")
+            return _login_page(400, "Login cancelado", f"O Google não concluiu o login ({error}).")
         try:
             data = signer.loads(request.cookies.get(LOGIN_COOKIE, ""), max_age=LOGIN_MAX_AGE)
         except BadSignature:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "sessão de login expirada; tente /auth/login de novo") from None
+            return _login_page(400, "Login expirou", "A sessão de login venceu ou não foi iniciada aqui.")
         if not code or not secrets.compare_digest(state, data["s"]):
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "state inválido")
+            return _login_page(400, "Login recusado", "A resposta do Google não corresponde a este login.")
         try:
             identity = await GoogleOIDC(settings).finish(code=code, code_verifier=data["v"], nonce=data["n"])
         except LoginError as e:
             await svc.audit(None, "auth:login", params={"error": str(e)}, status=403, client_ip=client_ip(request))
-            raise HTTPException(status.HTTP_403_FORBIDDEN, str(e)) from None
+            return _login_page(403, "Acesso negado", str(e), retry=False)
         token, info = await svc.start_session(identity.email)
         await svc.audit(None, "auth:login", params={"email": identity.email, "scopes": list(info.scopes)},
                         status=200, client_ip=client_ip(request))
-        resp = RedirectResponse("/docs", status_code=302)
+        # Volta para a interface web se ela estiver construída; senão, para a documentação da API.
+        resp = RedirectResponse("/ui/" if UI_DIR.is_dir() else "/docs", status_code=302)
         resp.delete_cookie(LOGIN_COOKIE, path="/auth")
         resp.set_cookie(
             SESSION_COOKIE, token, max_age=settings.session_ttl_hours * 3600, httponly=True,
@@ -381,19 +349,30 @@ def create_app(settings: Settings) -> FastAPI:
                 do_discover=body.discover, dry_run=True, progress=False, allow_register=False,
             ))
             return res.to_dict()
-        if (running := jobs.running()) is not None:
-            raise HTTPException(status.HTTP_409_CONFLICT, f"já existe um sync em andamento: job {running.id}")
-        job = jobs.start(svc, principal, body)
+        try:
+            job = await svc.start_sync(
+                principal, body.repos or None,
+                batch=settings.default_batch if body.batch is None else body.batch,
+                do_discover=body.discover, pull=body.pull,
+            )
+        except RuntimeError as e:
+            await svc.audit(principal, "sync:start", params=body.model_dump(), status=409, client_ip=client_ip(request))
+            raise HTTPException(status.HTTP_409_CONFLICT, str(e)) from None
         await svc.audit(principal, "sync:start", params={"job": job.id, **body.model_dump()},
                         status=202, client_ip=client_ip(request))
         return {"job_id": job.id, "status": job.status, "url": f"/api/v1/sync/jobs/{job.id}"}
 
+    @app.get("/api/v1/sync/jobs", tags=["sync"], summary="Jobs de sync recentes")
+    async def sync_jobs(request: Request, limit: int = Query(50, ge=1, le=200),
+                        _: Principal = Depends(require(INDEX_WRITE))) -> list[dict[str, Any]]:
+        return [j.to_dict() for j in await get_service(request).list_jobs(limit)]
+
     @app.get("/api/v1/sync/jobs/{job_id}", tags=["sync"])
-    async def sync_job(job_id: str, _: Principal = Depends(require(INDEX_WRITE))) -> dict[str, Any]:
-        job = jobs.get(job_id)
+    async def sync_job(job_id: str, request: Request, _: Principal = Depends(require(INDEX_WRITE))) -> dict[str, Any]:
+        job = await get_service(request).get_job(job_id)
         if job is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "job não encontrado")
-        return job.__dict__
+        return job.to_dict()
 
     # ---------------------------------------------------------- tokens / auditoria
 
@@ -424,6 +403,17 @@ def create_app(settings: Settings) -> FastAPI:
     async def audit_log(request: Request, limit: int = Query(100, ge=1, le=1000), actor: str | None = None,
                         _: Principal = Depends(require(ADMIN))) -> list[dict[str, Any]]:
         return await get_service(request).recent_audit(limit=limit, actor=actor)
+
+    # Interface web (React, em frontend/): arquivos estáticos sem dados. A página chama /api/v1 com o
+    # token digitado pela pessoa. Sem o build, a rota não é montada.
+    if UI_DIR.is_dir():
+        @app.get("/ui", include_in_schema=False)
+        async def ui_redirect() -> RedirectResponse:
+            return RedirectResponse("/ui/", status_code=307)
+
+        app.mount("/ui", StaticFiles(directory=UI_DIR, html=True), name="ui")
+    else:
+        log.warning("interface web não montada: %s não existe (rode `pnpm build` em frontend/)", UI_DIR)
 
     # MCP (Streamable HTTP) em /mcp e metadados OAuth em /.well-known/*: rotas não casadas acima.
     app.mount("/", mcp_app)

@@ -126,6 +126,20 @@ uv run code-index serve                      # escuta em 127.0.0.1:8765; ponha u
 O comando `code-index` vive no ambiente do projeto: use `uv run code-index ...` na pasta do projeto, ou
 instale-o globalmente com `uv tool install -e .` (editável: acompanha o código).
 
+### Interface web (React)
+
+Código em `frontend/` (React 19, Tailwind 4, Vite). O `code-index serve` entrega o build em `/ui`.
+
+```bash
+cd frontend
+pnpm install
+pnpm build     # gera frontend/dist; sem isso o serve sobe, mas /ui não existe
+pnpm dev       # desenvolvimento em http://localhost:5173/ui/, com /api repassado ao servidor
+```
+
+Entre com uma API key (`cix_...`). A página só chama `/api/v1` com essa chave. O `pnpm dev` aponta para
+`http://127.0.0.1:8765`; use `CODE_INDEX_API` para outra porta.
+
 ### Autenticação e permissões
 
 | Quem | Como entra | Scopes |
@@ -158,6 +172,8 @@ instale-o globalmente com `uv tool install -e .` (editável: acompanha o código
 - **Token só no header:** token na URL não é aceito.
 - **Registro de repos:** `sync`/`reindex` só registram repos desconhecidos para admins. Com `index:write`
   dá para indexar apenas repos já cadastrados.
+- **Jobs persistentes:** cada sync vira um registro em `code_index.sync_jobs`, com quem pediu, parâmetros,
+  resultado e erro. Um reinício do servidor no meio de uma indexação marca o job como `failed`.
 - **Rate limit por token:** leitura 120/min, busca 30/min, sync 6/hora (configurável).
 - **Auditoria:** fica em `code_index.audit_log`, com quem, ação, parâmetros, status e IP. Nunca grava
   tokens nem o conteúdo retornado. Admins consultam em `GET /api/v1/audit`.
@@ -170,7 +186,7 @@ instale-o globalmente com `uv tool install -e .` (editável: acompanha o código
 | `GET /api/v1/me` | search:read |
 | `POST /api/v1/search` · `GET /api/v1/files/{repo}/{path}` | search:read |
 | `GET /api/v1/repos` · `GET /api/v1/orgs` | search:read |
-| `POST /api/v1/sync` (job em background) · `GET /api/v1/sync/jobs/{id}` | index:write |
+| `POST /api/v1/sync` (job em background) · `GET /api/v1/sync/jobs` · `GET /api/v1/sync/jobs/{id}` | index:write |
 | `POST/DELETE /api/v1/repos…` · `POST/PATCH/DELETE /api/v1/orgs…` · `GET /api/v1/audit` | admin |
 | `GET/POST/DELETE /api/v1/tokens` | sessão Google (emitir); dono ou admin (revogar) |
 
@@ -184,8 +200,8 @@ claude mcp add --scope user --transport http code-index https://<host>/mcp \
   --header "Authorization: Bearer cix_..."
 ```
 
-Ferramentas: `search_code`, `read_file_lines`, `list_repos` (com `search:read`) e `reindex` (exige
-`index:write`).
+Ferramentas: `search_code`, `read_file_lines` e `list_repos`, todas com `search:read`. O MCP não indexa:
+sync fica na API e na interface, que mostram a prévia e pedem confirmação.
 
 ### Login Google: configuração
 

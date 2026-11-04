@@ -6,3 +6,7 @@ __pycache__/
 .repos/
 .code-index.lock
 repos.toml
+frontend/node_modules
+node_modules
+node_modules/
+frontend/dist/

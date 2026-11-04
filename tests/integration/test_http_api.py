@@ -187,8 +187,7 @@ async def _mcp(server: Server, token: str) -> tuple[list[str], Any, Any]:
             await s.initialize()
             tools = [t.name for t in (await s.list_tools()).tools]
             search = await s.call_tool("search_code", {"query": "ola", "mode": "keyword"})
-            reindex = await s.call_tool("reindex", {"batch": 0})
-            return tools, search, reindex
+            return tools, search
 
 
 def test_mcp_exige_token(server: Server) -> None:
@@ -199,8 +198,121 @@ def test_mcp_exige_token(server: Server) -> None:
     assert client(server, "revogado", **hdrs).post("/mcp", json=init).status_code == 401
 
 
-def test_mcp_com_token_de_leitura(server: Server) -> None:
-    tools, search, reindex = asyncio.run(_mcp(server, "leitor"))
-    assert tools == ["search_code", "read_file_lines", "list_repos", "reindex"]
+def test_mcp_so_expoe_leitura(server: Server) -> None:
+    tools, search = asyncio.run(_mcp(server, "leitor"))
+    assert tools == ["search_code", "read_file_lines", "list_repos"]
     assert not search.is_error
-    assert reindex.is_error and "index:write" in reindex.content[0].text
+
+
+# ------------------------------------------------------------------ jobs persistentes
+
+
+def test_job_roda_ate_o_fim_e_fica_no_historico(server: Server, tmp_path: Any) -> None:
+    """Sync real (com LLM falso) em background: o job vai de running a done e fica consultável."""
+    repo_dir = tmp_path / "job-repo"
+    repo_dir.mkdir()
+    (repo_dir / "servico.py").write_text("def processa_pedido(pedido):\n    return pedido.total\n")
+    admin = client(server, "admin-bot")
+    assert admin.post("/api/v1/repos", json={"source": str(repo_dir), "name": "job-repo"}).status_code == 201
+
+    r = admin.post("/api/v1/sync", json={"repos": ["job-repo"], "discover": False})
+    assert r.status_code == 202, r.text
+    job_id = r.json()["job_id"]
+
+    deadline = time.monotonic() + 60
+    job = admin.get(f"/api/v1/sync/jobs/{job_id}").json()
+    while job["status"] == "running" and time.monotonic() < deadline:
+        time.sleep(0.3)
+        job = admin.get(f"/api/v1/sync/jobs/{job_id}").json()
+    assert job["status"] == "done", job
+    assert list(job["result"]["indexed"]) == ["job-repo"]
+    assert job["requested_by"] == f"{ADMIN_EMAIL} [admin-bot]"
+
+    historico = [j["id"] for j in admin.get("/api/v1/sync/jobs").json()]
+    assert job_id in historico
+    assert client(server, "leitor").get("/api/v1/sync/jobs").status_code == 403  # só quem indexa vê os jobs
+
+
+async def _insert_running_job(settings: Settings) -> str:
+    import asyncpg
+
+    async with open_service(settings):  # garante schema/migrações
+        pass
+    conn = await asyncpg.connect(settings.database_url)
+    try:
+        return str(await conn.fetchval(
+            f'INSERT INTO "{settings.pg_schema}".sync_jobs (requested_by, status) '
+            "VALUES ('teste', 'running') RETURNING id::text"
+        ))
+    finally:
+        await conn.close()
+
+
+def test_job_interrompido_por_reinicio_vira_failed(int_settings: Settings, fake_llm: Any) -> None:
+    """Na inicialização do servidor, um job que ficou 'running' (servidor caiu) vira failed."""
+
+    async def scenario() -> None:
+        job_id = await _insert_running_job(int_settings)
+        async with open_service(int_settings) as svc:
+            assert await svc.recover_interrupted_jobs() == 1
+            job = await svc.get_job(job_id)
+        assert job is not None
+        assert job.status == "failed" and "reiniciou" in (job.error or "")
+
+    asyncio.run(scenario())
+
+
+def test_comando_da_cli_nao_derruba_job_do_servidor(int_settings: Settings, fake_llm: Any) -> None:
+    """Regressão: abrir o serviço (como faz todo comando da CLI) não pode mexer no job de outro processo."""
+
+    async def scenario() -> None:
+        job_id = await _insert_running_job(int_settings)
+        async with open_service(int_settings) as svc:  # ex.: `code-index repo list`
+            await svc.list_repos()
+            job = await svc.get_job(job_id)
+        assert job is not None and job.status == "running"
+
+    asyncio.run(scenario())
+
+
+def test_servidor_recupera_jobs_ao_subir(int_settings: Settings, fake_llm: Any) -> None:
+    """O caminho real: o lifespan do app HTTP marca os jobs órfãos ao iniciar."""
+    from starlette.testclient import TestClient
+
+    job_id = asyncio.run(_insert_running_job(int_settings))
+    settings = int_settings.model_copy(update={"auth_secret": SecretStr("s" * 48)})
+    with TestClient(create_app(settings), base_url="http://127.0.0.1:8765"):
+        pass  # sobe e desce o lifespan
+
+    async def check() -> None:
+        async with open_service(int_settings) as svc:
+            job = await svc.get_job(job_id)
+        assert job is not None and job.status == "failed"
+
+    asyncio.run(check())
+
+
+# ------------------------------------------------------------------ páginas de erro do login
+
+
+def test_callback_de_erro_mostra_pagina_html(server: Server) -> None:
+    r = client(server).get("/auth/callback", params={"error": "access_denied"})
+    assert r.status_code == 400
+    assert r.headers["content-type"].startswith("text/html")
+    assert "Login cancelado" in r.text and "access_denied" in r.text
+    assert "default-src 'none'" in r.headers["content-security-policy"]
+
+
+def test_callback_sem_cookie_mostra_html(server: Server) -> None:
+    r = client(server).get("/auth/callback", params={"code": "x", "state": "y"})
+    assert r.status_code == 400
+    assert r.headers["content-type"].startswith("text/html")
+    assert "Login expirou" in r.text
+
+
+def test_callback_escapa_texto_vindo_de_fora(server: Server) -> None:
+    payload = "<script>alert(1)</script>"
+    r = client(server).get("/auth/callback", params={"error": payload})
+    assert r.status_code == 400
+    assert "<script>alert(1)</script>" not in r.text
+    assert "&lt;script&gt;" in r.text

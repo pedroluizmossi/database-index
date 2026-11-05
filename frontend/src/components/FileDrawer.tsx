@@ -75,7 +75,7 @@ export function FileDrawer({ target, onClose }: FileDrawerProps) {
     <dialog
       ref={dialogRef}
       onClose={onClose}
-      className="fixed inset-y-0 right-0 left-auto m-0 h-dvh max-h-none w-full max-w-4xl open:flex flex-col border-0 bg-white p-0 text-zinc-900 shadow-2xl shadow-zinc-900/20 backdrop:bg-zinc-950/40 backdrop:backdrop-blur-sm open:animate-slide-in sm:rounded-l-2xl dark:bg-zinc-900 dark:text-zinc-100"
+      className="fixed inset-y-0 right-0 left-auto m-0 h-dvh max-h-none w-full max-w-4xl open:flex flex-col border-0 bg-white p-0 text-zinc-900 shadow-[-16px_0_40px_-12px_rgb(0_0_0/0.25)] backdrop:bg-ink-950/50 open:animate-slide-in sm:rounded-l-xl dark:bg-zinc-900 dark:text-zinc-100 dark:backdrop:bg-black/60"
     >
       {target && (
         <>

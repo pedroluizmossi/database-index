@@ -642,6 +642,24 @@ async def _cmd_serve(a: argparse.Namespace, settings: Settings) -> None:
     await uvicorn.Server(server_config(app, host, port, forwarded_allow_ips=a.forwarded_allow_ips)).serve()
 
 
+async def _cmd_embed_serve(a: argparse.Namespace, settings: Settings) -> None:
+    import uvicorn
+
+    try:
+        from ..infra.local_embedder import SentenceTransformerEmbedder
+    except ImportError:
+        raise SystemExit("faltam as dependências do modelo local: uv sync --extra local-embed") from None
+    from .embed_server import create_embed_app
+
+    host = a.host or settings.local_embed_host
+    port = a.port or settings.local_embed_port
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        logging.warning("servidor de embeddings escutando em %s: proteja a porta (a chave é EMBED_API_KEY)", host)
+    embedder = await asyncio.to_thread(SentenceTransformerEmbedder, settings)
+    app = create_embed_app(settings, embedder)
+    await uvicorn.Server(uvicorn.Config(app, host=host, port=port, log_level="info")).serve()
+
+
 async def _cmd_token_create(a: argparse.Namespace, settings: Settings) -> None:
     async with open_service(settings) as svc:
         token, info = await svc.create_agent_token(
@@ -960,6 +978,12 @@ def main() -> None:
     sv.add_argument("--forwarded-allow-ips", default="127.0.0.1",
                     help="IPs do proxy reverso confiáveis para X-Forwarded-* (padrão 127.0.0.1)")
     sv.set_defaults(fn=_cmd_serve)
+
+    # embeddings locais (voyage-4-nano em CPU), no formato da API da Voyage
+    es = sub.add_parser("embed-serve", help="sobe o modelo de embedding local (uv sync --extra local-embed)")
+    es.add_argument("--host", help=f"padrão LOCAL_EMBED_HOST ({settings.local_embed_host})")
+    es.add_argument("--port", type=int, help=f"padrão LOCAL_EMBED_PORT ({settings.local_embed_port})")
+    es.set_defaults(fn=_cmd_embed_serve)
 
     # tokens (operador local, com acesso direto ao banco)
     tk = sub.add_parser("token", help="tokens de agents (operador local)").add_subparsers(required=True)

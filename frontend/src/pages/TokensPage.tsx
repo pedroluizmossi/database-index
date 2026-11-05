@@ -71,7 +71,7 @@ export function TokensPage() {
       <Panel className="overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full min-w-[760px] text-sm">
-            <thead className="bg-zinc-50/80 text-left text-xs tracking-wide text-zinc-500 uppercase dark:bg-zinc-900 dark:text-zinc-400">
+            <thead className="border-b border-zinc-200 bg-zinc-50 text-left text-xs text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-400">
               <tr>
                 <th className="px-4 py-3 font-medium">Nome</th>
                 <th className="px-4 py-3 font-medium">Scopes</th>
@@ -97,7 +97,7 @@ export function TokensPage() {
                 </tr>
               )}
               {tokens?.map((t) => (
-                <tr key={t.id} className="hover:bg-zinc-50/80 dark:hover:bg-white/[0.02]">
+                <tr key={t.id} className="transition-colors hover:bg-zinc-50 dark:hover:bg-white/[0.02]">
                   <td className="px-4 py-3">
                     <p className="font-medium">{t.name}</p>
                     <p className="font-mono text-xs text-zinc-500">{t.prefix}…</p>
@@ -233,7 +233,7 @@ function CreateTokenDialog({
               <label key={s.value} className={`flex items-start gap-3 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800 ${allowed ? "cursor-pointer" : "opacity-50"}`}>
                 <input
                   type="checkbox"
-                  className="mt-0.5 size-4 accent-indigo-600"
+                  className="mt-0.5 size-4 accent-accent-600"
                   checked={scopes.includes(s.value)}
                   disabled={!allowed}
                   onChange={() => toggle(s.value)}

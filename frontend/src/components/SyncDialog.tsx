@@ -56,7 +56,7 @@ function DocsPreviewBlock({ name }: { name: string }) {
         <p className="text-sm font-medium">
           {numberFormat.format(data.total)} páginas em {data.roots.length} raízes
         </p>
-        <a href={data.url} target="_blank" rel="noopener noreferrer" className="truncate text-xs text-indigo-600 hover:underline dark:text-indigo-400">
+        <a href={data.url} target="_blank" rel="noopener noreferrer" className="truncate text-xs text-accent-600 hover:underline dark:text-accent-400">
           {data.url}
         </a>
       </div>
@@ -322,7 +322,7 @@ export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished,
           <p className="flex items-center gap-2 text-sm font-medium">
             {job.status === "running" && (
               <>
-                <LoaderCircle className="size-4 animate-spin text-indigo-500" /> Indexando… pode levar alguns minutos. Você
+                <LoaderCircle className="size-4 animate-spin text-accent-500" /> Indexando… pode levar alguns minutos. Você
                 pode fechar: o andamento fica na seção Jobs.
               </>
             )}

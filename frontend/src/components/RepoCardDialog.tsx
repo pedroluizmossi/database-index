@@ -194,7 +194,7 @@ export function RepoCardDialog({ repo, open, onClose }: { repo: string; open: bo
 function Block({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="space-y-1.5">
-      <h3 className="text-xs font-semibold tracking-wide text-zinc-500 uppercase dark:text-zinc-400">{title}</h3>
+      <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-200">{title}</h3>
       {children}
     </section>
   );

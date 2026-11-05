@@ -39,6 +39,7 @@ from ..domain.doc_links import (
 from ..domain.search_text import code_terms
 from ..sources.wikijs import page_matches
 from ..infra.chunk_store import FTS_DOCUMENT
+from . import progress
 
 PG_DB = coco.ContextKey[asyncpg.Pool]("code_index_db")
 EMBEDDER = coco.ContextKey[LiteLLMEmbedder]("code_index_embedder", detect_change=True)
@@ -310,6 +311,19 @@ async def index_repo(
     )
 
 
+async def count_repo_files(repo: Repo) -> int:
+    """Quantos arquivos o `index_repo` vai percorrer (mesma pasta e filtros). Só para o progresso do job.
+
+    Fica fora do `index_repo` de propósito: mudar o corpo de uma função memoizada força revarrer os repos.
+    """
+    files = localfs.walk_dir(
+        repo.local_path(get_settings().repos_dir),
+        recursive=True,
+        path_matcher=PatternFilePathMatcher(included_patterns=list(repo.include), excluded_patterns=repo.all_excludes),
+    )
+    return sum([1 async for _ in files.items()])
+
+
 @coco.fn
 async def app_main(repos: list[tuple[Repo, str]]) -> None:
     """`repos` = todos os repos que devem existir no índice, com sua revisão.
@@ -347,10 +361,17 @@ async def app_main(repos: list[tuple[Repo, str]]) -> None:
         teardown_sql=f'DROP INDEX IF EXISTS "{settings.pg_schema}".code_symbols_name',
     )
     doc_targets = await _mount_doc_tables(settings)
+    tracker = progress.active()
     for repo, revision in repos:
-        await coco.mount(
-            coco.component_subpath("repo", repo.name), index_repo, repo, revision, table, symbols_table, doc_targets
-        )
+        subpath = coco.component_subpath("repo", repo.name)
+        if tracker is not None and tracker.tracks(repo.name):
+            # Contadores próprios do repo (arquivos/trechos) para o progresso do job. O grupo não muda o
+            # caminho do componente: nada é reprocessado por causa dele.
+            with coco.stats_group(repo.name) as group:
+                tracker.attach(repo.name, group)
+                await coco.mount(subpath, index_repo, repo, revision, table, symbols_table, doc_targets)
+        else:
+            await coco.mount(subpath, index_repo, repo, revision, table, symbols_table, doc_targets)
 
 
 async def _mount_doc_tables(settings: Settings) -> DocTargets:

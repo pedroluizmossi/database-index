@@ -56,7 +56,7 @@ export function RepoDocsDialog({ repo, open, onClose }: { repo: string; open: bo
                   href={d.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-sm font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                  className="text-sm font-medium text-accent-600 hover:underline dark:text-accent-400"
                 >
                   {d.title ?? d.path}
                 </a>

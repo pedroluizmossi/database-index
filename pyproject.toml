@@ -22,6 +22,14 @@ dependencies = [
     "uvicorn>=0.54.0",
 ]
 
+[project.optional-dependencies]
+# `code-index embed-serve`: embeddings locais (voyage-4-nano) em CPU. Instale com: uv sync --extra local-embed
+local-embed = [
+    "sentence-transformers>=5.0.0",
+    "torch>=2.9.0",
+    "transformers>=4.56.0",
+]
+
 [project.scripts]
 code-index = "code_index.interfaces.cli:main"
 
@@ -35,6 +43,15 @@ dev = [
     "pytest>=9.2.0",
     "pytest-asyncio>=1.4.1.post1",
 ]
+
+# torch só para CPU (as rodas com CUDA têm vários GB e esta máquina não tem GPU)
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

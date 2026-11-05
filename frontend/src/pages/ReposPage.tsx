@@ -3,13 +3,9 @@ import {
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
-  CircleCheck,
   X,
-  Clock,
   Database,
-  GitBranch,
   IdCard,
-  Layers,
   Search,
   ServerCrash,
   ChevronLeft,
@@ -21,9 +17,8 @@ import {
   RefreshCw,
   Trash2,
   Undo2,
-  type LucideIcon,
 } from "lucide-react";
-import type { OrgSummary, Repo, RepoStatusValue, SyncJob } from "../api/types";
+import type { OrgSummary, Repo, RepoProgress, RepoStatusValue, SyncJob } from "../api/types";
 import { useIndex } from "../data/IndexProvider";
 import { useAuth } from "../auth/AuthProvider";
 import { api } from "../api/endpoints";
@@ -37,7 +32,7 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { SyncDialog } from "../components/SyncDialog";
 import { JobDialog, JobsPanel, RunningJobBanner, useJobs } from "../components/JobsPanel";
 import { formatDateTime, repoShortName, timeAgo, cx } from "../lib/utils";
-import { Alert, Badge, Button, EmptyState, Field, IconButton, Panel, Segmented, Select, Skeleton, inputClass } from "../components/ui";
+import { Alert, Badge, Button, EmptyState, Field, IconButton, Panel, ProgressBar, Segmented, Select, Skeleton, inputClass, type BadgeTone } from "../components/ui";
 import type { XrayTarget } from "../lib/xray";
 
 type StatusFilter = "all" | RepoStatusValue;
@@ -75,6 +70,11 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
   const canSeeJobs = me !== null && hasScope(me, "index:write");
   const jobs = useJobs(canSeeJobs, onFinished);
   const [jobDetail, setJobDetail] = useState<SyncJob | null>(null);
+  // Andamento ao vivo do job: o status gravado do repo só muda quando o lote inteiro termina.
+  const live = useMemo(
+    () => new Map((jobs.running?.progress?.repos ?? []).map((p) => [p.name, p] as const)),
+    [jobs.running],
+  );
 
   async function unignore(r: Repo) {
     try {
@@ -245,20 +245,17 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
 
       {jobs.running && <RunningJobBanner job={jobs.running} onOpen={setJobDetail} />}
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard icon={CircleCheck} label="Indexados" value={numberFormat.format(counts.byStatus.indexed)} hint={`de ${numberFormat.format(counts.total)} repositórios`} tone="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" />
-        <StatCard icon={Clock} label="Pendentes" value={numberFormat.format(counts.byStatus.pending)} hint="aguardam a próxima indexação" tone="bg-sky-500/10 text-sky-600 dark:text-sky-400" />
-        <StatCard icon={ServerCrash} label="Com erro" value={numberFormat.format(counts.byStatus.error)} hint="veja a observação na tabela" tone="bg-rose-500/10 text-rose-600 dark:text-rose-400" />
-        <StatCard icon={Layers} label="Chunks" value={numberFormat.format(counts.chunks)} hint={`${numberFormat.format(counts.files)} arquivos`} tone="bg-indigo-500/10 text-indigo-600 dark:text-indigo-400" />
-      </div>
-
-      {orgs && orgs.length > 0 && (
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {orgs.map((org) => (
-            <OrgCard key={org.name} org={org} onRefresh={isAdmin && writable ? () => void refreshOrg(org) : undefined} />
-          ))}
-        </section>
-      )}
+      <Coverage
+        counts={counts}
+        orgs={orgs ?? []}
+        outdated={(repos ?? []).filter((r) => r.outdated).length}
+        loading={repos === null && loading}
+        onFilter={(value) => {
+          setStatus(value);
+          listTop.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+        }}
+        onRefresh={isAdmin && writable ? (org) => void refreshOrg(org) : undefined}
+      />
 
       <div ref={listTop} className="scroll-mt-20" />
       <Panel className="overflow-hidden">
@@ -278,7 +275,7 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
 
         <div className="hidden overflow-x-auto md:block">
           <table className="w-full text-sm">
-            <thead className="bg-zinc-50/80 text-left text-xs tracking-wide text-zinc-500 uppercase dark:bg-zinc-900 dark:text-zinc-400">
+            <thead className="border-b border-zinc-200 bg-zinc-50 text-left text-xs text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-400">
               <tr>
                 {selection && (
                   <th className="w-10 py-3 pl-4">
@@ -326,7 +323,7 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
                 </tr>
               )}
               {visible.map((r) => (
-                <RepoRow key={r.name} repo={r} actions={rowActions} selection={selection} onXray={onXray} />
+                <RepoRow key={r.name} repo={r} live={live.get(r.name)} actions={rowActions} selection={selection} onXray={onXray} />
               ))}
             </tbody>
           </table>
@@ -344,7 +341,7 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
             </li>
           )}
           {visible.map((r) => (
-            <RepoCard key={r.name} repo={r} actions={rowActions} selection={selection} onXray={onXray} />
+            <RepoCard key={r.name} repo={r} live={live.get(r.name)} actions={rowActions} selection={selection} onXray={onXray} />
           ))}
         </ul>
 
@@ -366,8 +363,8 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
       <JobDialog job={jobDetail} onClose={() => setJobDetail(null)} />
       {selection && selected.size > 0 && (
         <div className="pointer-events-none fixed inset-x-0 bottom-4 z-40 flex justify-center px-4">
-          <div className="pointer-events-auto flex flex-wrap items-center gap-3 rounded-2xl border border-zinc-200 bg-white/95 px-4 py-3 shadow-xl shadow-zinc-900/10 backdrop-blur dark:border-zinc-700 dark:bg-zinc-900/95">
-            <p className="text-sm">
+          <div className="pointer-events-auto flex flex-wrap items-center gap-3 rounded-xl bg-ink-950 py-2 pr-2 pl-4 text-white shadow-[0_8px_24px_-8px_rgb(0_0_0/0.45)] ring-1 ring-white/10 animate-pop">
+            <p className="text-sm text-ink-100">
               <span className="font-semibold tabular-nums">{selected.size}</span> repo(s) selecionado(s)
             </p>
             <Button
@@ -379,10 +376,14 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
               <Play className="size-3.5" aria-hidden="true" />
               Indexar selecionados
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>
+            <button
+              type="button"
+              onClick={() => setSelected(new Set())}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-medium text-ink-300 outline-none transition hover:bg-white/10 hover:text-white focus-visible:ring-2 focus-visible:ring-accent-400"
+            >
               <X className="size-3.5" aria-hidden="true" />
               Limpar
-            </Button>
+            </button>
           </div>
         </div>
       )}
@@ -555,81 +556,134 @@ function Pagination({
   );
 }
 
-function StatCard({
-  icon: Icon,
-  label,
-  value,
-  hint,
-  tone,
-}: {
-  icon: LucideIcon;
-  label: string;
-  value: string;
-  hint: string;
-  tone: string;
-}) {
+/** Ordem e cor de cada status na barra de cobertura. */
+const COVERAGE: { status: RepoStatusValue; label: string; bar: string; key: string }[] = [
+  { status: "indexed", label: "Indexados", bar: "bg-emerald-500", key: "bg-emerald-500" },
+  { status: "error", label: "Com erro", bar: "bg-rose-500", key: "bg-rose-500" },
+  { status: "pending", label: "Pendentes", bar: "bg-zinc-300 dark:bg-zinc-600", key: "border-[1.5px] border-zinc-400 dark:border-zinc-500" },
+  { status: "ignored", label: "Ignorados", bar: "bg-zinc-200 dark:bg-zinc-800", key: "bg-zinc-300 dark:bg-zinc-600" },
+];
+
+interface Counts {
+  total: number;
+  byStatus: Record<RepoStatusValue, number>;
+  files: number;
+  chunks: number;
+}
+
+function percentOf(part: number, total: number): number {
+  return total > 0 ? Math.round((part / total) * 100) : 0;
+}
+
+/** Barra empilhada por status. A cor nunca é o único código: a legenda traz rótulo e número. */
+function CoverageBar({ byStatus, total, className }: { byStatus: Record<RepoStatusValue, number>; total: number; className?: string }) {
   return (
-    <Panel className="flex items-center gap-4 p-5">
-      <div className={cx("flex size-11 shrink-0 items-center justify-center rounded-xl", tone)}>
-        <Icon className="size-5" aria-hidden="true" />
-      </div>
-      <div className="min-w-0">
-        <p className="text-xs font-medium tracking-wide text-zinc-500 uppercase dark:text-zinc-400">{label}</p>
-        <p className="text-2xl leading-tight font-semibold tabular-nums">{value}</p>
-        <p className="truncate text-xs text-zinc-500 dark:text-zinc-400">{hint}</p>
-      </div>
-    </Panel>
+    <div className={cx("flex h-2.5 gap-px overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800", className)} aria-hidden="true">
+      {COVERAGE.map(({ status, bar }) =>
+        byStatus[status] > 0 && total > 0 ? (
+          <span key={status} className={cx("h-full transition-[width] duration-500", bar)} style={{ width: `${(byStatus[status] / total) * 100}%` }} />
+        ) : null,
+      )}
+    </div>
   );
 }
 
-function OrgCard({ org, onRefresh }: { org: OrgSummary; onRefresh?: () => void }) {
-  const indexed = org.status.indexed;
-  const percent = org.total > 0 ? Math.round((indexed / org.total) * 100) : 0;
-  const topLanguages = Object.entries(org.languages).slice(0, 3);
+/** Resumo do índice: quanto já foi indexado, por status e por org. Substitui cards soltos. */
+function Coverage({
+  counts,
+  orgs,
+  outdated,
+  loading,
+  onFilter,
+  onRefresh,
+}: {
+  counts: Counts;
+  orgs: OrgSummary[];
+  outdated: number;
+  loading: boolean;
+  onFilter: (status: StatusFilter) => void;
+  onRefresh?: (org: OrgSummary) => void;
+}) {
+  if (loading) return <Skeleton className="h-40 w-full rounded-xl" />;
+  const single = orgs.length === 1 && orgs[0].total === counts.total ? orgs[0] : null;
+  const languages = single ? Object.entries(single.languages).slice(0, 3) : [];
+  const percent = percentOf(counts.byStatus.indexed, counts.total);
 
   return (
-    <Panel className="p-5">
-      <div className="flex items-start justify-between gap-3">
+    <Panel className="p-5 sm:p-6">
+      <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
         <div className="min-w-0">
-          <p className="truncate font-semibold">{org.name}</p>
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">{org.total} repositório(s)</p>
+          <h2 className="truncate font-semibold">{single ? single.name : "Cobertura do índice"}</h2>
+          <p className="mt-0.5 text-sm text-zinc-500 dark:text-zinc-400">
+            {numberFormat.format(counts.total)} repositórios
+            {languages.length > 0 && <> · {languages.map(([language, n]) => `${language} ${n}`).join(" · ")}</>}
+          </p>
         </div>
-        <span className="text-2xl font-semibold tabular-nums">{percent}%</span>
+        <div className="flex items-center gap-3">
+          {single && onRefresh && (
+            <Button variant="ghost" size="sm" onClick={() => onRefresh(single)}>
+              <RefreshCw className="size-3.5" aria-hidden="true" />
+              Atualizar descoberta
+            </Button>
+          )}
+        </div>
       </div>
 
-      <div className="mt-4 h-2 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
-        <div
-          className="h-full rounded-full bg-linear-to-r from-indigo-500 to-violet-500 transition-all duration-500"
-          style={{ width: `${percent}%` }}
-        />
-      </div>
-
-      <div className="mt-4 flex flex-wrap gap-1.5">
-        <Badge tone="indexed" dot>
-          {indexed} indexado(s)
-        </Badge>
-        <Badge tone="pending" dot>
-          {org.status.pending} pendente(s)
-        </Badge>
-        {org.status.error > 0 && (
-          <Badge tone="error" dot>
-            {org.status.error} com erro
-          </Badge>
-        )}
-        {org.outdated > 0 && <Badge tone="warning">{org.outdated} desatualizado(s)</Badge>}
-      </div>
-
-      {onRefresh && (
-        <Button variant="ghost" size="sm" className="mt-3 -ml-2.5" onClick={onRefresh}>
-          <RefreshCw className="size-3.5" aria-hidden="true" />
-          Atualizar descoberta
-        </Button>
-      )}
-
-      {topLanguages.length > 0 && (
-        <p className="mt-3 truncate text-xs text-zinc-500 dark:text-zinc-400">
-          {topLanguages.map(([language, n]) => `${language} ${n}`).join(" · ")}
+      <div className="mt-6 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
+        <p className="text-sm text-zinc-600 dark:text-zinc-300">
+          <span className="text-2xl font-semibold tracking-tight text-zinc-900 tabular-nums dark:text-white">{percent}%</span>
+          <span className="ml-2">indexado</span>
+          <span className="text-zinc-500 dark:text-zinc-400">
+            {" "}· {numberFormat.format(counts.byStatus.indexed)} de {numberFormat.format(counts.total)}
+          </span>
         </p>
+        <p className="text-sm text-zinc-500 tabular-nums dark:text-zinc-400">
+          {numberFormat.format(counts.chunks)} chunks em {numberFormat.format(counts.files)} arquivos
+        </p>
+      </div>
+
+      <CoverageBar byStatus={counts.byStatus} total={counts.total} className="mt-3" />
+
+      <ul className="mt-3 flex flex-wrap gap-x-1 gap-y-1 text-sm" aria-label="Repositórios por status">
+        {COVERAGE.map(({ status, label, key }) => (
+          <li key={status}>
+            <button
+              type="button"
+              onClick={() => onFilter(status)}
+              title={`Mostrar só ${label.toLowerCase()}`}
+              className="inline-flex items-center gap-2 rounded-md px-2 py-1 text-zinc-600 outline-none transition hover:bg-zinc-900/5 hover:text-zinc-900 focus-visible:ring-2 focus-visible:ring-accent-500 dark:text-zinc-300 dark:hover:bg-white/5 dark:hover:text-white"
+            >
+              <span className={cx("size-2 rounded-full", key)} aria-hidden="true" />
+              {label}
+              <span className="font-medium text-zinc-900 tabular-nums dark:text-white">{numberFormat.format(counts.byStatus[status])}</span>
+            </button>
+          </li>
+        ))}
+        {outdated > 0 && (
+          <li className="inline-flex items-center gap-2 px-2 py-1 text-amber-700 dark:text-amber-300">
+            <span className="size-2 rounded-full bg-amber-500" aria-hidden="true" />
+            {numberFormat.format(outdated)} com push novo
+          </li>
+        )}
+      </ul>
+
+      {!single && orgs.length > 0 && (
+        <ul className="mt-5 divide-y divide-zinc-100 border-t border-zinc-100 dark:divide-zinc-800 dark:border-zinc-800">
+          {orgs.map((org) => (
+            <li key={org.name} className="grid grid-cols-[minmax(0,10rem)_1fr_auto] items-center gap-4 py-3 sm:grid-cols-[minmax(0,14rem)_1fr_auto_auto]">
+              <p className="truncate text-sm font-medium" title={org.name}>{org.name}</p>
+              <CoverageBar byStatus={org.status} total={org.total} className="h-1.5" />
+              <p className="text-sm text-zinc-500 tabular-nums dark:text-zinc-400">
+                {percentOf(org.status.indexed, org.total)}% de {org.total}
+              </p>
+              {onRefresh && (
+                <IconButton label={`Atualizar descoberta de ${org.name}`} onClick={() => onRefresh(org)} className="hidden sm:inline-flex">
+                  <RefreshCw className="size-4" />
+                </IconButton>
+              )}
+            </li>
+          ))}
+        </ul>
       )}
     </Panel>
   );
@@ -707,18 +761,18 @@ function Checkbox({
         if (el) el.indeterminate = indeterminate;
       }}
       onChange={onChange}
-      className="size-4 cursor-pointer accent-indigo-600 disabled:cursor-not-allowed disabled:opacity-30"
+      className="size-4 cursor-pointer accent-accent-600 disabled:cursor-not-allowed disabled:opacity-30"
     />
   );
 }
 
-function RepoRow({ repo: r, actions, selection, onXray }: { repo: Repo; actions: RowActions | null; selection: Selection | null; onXray: (target: XrayTarget) => void }) {
+function RepoRow({ repo: r, live, actions, selection, onXray }: { repo: Repo; live?: RepoProgress; actions: RowActions | null; selection: Selection | null; onXray: (target: XrayTarget) => void }) {
   const checked = selection?.isSelected(r) ?? false;
   return (
     <tr
       className={cx(
-        "transition hover:bg-zinc-50/80 dark:hover:bg-white/[0.02]",
-        checked && "bg-indigo-50/60 dark:bg-indigo-500/10",
+        "align-top transition-colors hover:bg-zinc-50 dark:hover:bg-white/[0.02]",
+        checked && "bg-accent-50 hover:bg-accent-50 dark:bg-accent-500/10 dark:hover:bg-accent-500/10",
       )}
     >
       {selection && (
@@ -732,19 +786,13 @@ function RepoRow({ repo: r, actions, selection, onXray }: { repo: Repo; actions:
         </td>
       )}
       <td className="max-w-[26rem] px-4 py-3">
-        <div className="flex items-center gap-3">
-          <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-zinc-900/5 text-zinc-500 dark:bg-white/5 dark:text-zinc-400">
-            <GitBranch className="size-4" aria-hidden="true" />
-          </span>
-          <div className="min-w-0">
-            <p className="truncate font-medium" title={r.name}>
+        <div className="min-w-0">
+            <p className="truncate font-medium text-zinc-900 dark:text-zinc-100" title={r.name}>
               {repoShortName(r.name, r.org)}
+              {!r.org && <span className="ml-2 text-xs font-normal text-zinc-500 dark:text-zinc-400">avulso</span>}
             </p>
-            <p className="truncate text-xs text-zinc-500 dark:text-zinc-400">{r.org ?? "repositório avulso"}</p>
             <RepoSummary repo={r} />
-            <RepoDocsButton repo={r} />
-            <RepoCardButton repo={r} />
-            {r.kind === "code" && <button type="button" aria-label={`Raio X de ${r.name}`} onClick={() => onXray({ kind: "repo", id: r.name })} className="ml-3 inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"><Network className="size-3.5" aria-hidden="true" /> Raio X</button>}
+            <RepoLinks repo={r} onXray={onXray} />
             {r.skipped > 0 && (
               <p
                 className="text-xs text-amber-600 dark:text-amber-400"
@@ -758,25 +806,25 @@ function RepoRow({ repo: r, actions, selection, onXray }: { repo: Repo; actions:
                 {r.error}
               </p>
             )}
-          </div>
         </div>
       </td>
       <td className="px-4 py-3">
-        <Badge tone={r.status} dot>
-          {STATUS_LABEL[r.status]}
-        </Badge>
+        <RepoStatus repo={r} live={live} />
       </td>
       <td className="hidden px-4 py-3 text-zinc-600 lg:table-cell dark:text-zinc-300">{r.language ?? "—"}</td>
       <td className="hidden px-4 py-3 text-right tabular-nums xl:table-cell">{numberFormat.format(r.files)}</td>
       <td className="px-4 py-3 text-right tabular-nums">{numberFormat.format(r.chunks)}</td>
       <td className="hidden px-4 py-3 font-mono text-xs text-zinc-500 2xl:table-cell dark:text-zinc-400">{r.commit ?? "—"}</td>
       <td className="hidden px-4 py-3 lg:table-cell">
-        <div className="flex items-center gap-2">
-          <span title={formatDateTime(r.indexed_at)} className="whitespace-nowrap text-zinc-600 dark:text-zinc-300">
-            {timeAgo(r.indexed_at)}
+        <span title={formatDateTime(r.indexed_at)} className="block whitespace-nowrap text-zinc-600 dark:text-zinc-300">
+          {timeAgo(r.indexed_at)}
+        </span>
+        {r.outdated && (
+          <span className="mt-0.5 inline-flex items-center gap-1.5 text-xs whitespace-nowrap text-amber-700 dark:text-amber-300">
+            <span className="size-1.5 rounded-full bg-amber-500" aria-hidden="true" />
+            novo push
           </span>
-          {r.outdated && <Badge tone="warning">novo push</Badge>}
-        </div>
+        )}
       </td>
       {actions && (
         <td className="px-4 py-3">
@@ -787,11 +835,46 @@ function RepoRow({ repo: r, actions, selection, onXray }: { repo: Repo; actions:
   );
 }
 
+const LIVE_LABEL: Partial<Record<RepoProgress["status"], { label: string; tone: BadgeTone }>> = {
+  queued: { label: "Na fila", tone: "accent" },
+  fetching: { label: "Baixando", tone: "accent" },
+  indexing: { label: "Indexando", tone: "accent" },
+  done: { label: "Pronto", tone: "indexed" },
+  error: { label: "Erro", tone: "error" },
+};
+
+/** Status do repo: o gravado, ou o andamento do job em curso (com barra de arquivos) enquanto ele roda. */
+function RepoStatus({ repo: r, live }: { repo: Repo; live?: RepoProgress }) {
+  const shown = live ? LIVE_LABEL[live.status] : undefined;
+  if (!live || !shown) {
+    return (
+      <Badge tone={r.status} dot>
+        {STATUS_LABEL[r.status]}
+      </Badge>
+    );
+  }
+  return (
+    <div className="w-32 space-y-1.5">
+      <Badge tone={shown.tone} dot>
+        {shown.label}
+      </Badge>
+      {live.status === "indexing" && live.files_total !== null && live.files_total > 0 && (
+        <>
+          <ProgressBar value={live.files_done} max={live.files_total} label={`Arquivos de ${r.name}`} />
+          <p className="text-xs text-zinc-500 tabular-nums dark:text-zinc-400">
+            {numberFormat.format(live.files_done)}/{numberFormat.format(live.files_total)} arquivos
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
 /** Cartão para telas pequenas: mostra o essencial e as ações com texto. */
-function RepoCard({ repo: r, actions, selection, onXray }: { repo: Repo; actions: RowActions | null; selection: Selection | null; onXray: (target: XrayTarget) => void }) {
+function RepoCard({ repo: r, live, actions, selection, onXray }: { repo: Repo; live?: RepoProgress; actions: RowActions | null; selection: Selection | null; onXray: (target: XrayTarget) => void }) {
   const checked = selection?.isSelected(r) ?? false;
   return (
-    <li className={cx("space-y-3 p-4", checked && "bg-indigo-50/60 dark:bg-indigo-500/10")}>
+    <li className={cx("space-y-3 p-4", checked && "bg-accent-50/60 dark:bg-accent-500/10")}>
       <div className="flex items-start justify-between gap-3">
         {selection && (
           <div className="pt-1">
@@ -804,14 +887,12 @@ function RepoCard({ repo: r, actions, selection, onXray }: { repo: Repo; actions
           </div>
         )}
         <div className="min-w-0 flex-1">
-          <p className="truncate font-medium" title={r.name}>
+          <p className="truncate font-medium text-zinc-900 dark:text-zinc-100" title={r.name}>
             {repoShortName(r.name, r.org)}
+            {!r.org && <span className="ml-2 text-xs font-normal text-zinc-500 dark:text-zinc-400">avulso</span>}
           </p>
-          <p className="truncate text-xs text-zinc-500 dark:text-zinc-400">{r.org ?? "repositório avulso"}</p>
-            <RepoSummary repo={r} />
-          <RepoDocsButton repo={r} />
-            <RepoCardButton repo={r} />
-          {r.kind === "code" && <button type="button" aria-label={`Raio X de ${r.name}`} onClick={() => onXray({ kind: "repo", id: r.name })} className="ml-3 inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"><Network className="size-3.5" aria-hidden="true" /> Raio X</button>}
+          <RepoSummary repo={r} />
+          <RepoLinks repo={r} onXray={onXray} />
           {r.skipped > 0 && (
             <p
               className="text-xs text-amber-600 dark:text-amber-400"
@@ -821,9 +902,7 @@ function RepoCard({ repo: r, actions, selection, onXray }: { repo: Repo; actions
             </p>
           )}
         </div>
-        <Badge tone={r.status} dot>
-          {STATUS_LABEL[r.status]}
-        </Badge>
+        <RepoStatus repo={r} live={live} />
       </div>
       {r.error && <p className="text-xs text-rose-600 dark:text-rose-400">{r.error}</p>}
       <dl className="grid grid-cols-3 gap-2 text-xs">
@@ -849,6 +928,24 @@ function RepoCard({ repo: r, actions, selection, onXray }: { repo: Repo; actions
   );
 }
 
+const repoLinkClass =
+  "inline-flex items-center gap-1 text-xs font-medium text-zinc-500 underline-offset-2 outline-none transition hover:text-accent-600 hover:underline focus-visible:text-accent-600 focus-visible:underline dark:text-zinc-400 dark:hover:text-accent-400";
+
+/** Atalhos do repo: documentação ligada, cartão e Raio X. */
+function RepoLinks({ repo, onXray }: { repo: Repo; onXray: (target: XrayTarget) => void }) {
+  if (repo.kind !== "code") return null;
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1">
+      <RepoDocsButton repo={repo} />
+      <RepoCardButton repo={repo} />
+      <button type="button" aria-label={`Raio X de ${repo.name}`} onClick={() => onXray({ kind: "repo", id: repo.name })} className={repoLinkClass}>
+        <Network className="size-3.5" aria-hidden="true" />
+        Raio X
+      </button>
+    </div>
+  );
+}
+
 /** Resumo do cartão do repo (uma linha; o texto inteiro no title). */
 function RepoSummary({ repo }: { repo: Repo }) {
   if (!repo.summary) return null;
@@ -868,7 +965,7 @@ function RepoCardButton({ repo }: { repo: Repo }) {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="mt-1 ml-3 inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+        className={repoLinkClass}
       >
         <IdCard className="size-3.5" aria-hidden="true" />
         Cartão
@@ -889,7 +986,7 @@ function RepoDocsButton({ repo }: { repo: Repo }) {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+        className={repoLinkClass}
       >
         <BookOpen className="size-3.5" aria-hidden="true" />
         Documentação

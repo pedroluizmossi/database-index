@@ -29,7 +29,7 @@ export function Dialog({ open, onClose, title, description, children, footer, si
       ref={ref}
       onClose={onClose}
       className={cx(
-        "m-auto w-[calc(100%-2rem)] rounded-2xl border border-zinc-200 bg-white p-0 text-zinc-900 shadow-2xl shadow-zinc-900/20 backdrop:bg-zinc-950/40 backdrop:backdrop-blur-sm dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100",
+        "m-auto w-[calc(100%-2rem)] rounded-xl border border-zinc-200 bg-white p-0 text-zinc-900 shadow-[0_24px_48px_-12px_rgb(0_0_0/0.25)] backdrop:bg-ink-950/50 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100 dark:backdrop:bg-black/60",
         size === "md" ? "max-w-md" : size === "lg" ? "max-w-2xl" : "max-w-5xl",
       )}
     >

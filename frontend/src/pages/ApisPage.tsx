@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Braces, Database, ExternalLink, FileCode2, Network, RefreshCw, Search } from "lucide-react";
+import { Database, ExternalLink, Network, RefreshCw, Search } from "lucide-react";
 import { apiId, type XrayTarget } from "../lib/xray";
 import { api } from "../api/endpoints";
 import { ApiError, describeError } from "../api/client";
@@ -91,11 +91,13 @@ export function ApisPage({ onXray }: { onXray: (target: XrayTarget) => void }) {
     </div>
     {error && <Alert>{error}</Alert>}
     {jobs.running && <RunningJobBanner job={jobs.running} onOpen={setJobDetail} />}
-    <div className="grid gap-4 sm:grid-cols-3">
-      <Summary icon={Database} label="Domínios cadastrados" value={sources?.length} hint="seleções persistidas" />
-      <Summary icon={FileCode2} label="Serviços com operações" value={sources ? indexedServices : undefined} hint="com conteúdo no índice" />
-      <Summary icon={Braces} label="Operações indexadas" value={sources ? totalOperations : undefined} hint="documentos de operações" />
-    </div>
+    <Panel>
+      <dl className="grid divide-zinc-200 sm:grid-cols-3 sm:divide-x dark:divide-zinc-800">
+        <Summary label="domínios cadastrados" value={sources?.length} hint="seleções persistidas" />
+        <Summary label="serviços com operações" value={sources ? indexedServices : undefined} hint="com conteúdo no índice" />
+        <Summary label="operações indexadas" value={sources ? totalOperations : undefined} hint="documentos de operações" />
+      </dl>
+    </Panel>
     <Panel className="overflow-hidden">
       <div className="flex flex-wrap items-end gap-4 border-b border-zinc-200 p-5 dark:border-zinc-800">
         <Field label="Domínio" className="min-w-48 flex-1">
@@ -117,18 +119,18 @@ export function ApisPage({ onXray }: { onXray: (target: XrayTarget) => void }) {
         </div>
         {source?.error && <div className="px-5 pt-4"><Alert>{source.error}</Alert></div>}
         <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
-          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={all} onChange={(e) => { setAll(e.target.checked); setPreview(null); }} className="size-4 accent-indigo-600" /> Domínio inteiro, incluindo serviços futuros</label>
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={all} onChange={(e) => { setAll(e.target.checked); setPreview(null); }} className="size-4 accent-accent-600" /> Domínio inteiro, incluindo serviços futuros</label>
           <span className="text-xs text-zinc-500 dark:text-zinc-400">{all ? `${services.length} serviços no domínio` : `${selected.length} selecionado(s)`}</span>
         </div>
         {visible.length === 0 ? <EmptyState icon={Search} title="Nenhum serviço encontrado" text="Tente outro nome de serviço." /> :
           <ul className="divide-y divide-zinc-100 border-y border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">{visible.map((s) => {
             const count = indexed.get(s.service);
             return <li key={s.key} className="flex items-center gap-3 px-5 py-3">
-              <input type="checkbox" aria-label={`Selecionar ${s.service}`} className="size-4 shrink-0 accent-indigo-600" disabled={all} checked={all || selected.includes(s.service)} onChange={(e) => { setSelected(e.target.checked ? [...selected, s.service] : selected.filter((v) => v !== s.service)); setPreview(null); }} />
+              <input type="checkbox" aria-label={`Selecionar ${s.service}`} className="size-4 shrink-0 accent-accent-600" disabled={all} checked={all || selected.includes(s.service)} onChange={(e) => { setSelected(e.target.checked ? [...selected, s.service] : selected.filter((v) => v !== s.service)); setPreview(null); }} />
               <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{s.service}</p><p className="truncate text-xs text-zinc-500 dark:text-zinc-400">{s.key}</p></div>
               {count !== undefined ? <Badge tone="indexed" dot>{count} {count === 1 ? "operação" : "operações"}</Badge> : <span className="text-xs text-zinc-500 dark:text-zinc-400">{sources === null ? "Estado indisponível" : "Sem operações no índice"}</span>}
-              {count !== undefined && source && <button type="button" aria-label={`Raio X de ${domain}/${s.service}`} onClick={() => onXray({kind: "api", id: apiId(source.repo, domain, s.service)})} className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"><Network className="size-3.5" aria-hidden="true" /> Raio X</button>}
-              <a href={s.url} target="_blank" rel="noreferrer" aria-label={`Abrir Swagger de ${s.service}`} className="text-zinc-400 hover:text-indigo-500"><ExternalLink className="size-4" /></a>
+              {count !== undefined && source && <button type="button" aria-label={`Raio X de ${domain}/${s.service}`} onClick={() => onXray({kind: "api", id: apiId(source.repo, domain, s.service)})} className="inline-flex items-center gap-1 text-xs font-medium text-accent-600 hover:underline dark:text-accent-400"><Network className="size-3.5" aria-hidden="true" /> Raio X</button>}
+              <a href={s.url} target="_blank" rel="noreferrer" aria-label={`Abrir Swagger de ${s.service}`} className="text-zinc-400 hover:text-accent-500"><ExternalLink className="size-4" /></a>
             </li>;
           })}</ul>}
         <div className="flex flex-wrap items-center justify-between gap-3 p-5">
@@ -145,6 +147,15 @@ export function ApisPage({ onXray }: { onXray: (target: XrayTarget) => void }) {
   </div>;
 }
 
-function Summary({ icon: Icon, label, value, hint }: { icon: typeof Database; label: string; value?: number; hint: string }) {
-  return <Panel className="flex items-center gap-4 p-5"><div className="rounded-xl bg-indigo-500/10 p-3 text-indigo-500"><Icon className="size-5" aria-hidden="true" /></div><div><p className="text-xs font-medium text-zinc-500 uppercase dark:text-zinc-400">{label}</p><p className="text-2xl font-semibold tabular-nums">{value === undefined ? "—" : value.toLocaleString("pt-BR")}</p><p className="text-xs text-zinc-500 dark:text-zinc-400">{hint}</p></div></Panel>;
+function Summary({ label, value, hint }: { label: string; value?: number; hint: string }) {
+  return (
+    <div className="flex flex-col-reverse gap-0.5 border-zinc-200 px-5 py-4 not-first:border-t sm:not-first:border-t-0 dark:border-zinc-800">
+      <dt className="text-sm text-zinc-600 dark:text-zinc-300">
+        {label} <span className="text-zinc-400 dark:text-zinc-500">· {hint}</span>
+      </dt>
+      <dd className="text-2xl font-semibold tracking-tight text-zinc-900 tabular-nums dark:text-white">
+        {value === undefined ? "—" : value.toLocaleString("pt-BR")}
+      </dd>
+    </div>
+  );
 }

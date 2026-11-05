@@ -45,6 +45,22 @@ class Settings(BaseSettings):
     embed_model: str = Field("voyage/voyage-code-4", validation_alias="EMBED_MODEL")
     embed_dimensions: int | None = Field(None, validation_alias="EMBED_DIMENSIONS")
     embed_max_inflight: int = Field(4, validation_alias="EMBED_MAX_INFLIGHT")
+    # Servidor de embedding próprio (ex.: `code-index embed-serve` com o voyage-4-nano local). Vale só para
+    # embedding: o rerank continua na API. Com api_base, a chave enviada é EMBED_API_KEY (nunca a da Voyage).
+    embed_api_base: str | None = Field(None, validation_alias="EMBED_API_BASE")
+    embed_api_key: SecretStr = Field(SecretStr("local"), validation_alias="EMBED_API_KEY")
+
+    # `code-index embed-serve`: modelo aberto em CPU, numa revisão fixa (o modelo usa trust_remote_code;
+    # trocar a revisão exige revisar de novo o código remoto)
+    local_embed_model: str = Field("MongoDB/voyage-4-nano", validation_alias="LOCAL_EMBED_MODEL")
+    local_embed_revision: str = Field("5fb34e870f49f19e79c94d5e118f5ee730133279", validation_alias="LOCAL_EMBED_REVISION")
+    local_embed_host: str = Field("127.0.0.1", validation_alias="LOCAL_EMBED_HOST")
+    local_embed_port: int = Field(8766, validation_alias="LOCAL_EMBED_PORT")
+    # Tokens por texto (o modelo aceita 32k; em CPU, textos longos custam memória e tempo)
+    local_embed_max_tokens: int = Field(8192, ge=128, le=32768, validation_alias="LOCAL_EMBED_MAX_TOKENS")
+    # Em CPU, lote 1 foi o mais rápido (sem preenchimento até o texto mais longo do lote)
+    local_embed_batch: int = Field(1, ge=1, le=256, validation_alias="LOCAL_EMBED_BATCH")
+    local_embed_threads: int | None = Field(None, ge=1, validation_alias="LOCAL_EMBED_THREADS")
     rerank_model: str = Field("voyage/rerank-2.5", validation_alias="RERANK_MODEL")  # vazio desliga
     rerank_candidates: int = Field(40, validation_alias="RERANK_CANDIDATES")
     # Variações do rerank (medidas com `code-index eval --rerank-variants`). A instrução foi a única com
@@ -159,7 +175,11 @@ class Settings(BaseSettings):
     @property
     def embed_kwargs(self) -> dict:
         """Parâmetros extras repassados ao LiteLLM em toda chamada de embedding."""
-        return {"dimensions": self.embed_dimensions} if self.embed_dimensions else {}
+        kwargs: dict = {"dimensions": self.embed_dimensions} if self.embed_dimensions else {}
+        if self.embed_api_base:
+            kwargs["api_base"] = self.embed_api_base
+            kwargs["api_key"] = self.embed_api_key.get_secret_value()
+        return kwargs
 
 
 _current: Settings | None = None

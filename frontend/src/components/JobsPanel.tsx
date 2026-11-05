@@ -2,10 +2,10 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { ChevronRight, History, LoaderCircle } from "lucide-react";
 import { api } from "../api/endpoints";
 import { describeError } from "../api/client";
-import type { SyncJob } from "../api/types";
+import type { RepoProgress, RepoProgressStatus, SyncJob, SyncProgress } from "../api/types";
 import { cx, formatDateTime, formatDuration, timeAgo } from "../lib/utils";
 import { Dialog } from "./Dialog";
-import { Alert, Badge, Button, EmptyState, Panel, Skeleton, type BadgeTone } from "./ui";
+import { Alert, Badge, Button, EmptyState, Panel, ProgressBar, Skeleton, type BadgeTone } from "./ui";
 
 const POLL_MS = 3000;
 
@@ -88,8 +88,23 @@ function scopeLabel(job: SyncJob): string {
   return `lote automático${job.params?.batch ? ` de até ${job.params.batch}` : ""}`;
 }
 
+const count = new Intl.NumberFormat("pt-BR");
+
+/** "5/25 arquivos" (sem total: só o que já foi feito). */
+function filesLabel(done: number, total: number | null): string {
+  return total ? `${count.format(done)}/${count.format(total)} arquivos` : `${count.format(done)} arquivos`;
+}
+
+/** Resumo de uma linha do andamento: etapa, repos e arquivos. */
+function progressLine(p: SyncProgress): string {
+  const parts = [p.phase_label];
+  if (p.repos_total > 0) parts.push(`${p.repos_done}/${p.repos_total} repos`);
+  if (p.phase === "index" || p.phase === "finish") parts.push(filesLabel(p.files_done, p.files_total || null));
+  return parts.join(" · ");
+}
+
 function summary(job: SyncJob): string {
-  if (job.status === "running") return "em andamento…";
+  if (job.status === "running") return job.progress ? progressLine(job.progress) : "em andamento…";
   if (job.result) {
     const ok = Object.keys(job.result.indexed).length;
     const bad = Object.keys(job.result.errors).length;
@@ -99,21 +114,41 @@ function summary(job: SyncJob): string {
   return job.error ?? "sem resultado";
 }
 
-/** Faixa no topo da página enquanto um job roda. */
+/** Faixa no topo da página enquanto um job roda: etapa, repo atual e barra de arquivos. */
 export function RunningJobBanner({ job, onOpen }: { job: SyncJob; onOpen: (job: SyncJob) => void }) {
+  const p = job.progress ?? null;
+  const current = p?.repos.find((r) => r.status === "indexing" || r.status === "fetching") ?? null;
+  const showBar = p !== null && (p.phase === "index" || p.phase === "finish") && p.files_total > 0;
   return (
     <div
       role="status"
-      className="flex flex-wrap items-center gap-3 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800 dark:border-sky-900/60 dark:bg-sky-950/40 dark:text-sky-200"
+      className="space-y-3 rounded-xl border border-accent-200 bg-accent-50 px-4 py-3 text-sm text-accent-900 dark:border-accent-900/60 dark:bg-accent-950/40 dark:text-accent-100"
     >
-      <LoaderCircle className="size-4 shrink-0 animate-spin" aria-hidden="true" />
-      <p className="min-w-0 flex-1">
-        <span className="font-medium">Indexação em andamento</span> ({scopeLabel(job)}), iniciada por{" "}
-        {job.requested_by} {timeAgo(job.started_at)}. A página atualiza sozinha.
-      </p>
-      <Button variant="ghost" size="sm" onClick={() => onOpen(job)}>
-        Ver detalhes
-      </Button>
+      <div className="flex flex-wrap items-center gap-3">
+        <LoaderCircle className="size-4 shrink-0 animate-spin" aria-hidden="true" />
+        <p className="min-w-0 flex-1">
+          <span className="font-medium">Indexação em andamento</span>
+          {p ? <> · {progressLine(p)}</> : <> ({scopeLabel(job)})</>}
+          <span className="text-accent-800/80 dark:text-accent-200/80">
+            {" "}· {job.requested_by}, {timeAgo(job.started_at)}
+          </span>
+        </p>
+        <Button variant="ghost" size="sm" onClick={() => onOpen(job)}>
+          Ver detalhes
+        </Button>
+      </div>
+      {showBar && p && (
+        <div className="space-y-1.5">
+          <ProgressBar value={p.files_done} max={p.files_total} label="Arquivos processados no lote" />
+          {current && (
+            <p className="truncate text-xs text-accent-800 dark:text-accent-200">
+              {current.status === "fetching" ? "Baixando" : "Indexando"}{" "}
+              <span className="font-mono">{current.name}</span>
+              {current.status === "indexing" && <> · {filesLabel(current.files_done, current.files_total)}</>}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -153,7 +188,7 @@ export function JobsPanel({ state, onOpen }: { state: JobsState; onOpen: (job: S
               <button
                 type="button"
                 onClick={() => onOpen(job)}
-                className="flex w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-zinc-50/80 dark:hover:bg-white/[0.02]"
+                className="flex w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-zinc-50 dark:hover:bg-white/[0.02]"
               >
                 <Badge tone={display(job).tone} dot>
                   {display(job).label}
@@ -231,6 +266,12 @@ export function JobDialog({ job, onClose }: { job: SyncJob | null; onClose: () =
 
           {current.error && <Alert>{current.error}</Alert>}
 
+          {current.progress && current.progress.repos.length > 0 && (
+            <Section title={`Repositórios (${current.progress.repos_done}/${current.progress.repos_total})`}>
+              <RepoProgressList repos={current.progress.repos} running={current.status === "running"} />
+            </Section>
+          )}
+
           {result && (
             <>
               <Section title={`Indexados (${indexed.length})`}>
@@ -276,6 +317,54 @@ export function JobDialog({ job, onClose }: { job: SyncJob | null; onClose: () =
   );
 }
 
+const REPO_STATUS: Record<RepoProgressStatus, { label: string; tone: BadgeTone }> = {
+  queued: { label: "Na fila", tone: "pending" },
+  fetching: { label: "Baixando", tone: "accent" },
+  indexing: { label: "Indexando", tone: "accent" },
+  done: { label: "Pronto", tone: "indexed" },
+  error: { label: "Erro", tone: "error" },
+  skipped: { label: "Pulado", tone: "ignored" },
+};
+
+/** Situação de cada repo do lote: status, barra de arquivos e tempo. */
+function RepoProgressList({ repos, running }: { repos: RepoProgress[]; running: boolean }) {
+  return (
+    <ul className="divide-y divide-zinc-100 rounded-lg border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
+      {repos.map((r) => {
+        const st = REPO_STATUS[r.status];
+        // Job encerrado com repo ainda "indexando" = o retrato final não chegou; não finge andamento.
+        const stale = !running && (r.status === "indexing" || r.status === "fetching" || r.status === "queued");
+        return (
+          <li key={r.name} className="space-y-1.5 px-3 py-2.5">
+            <div className="flex items-center gap-3">
+              <span className="min-w-0 flex-1 truncate font-mono text-xs" title={r.name}>
+                {r.name}
+              </span>
+              <span className="shrink-0 text-xs text-zinc-500 tabular-nums dark:text-zinc-400">
+                {filesLabel(r.files_done, r.files_total)}
+                {r.files_unchanged > 0 && <> · {count.format(r.files_unchanged)} sem mudança</>}
+                {r.seconds !== null && <> · {formatDuration(r.seconds * 1000)}</>}
+              </span>
+              <Badge tone={stale ? "ignored" : st.tone} dot>
+                {stale ? "Interrompido" : st.label}
+              </Badge>
+            </div>
+            {(r.status === "indexing" || r.status === "done") && r.files_total !== null && r.files_total > 0 && (
+              <ProgressBar
+                value={r.files_done}
+                max={r.files_total}
+                tone={r.status === "done" ? "indexed" : "accent"}
+                label={`Arquivos de ${r.name}`}
+              />
+            )}
+            {r.error && <p className="text-xs break-words text-rose-700 dark:text-rose-300">{r.error}</p>}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 function Item({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="min-w-0">
@@ -288,7 +377,7 @@ function Item({ label, children }: { label: string; children: ReactNode }) {
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="space-y-2">
-      <h3 className="text-xs font-medium tracking-wide text-zinc-500 uppercase dark:text-zinc-400">{title}</h3>
+      <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-200">{title}</h3>
       {children}
     </section>
   );

@@ -23,7 +23,7 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from pydantic import SecretStr
 
-from code_index.interfaces.http.app import create_app
+from code_index.interfaces.http.app import create_app, server_config
 from code_index.services import open_service
 from code_index.settings import Settings, use_settings
 
@@ -39,6 +39,8 @@ class Server:
     settings: Settings
     tokens: dict[str, str]      # nome -> valor
     token_ids: dict[str, str]   # nome -> id
+    srv: Any = None             # uvicorn.Server (para testar o desligamento)
+    thread: Any = None
 
 
 def _free_port() -> int:
@@ -77,7 +79,7 @@ def server(int_settings: Settings, fake_llm: Any, tmp_path: Any) -> Iterator[Ser
     (tmp_path / "meu-repo").mkdir()
     (tmp_path / "meu-repo" / "app.py").write_text("def ola():\n    return 'mundo'\n")
 
-    srv = uvicorn.Server(uvicorn.Config(create_app(settings), host="127.0.0.1", port=port, log_level="warning"))
+    srv = uvicorn.Server(server_config(create_app(settings), "127.0.0.1", port, log_level="warning"))
     thread = threading.Thread(target=srv.run, daemon=True)
     thread.start()
     deadline = time.monotonic() + 15
@@ -86,7 +88,7 @@ def server(int_settings: Settings, fake_llm: Any, tmp_path: Any) -> Iterator[Ser
             raise RuntimeError("servidor não subiu")
         time.sleep(0.05)
     try:
-        yield Server(url=url, settings=settings, tokens=tokens, token_ids=ids)
+        yield Server(url=url, settings=settings, tokens=tokens, token_ids=ids, srv=srv, thread=thread)
     finally:
         srv.should_exit = True
         thread.join(timeout=15)
@@ -167,6 +169,14 @@ def test_rate_limit_de_busca(server: Server) -> None:
     assert codes == [200, 200, 200, 429]
 
 
+def test_previa_nao_gasta_o_balde_de_sync(server: Server) -> None:
+    # A prévia (dry_run) não custa nada e a interface a chama a cada mudança de lote: não pode esgotar o balde
+    # de sync (poucas indexações por hora). Só iniciar a indexação gasta esse balde.
+    c = client(server, "indexador")
+    codes = [c.post("/api/v1/sync", json={"repos": None, "batch": 1, "dry_run": True}).status_code for _ in range(8)]
+    assert codes == [202] * 8  # a rota responde 202 também na prévia (comportamento existente)
+
+
 def test_host_desconhecido_recusado(server: Server) -> None:
     r = client(server, "leitor", Host="evil.example").get("/api/v1/me")
     assert r.status_code == 400
@@ -206,6 +216,55 @@ def test_mcp_so_expoe_leitura(server: Server) -> None:
     assert tools == ["search_code", "read_file_lines", "list_repos", "find_symbol", "grep_code"]
     assert not search.is_error and not symbol.is_error and not grep.is_error
     assert json.loads(grep.content[0].text) == {"matches": [], "truncated": False}
+
+
+async def _mcp_guide(server: Server, token: str) -> tuple[str, list[str], str, str, str]:
+    headers = {"Authorization": f"Bearer {server.tokens[token]}"}
+    async with httpx2.AsyncClient(headers=headers, timeout=30) as http:
+        async with streamable_http_client(f"{server.url}/mcp", http_client=http) as (r, w), ClientSession(r, w) as s:
+            init = await s.initialize()
+            prompts = sorted(p.name for p in (await s.list_prompts()).prompts)
+            guia = await s.get_prompt("guia_de_uso")
+            investigar = await s.get_prompt("investigar", {"pergunta": "onde validamos o captcha?"})
+            recurso = await s.read_resource("code-index://guia")
+            return (init.instructions or "", prompts, guia.messages[0].content.text,  # type: ignore[union-attr]
+                    investigar.messages[0].content.text, recurso.contents[0].text)  # type: ignore[union-attr]
+
+
+def test_mcp_serve_guia_de_uso(server: Server) -> None:
+    instructions, prompts, guia, investigar, recurso = asyncio.run(_mcp_guide(server, "leitor"))
+    assert "find_symbol" in instructions and "guia_de_uso" in instructions
+    assert prompts == ["guia_de_uso", "investigar"]
+    assert guia.startswith("# Guia de uso do code-index") and guia == recurso
+    for tool in ("search_code", "find_symbol", "grep_code", "read_file_lines", "list_repos"):
+        assert tool in guia
+    assert investigar.endswith("Pergunta: onde validamos o captcha?")
+
+
+def test_servidor_desliga_com_cliente_mcp_conectado(server: Server) -> None:
+    """Cliente MCP conectado e parado (como o Claude Code entre chamadas) não pode prender o desligamento."""
+    conectado, liberar = threading.Event(), threading.Event()
+
+    async def cliente() -> None:
+        headers = {"Authorization": f"Bearer {server.tokens['leitor']}"}
+        async with httpx2.AsyncClient(headers=headers, timeout=60) as http:
+            async with streamable_http_client(f"{server.url}/mcp", http_client=http) as (r, w), \
+                    ClientSession(r, w) as s:
+                await s.initialize()
+                await s.list_tools()
+                conectado.set()
+                await asyncio.to_thread(liberar.wait, 30)
+
+    t = threading.Thread(target=lambda: asyncio.run(cliente()), daemon=True)
+    t.start()
+    assert conectado.wait(15)
+    inicio = time.monotonic()
+    server.srv.should_exit = True
+    server.thread.join(timeout=20)
+    demorou = time.monotonic() - inicio
+    liberar.set()
+    assert not server.thread.is_alive(), "servidor ficou preso esperando o cliente MCP"
+    assert demorou < 10, f"desligamento levou {demorou:.1f}s"
 
 
 # ------------------------------------------------------------------ jobs persistentes

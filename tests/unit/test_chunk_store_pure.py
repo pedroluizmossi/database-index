@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from code_index.infra.chunk_store import _STOPWORDS, glob_to_like, keyword_tsquery
+from code_index.infra.chunk_store import _STOPWORDS, keyword_tsquery
 
 
 @pytest.mark.parametrize("query", ["", "   ", "de a o", "the and of", "ab cd é"])
@@ -37,24 +37,3 @@ def test_pontuacao_e_operadores_de_tsquery_nao_passam() -> None:
 
 def test_identificadores_com_underscore_sao_um_termo() -> None:
     assert keyword_tsquery("getUserById(user_id)?") == "getuserbyid | user_id"
-
-
-@pytest.mark.parametrize(
-    ("glob", "like"),
-    [
-        ("*.py", "%.py"),
-        ("src/**/*.py", "src/%/%.py"),
-        ("**/*.ts", "%/%.ts"),
-        ("**", "%"),
-        ("file?.txt", "file_.txt"),
-        ("src/app", "src/app"),
-    ],
-)
-def test_glob_para_like(glob: str, like: str) -> None:
-    assert glob_to_like(glob) == like
-
-
-def test_underscore_e_percent_literais_sao_escapados() -> None:
-    # Sem escape, "_" e "%" seriam curingas do LIKE e casariam arquivos errados.
-    assert glob_to_like("test_*.py") == r"test\_%.py"
-    assert glob_to_like("100%*") == r"100\%%"

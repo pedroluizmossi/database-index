@@ -1,0 +1,808 @@
+{
+ "description": "Perguntas com a resposta conhecida (repo + fim do caminho, opcionalmente a linha). Rode com `uv run code-index eval`. Cada consulta gasta um embedding e, com rerank, uma chamada ao reranker. Tags: code (pergunta sobre código, em português), doc (a resposta é documentação), en (pergunta em inglês), ident (nome de classe/método).",
+ "cases": [
+  {
+   "query": "onde é validado o código OTP no login multifator",
+   "repos": [
+    "snr-authentication-backend"
+   ],
+   "expect": [
+    {
+     "repo": "snr-authentication-backend",
+     "path": "service/MultiFactorAuthenticationService.java"
+    },
+    {
+     "repo": "snr-authentication-backend",
+     "path": "totp/TOTPAuthenticator.java"
+    }
+   ],
+   "tag": "code"
+  },
+  {
+   "query": "como o refresh token gera um novo access token",
+   "repos": [
+    "snr-authentication-backend"
+   ],
+   "expect": [
+    {
+     "repo": "snr-authentication-backend",
+     "path": "handler/RefreshTokenHandler.java"
+    },
+    {
+     "repo": "snr-authentication-backend",
+     "path": "service/AuthenticationService.java",
+     "line": 742
+    }
+   ],
+   "tag": "code"
+  },
+  {
+   "query": "remove tokens expirados da blacklist",
+   "repos": [
+    "snr-authentication-backend"
+   ],
+   "expect": [
+    {
+     "repo": "snr-authentication-backend",
+     "path": "handler/RemoveExpiredTokensFromBlacklistHandler.java"
+    }
+   ],
+   "tag": "code"
+  },
+  {
+   "query": "criptografia de coluna sensível no banco JPA",
+   "repos": [
+    "snr-authentication-backend"
+   ],
+   "expect": [
+    {
+     "repo": "snr-authentication-backend",
+     "path": "model/CryptoConverter.java"
+    }
+   ],
+   "tag": "code"
+  },
+  {
+   "query": "validação do captcha no login",
+   "repos": [
+    "snr-authentication-backend"
+   ],
+   "expect": [
+    {
+     "repo": "snr-authentication-backend",
+     "path": "service/CaptchaValidator.java"
+    }
+   ],
+   "tag": "code"
+  },
+  {
+   "query": "bloqueia o usuário após várias tentativas de login com senha errada",
+   "repos": [
+    "snr-authentication-backend"
+   ],
+   "expect": [
+    {
+     "repo": "snr-authentication-backend",
+     "path": "service/AuthenticationService.java",
+     "line": 510
+    }
+   ],
+   "tag": "code"
+  },
+  {
+   "query": "tempo de expiração do token temporário do MFA",
+   "repos": [
+    "snr-authentication-backend"
+   ],
+   "expect": [
+    {
+     "repo": "snr-authentication-backend",
+     "path": "service/MultiFactorAuthenticationService.java",
+     "line": 148
+    }
+   ],
+   "tag": "code"
+  },
+  {
+   "query": "UserLastLoginRedisCache",
+   "expect": [
+    {
+     "repo": "snr-authentication-backend",
+     "path": "cache/UserLastLoginRedisCache.java"
+    },
+    {
+     "repo": "snr-login-backend",
+     "path": "redis/UserLastLoginRedisCache.java"
+    }
+   ],
+   "tag": "ident"
+  },
+  {
+   "query": "refreshToken",
+   "repos": [
+    "snr-authentication-backend"
+   ],
+   "expect": [
+    {
+     "repo": "snr-authentication-backend",
+     "path": "handler/RefreshTokenHandler.java"
+    },
+    {
+     "repo": "snr-authentication-backend",
+     "path": "service/AuthenticationService.java",
+     "line": 742
+    }
+   ],
+   "tag": "ident"
+  },
+  {
+   "query": "gera a chave secreta e verifica o código TOTP",
+   "repos": [
+    "snr-authentication-backend"
+   ],
+   "expect": [
+    {
+     "repo": "snr-authentication-backend",
+     "path": "totp/TOTPAuthenticator.java"
+    }
+   ],
+   "tag": "code"
+  },
+  {
+   "query": "login de integração usando chave e secret da aplicação",
+   "repos": [
+    "snr-authentication-backend"
+   ],
+   "expect": [
+    {
+     "repo": "snr-authentication-backend",
+     "path": "handler/LoginWithKeyHandler.java"
+    }
+   ],
+   "tag": "code"
+  },
+  {
+   "query": "invalidar as sessões (tokens) de uma lista de usuários",
+   "repos": [
+    "snr-authentication-backend"
+   ],
+   "expect": [
+    {
+     "repo": "snr-authentication-backend",
+     "path": "handler/SessionsInvalidateHandler.java"
+    },
+    {
+     "repo": "snr-authentication-backend",
+     "path": "service/session/InvalidateTokensService.java"
+    }
+   ],
+   "tag": "code"
+  },
+  {
+   "query": "healthcheck do serviço de autenticação",
+   "repos": [
+    "snr-authentication-backend"
+   ],
+   "expect": [
+    {
+     "repo": "snr-authentication-backend",
+     "path": "handler/HealthCheckHandler.java"
+    }
+   ],
+   "tag": "code"
+  },
+  {
+   "query": "configuração do cache redis",
+   "repos": [
+    "snr-authentication-backend"
+   ],
+   "expect": [
+    {
+     "repo": "snr-authentication-backend",
+     "path": "config/CacheConfiguration.java"
+    },
+    {
+     "repo": "snr-authentication-backend",
+     "path": "cache/CommonRedisCache.java"
+    }
+   ],
+   "tag": "code"
+  },
+  {
+   "query": "interceptor que trata erros HTTP e mostra toast",
+   "repos": [
+    "snr-authorization-frontend"
+   ],
+   "expect": [
+    {
+     "repo": "snr-authorization-frontend",
+     "path": "core/services/error-handler.interceptor.ts"
+    }
+   ],
+   "tag": "code"
+  },
+  {
+   "query": "replicar filtros de um papel para outros",
+   "repos": [
+    "snr-authorization-frontend"
+   ],
+   "expect": [
+    {
+     "repo": "snr-authorization-frontend",
+     "path": "replicate-filters/replicate-filters.component.ts"
+    }
+   ],
+   "tag": "code"
+  },
+  {
+   "query": "bootstrap da aplicação angular",
+   "repos": [
+    "snr-authorization-frontend"
+   ],
+   "expect": [
+    {
+     "repo": "snr-authorization-frontend",
+     "path": "src/main.ts"
+    },
+    {
+     "repo": "snr-authorization-frontend",
+     "path": "src/app/app.module.ts"
+    }
+   ],
+   "tag": "code"
+  },
+  {
+   "query": "bloquear a tela enquanto há requisições http em andamento",
+   "repos": [
+    "snr-authorization-frontend"
+   ],
+   "expect": [
+    {
+     "repo": "snr-authorization-frontend",
+     "path": "core/services/block-ui.interceptor.ts"
+    },
+    {
+     "repo": "snr-authorization-frontend",
+     "path": "core/services/block-ui.service.ts"
+    }
+   ],
+   "tag": "code"
+  },
+  {
+   "query": "tela de listagem de delegações",
+   "repos": [
+    "snr-authorization-frontend"
+   ],
+   "expect": [
+    {
+     "repo": "snr-authorization-frontend",
+     "path": "features/delegations/list/list.component.ts"
+    },
+    {
+     "repo": "snr-authorization-frontend",
+     "path": "features/delegations/list/list.component.html"
+    }
+   ],
+   "tag": "code"
+  },
+  {
+   "query": "chamadas HTTP da API de papéis",
+   "repos": [
+    "snr-authorization-frontend"
+   ],
+   "expect": [
+    {
+     "repo": "snr-authorization-frontend",
+     "path": "features/roles/roles.service.ts"
+    }
+   ],
+   "tag": "code"
+  },
+  {
+   "query": "google analytics",
+   "repos": [
+    "snr-authorization-frontend"
+   ],
+   "expect": [
+    {
+     "repo": "snr-authorization-frontend",
+     "path": "shared/google-analytics/google-analytics.service.ts"
+    },
+    {
+     "repo": "snr-authorization-frontend",
+     "path": "shared/google-analytics/google-analytics.module.ts"
+    }
+   ],
+   "tag": "code"
+  },
+  {
+   "query": "como montar a URL de query, action e entity de um serviço",
+   "repos": [
+    "snr-authorization-frontend"
+   ],
+   "expect": [
+    {
+     "repo": "snr-authorization-frontend",
+     "path": "core/constants/endpoint.constant.ts"
+    }
+   ],
+   "tag": "code"
+  },
+  {
+   "query": "formulário de substituição de usuário",
+   "repos": [
+    "snr-authorization-frontend"
+   ],
+   "expect": [
+    {
+     "repo": "snr-authorization-frontend",
+     "path": "features/substitutions/form/form.component.ts"
+    },
+    {
+     "repo": "snr-authorization-frontend",
+     "path": "features/substitutions/form/form.component.html"
+    }
+   ],
+   "tag": "code"
+  },
+  {
+   "query": "RolesService",
+   "repos": [
+    "snr-authorization-frontend"
+   ],
+   "expect": [
+    {
+     "repo": "snr-authorization-frontend",
+     "path": "features/roles/roles.service.ts"
+    }
+   ],
+   "tag": "ident"
+  },
+  {
+   "query": "resolver que carrega os dados do usuário logado",
+   "repos": [
+    "snr-authorization-frontend"
+   ],
+   "expect": [
+    {
+     "repo": "snr-authorization-frontend",
+     "path": "shared/users/user-data.resolver.ts"
+    },
+    {
+     "repo": "snr-authorization-frontend",
+     "path": "shared/users/users.service.ts"
+    }
+   ],
+   "tag": "code"
+  },
+  {
+   "query": "interceptor angular que exibe toast de erro",
+   "expect": [
+    {
+     "repo": "snr-authorization-frontend",
+     "path": "core/services/error-handler.interceptor.ts"
+    },
+    {
+     "repo": "*",
+     "path": "error-handler.interceptor.ts"
+    }
+   ],
+   "tag": "code"
+  },
+  {
+   "query": "validação de recaptcha no login",
+   "expect": [
+    {
+     "repo": "*",
+     "path": "CaptchaValidator.java"
+    },
+    {
+     "repo": "*",
+     "path": "RecaptchaUsernamePasswordUtils.java"
+    }
+   ],
+   "tag": "code"
+  },
+  {
+   "tag": "doc",
+   "query": "o que é o login em dois passos quando o tenant usa SAML",
+   "expect": [
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/Plataforma/Authentication/login-dois-passos.md"
+    }
+   ]
+  },
+  {
+   "tag": "doc",
+   "query": "para que serve a API masterSessionsInvalidate do tenant master",
+   "expect": [
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/Plataforma/Authentication/master-sessions-invalidate.md"
+    }
+   ]
+  },
+  {
+   "tag": "doc",
+   "query": "como usar scope customizado no login de aplicativos mobile",
+   "expect": [
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/Plataforma/Authentication/scope-customizado-para-aplicacoes.md"
+    }
+   ]
+  },
+  {
+   "tag": "doc",
+   "query": "como configurar o aplicativo do Google para enviar e-mail com OAuth",
+   "expect": [
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/Plataforma/Email/configuracao-google-oauth.md"
+    }
+   ]
+  },
+  {
+   "tag": "doc",
+   "query": "serviço que valida e-mail e detecta erro de digitação como gmial",
+   "expect": [
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/Plataforma/Email/validacao-email.md"
+    }
+   ]
+  },
+  {
+   "tag": "doc",
+   "query": "como habilitar uma feature para um tenant na tela de administração",
+   "expect": [
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/Plataforma/Feature-Toggle/habilitando-desabilitando-features.md"
+    }
+   ]
+  },
+  {
+   "tag": "doc",
+   "query": "tempo de vida (ttl) de objetos no blob service",
+   "expect": [
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/Plataforma/Blob-Service/time_to_live.md"
+    }
+   ]
+  },
+  {
+   "tag": "doc",
+   "query": "diferença entre o fluxo SMTP e o fluxo OAuth no serviço de e-mail",
+   "expect": [
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/Plataforma/Email/fluxo.md"
+    }
+   ]
+  },
+  {
+   "tag": "doc",
+   "query": "o que é a biblioteca login-control e quais serviços a utilizam",
+   "expect": [
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/Plataforma/LoginControl/LoginControl.md"
+    }
+   ]
+  },
+  {
+   "tag": "doc",
+   "query": "migração do blob service para a versão 3.0.0 com um bucket só",
+   "expect": [
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/Plataforma/Blob-Service/migracao-3-0-0.md"
+    }
+   ]
+  },
+  {
+   "tag": "doc",
+   "query": "como funciona o login com recaptcha na plataforma",
+   "expect": [
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/Plataforma/Authentication/Login-recaptcha.md"
+    }
+   ]
+  },
+  {
+   "tag": "doc",
+   "query": "documentação do fluxo de MFA com TOTP",
+   "expect": [
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/Plataforma/Authentication/mfa.md"
+    }
+   ],
+   "repos": [
+    "snr-authentication-backend"
+   ]
+  },
+  {
+   "tag": "en",
+   "query": "where is the OTP code verified during multi-factor login",
+   "expect": [
+    {
+     "repo": "snr-authentication-backend",
+     "path": "service/MultiFactorAuthenticationService.java"
+    },
+    {
+     "repo": "snr-authentication-backend",
+     "path": "totp/TOTPAuthenticator.java"
+    }
+   ],
+   "repos": [
+    "snr-authentication-backend"
+   ]
+  },
+  {
+   "tag": "en",
+   "query": "http interceptor that shows an error toast",
+   "expect": [
+    {
+     "repo": "snr-authorization-frontend",
+     "path": "core/services/error-handler.interceptor.ts"
+    }
+   ],
+   "repos": [
+    "snr-authorization-frontend"
+   ]
+  },
+  {
+   "tag": "en",
+   "query": "in-memory LRU cache with time to live",
+   "expect": [
+    {
+     "repo": "snr-blob-service",
+     "path": "cache/LRUMemoryCache.java"
+    }
+   ],
+   "repos": [
+    "snr-blob-service"
+   ]
+  },
+  {
+   "tag": "en",
+   "query": "choose the file parser according to the mime type",
+   "expect": [
+    {
+     "repo": "snr-blob-service",
+     "path": "fileutils/FileParserFactory.java"
+    }
+   ],
+   "repos": [
+    "snr-blob-service"
+   ]
+  },
+  {
+   "tag": "en",
+   "query": "extract a text summary from a PDF document",
+   "expect": [
+    {
+     "repo": "snr-blob-service",
+     "path": "fileutils/PdfParser.java"
+    }
+   ],
+   "repos": [
+    "snr-blob-service"
+   ]
+  },
+  {
+   "tag": "en",
+   "query": "cache of blocked words used to reject e-mails",
+   "expect": [
+    {
+     "repo": "snr-email-backend",
+     "path": "cache/BlockedWordsCache.java"
+    }
+   ],
+   "repos": [
+    "snr-email-backend"
+   ]
+  },
+  {
+   "tag": "en",
+   "query": "list the features enabled for a tenant",
+   "expect": [
+    {
+     "repo": "snr-feature-toggle-backend",
+     "path": "handler/GetEnabledFeaturesHandler.java"
+    },
+    {
+     "repo": "snr-feature-toggle-backend",
+     "path": "cache/FeatureToggleCacheImpl.java"
+    }
+   ],
+   "repos": [
+    "snr-feature-toggle-backend"
+   ]
+  },
+  {
+   "tag": "en",
+   "query": "client side cache of enabled feature flags",
+   "expect": [
+    {
+     "repo": "snr-feature-toggle-backend",
+     "path": "cache/FeatureToggleCacheImpl.java"
+    }
+   ],
+   "repos": [
+    "snr-feature-toggle-backend"
+   ]
+  },
+  {
+   "tag": "en",
+   "query": "consume the send e-mail queue and deliver the message",
+   "expect": [
+    {
+     "repo": "snr-email-backend",
+     "path": "handlers/EmailQueueHandler.java"
+    }
+   ],
+   "repos": [
+    "snr-email-backend"
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "limite de envio de e-mails por tenant lido da configuração",
+   "expect": [
+    {
+     "repo": "snr-email-backend",
+     "path": "adapters/ConfigurationEmailSendingLimitGateway.java"
+    }
+   ],
+   "repos": [
+    "snr-email-backend"
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "gerar a URL de autorização OAuth para a conta de e-mail",
+   "expect": [
+    {
+     "repo": "snr-email-backend",
+     "path": "handlers/GetOAuthAuthorizationURLHandler.java"
+    }
+   ],
+   "repos": [
+    "snr-email-backend"
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "atribuir tenants a uma feature",
+   "expect": [
+    {
+     "repo": "snr-feature-toggle-backend",
+     "path": "handler/AssignTenantsHandler.java"
+    }
+   ],
+   "repos": [
+    "snr-feature-toggle-backend"
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "nome e criação do bucket S3 de cada tenant",
+   "expect": [
+    {
+     "repo": "snr-blob-service",
+     "path": "storage/aws/BucketManager.java"
+    }
+   ],
+   "repos": [
+    "snr-blob-service"
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "configuração de retentativas no serviço de e-mail",
+   "expect": [
+    {
+     "repo": "snr-email-backend",
+     "path": "config/RetryConfiguration.java"
+    }
+   ],
+   "repos": [
+    "snr-email-backend"
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "executar um método com lock distribuído",
+   "expect": [
+    {
+     "repo": "snr-cache-lock",
+     "path": "lock/LockExecutor.java"
+    },
+    {
+     "repo": "snr-cache-lock",
+     "path": "lock/LockOperator.java"
+    },
+    {
+     "repo": "snr-cache-lock",
+     "path": "lock/Lock.java"
+    }
+   ],
+   "repos": [
+    "snr-cache-lock"
+   ]
+  },
+  {
+   "tag": "ident",
+   "query": "BlockedWordsCache",
+   "expect": [
+    {
+     "repo": "snr-email-backend",
+     "path": "cache/BlockedWordsCache.java"
+    }
+   ]
+  },
+  {
+   "tag": "ident",
+   "query": "FileParserFactory",
+   "expect": [
+    {
+     "repo": "snr-blob-service",
+     "path": "fileutils/FileParserFactory.java"
+    }
+   ]
+  },
+  {
+   "tag": "ident",
+   "query": "getEnabledFeatures",
+   "expect": [
+    {
+     "repo": "snr-feature-toggle-backend",
+     "path": "handler/GetEnabledFeaturesHandler.java"
+    },
+    {
+     "repo": "snr-feature-toggle-backend",
+     "path": "cache/FeatureToggleCacheImpl.java"
+    }
+   ],
+   "repos": [
+    "snr-feature-toggle-backend"
+   ]
+  },
+  {
+   "tag": "ident",
+   "query": "LRUMemoryCache",
+   "expect": [
+    {
+     "repo": "snr-blob-service",
+     "path": "cache/LRUMemoryCache.java"
+    }
+   ]
+  },
+  {
+   "tag": "ident",
+   "query": "CacheResolverImpl",
+   "expect": [
+    {
+     "repo": "snr-cache-lock",
+     "path": "cache/CacheResolverImpl.java"
+    }
+   ]
+  },
+  {
+   "tag": "ident",
+   "query": "validateCaptcha",
+   "expect": [
+    {
+     "repo": "*",
+     "path": "CaptchaValidator.java"
+    }
+   ]
+  }
+ ]
+}

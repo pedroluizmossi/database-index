@@ -23,8 +23,9 @@ import asyncpg
 import numpy as np
 
 from code_index.domain.models import Hit
+from code_index.domain.path_glob import glob_regex
 from code_index.domain.search_text import STOPWORDS
-from code_index.infra.doc_link_store import DocLinkStore, links_sql
+from code_index.infra.doc_link_store import DocLinkStore, ignores_table, links_sql
 from code_index.infra.skip_store import SkipStore
 from code_index.settings import Settings
 
@@ -58,10 +59,6 @@ def keyword_tsquery(query: str) -> str | None:
     return " | ".join(terms) or None
 
 
-def glob_to_like(glob: str) -> str:
-    """Converte um glob de caminho ('src/**/*.py') em padrão LIKE do Postgres."""
-    escaped = glob.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
-    return escaped.replace("**", "*").replace("*", "%").replace("?", "_")
 
 
 def tsquery_or(terms: Sequence[str]) -> str | None:
@@ -104,6 +101,8 @@ def _filters(
     *,
     kind: str | None = None,
     linked_docs_sql: str | None = None,
+    exclude_repos: Sequence[str] | None = None,
+    exclude_path_glob: Sequence[str] | None = None,
 ) -> str:
     """`linked_docs_sql`: subconsulta de vínculos; com ela, o filtro de repos também traz as páginas
     de documentação ligadas a esses repos."""
@@ -122,9 +121,13 @@ def _filters(
     elif kind == "code":
         clauses.append(f"NOT {_doc_condition(p)}")
     if language:
-        clauses.append(f"language = {p(language)}")
+        clauses.append(f"language = {p(language.strip().lower())}")
     if path_glob:
-        clauses.append(f"path LIKE {p(glob_to_like(path_glob))}")
+        clauses.append(f"path ~ {p(glob_regex(path_glob))}")
+    if exclude_repos:
+        clauses.append(f"repo <> ALL({p(list(exclude_repos))})")
+    for glob in exclude_path_glob or ():
+        clauses.append(f"path !~ {p(glob_regex(glob))}")
     return " AND ".join(clauses) or "TRUE"
 
 
@@ -206,6 +209,8 @@ class ChunkStore:
         path_glob: str | None = None,
         kind: str | None = None,
         include_linked_docs: bool = True,
+        exclude_repos: Sequence[str] | None = None,
+        exclude_path_glob: Sequence[str] | None = None,
     ) -> list[Hit]:
         """Fusão RRF ponderada: score = Σ peso_fonte / (60 + posição na fonte).
 
@@ -226,7 +231,10 @@ class ChunkStore:
         p = _Params()
         k = p(per_source)
         linked = links_sql(self._settings) if (repos and include_linked_docs and caps.links) else None
-        where = _filters(p, repos, language, path_glob, kind=kind, linked_docs_sql=linked)
+        where = _filters(p, repos, language, path_glob, kind=kind, linked_docs_sql=linked,
+                         exclude_repos=exclude_repos, exclude_path_glob=exclude_path_glob)
+        # páginas de documentação ignoradas (docs ignore) não aparecem em nenhum resultado
+        where = f"({where}) AND (repo, path) NOT IN (SELECT doc_repo, doc_path FROM {ignores_table(self._settings)})"
         t = self._table
         parts: list[str] = []
         weights: list[float] = []

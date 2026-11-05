@@ -47,12 +47,21 @@ class Settings(BaseSettings):
     embed_max_inflight: int = Field(4, validation_alias="EMBED_MAX_INFLIGHT")
     rerank_model: str = Field("voyage/rerank-2.5", validation_alias="RERANK_MODEL")  # vazio desliga
     rerank_candidates: int = Field(40, validation_alias="RERANK_CANDIDATES")
+    # Variações do rerank (medidas com `code-index eval --rerank-variants`). A instrução foi a única com
+    # ganho claro (MRR 0,76 -> 0,88 em evals/queries.json com rerank-3); cabeçalho e "só código", marginais.
+    rerank_instruction: bool = Field(True, validation_alias="RERANK_INSTRUCTION")   # pede código na consulta
+    rerank_header: bool = Field(False, validation_alias="RERANK_HEADER")            # classe/declarações no trecho
+    rerank_code_only: bool = Field(False, validation_alias="RERANK_CODE_ONLY")      # docs ficam na ordem híbrida
+    # Nome exato (HmacServiceImpl, get_user) já é resolvido pelos termos; o reranker só atrapalhava
+    rerank_skip_identifiers: bool = Field(True, validation_alias="RERANK_SKIP_IDENTIFIERS")
 
     # GitHub
     github_token: str | None = Field(None, validation_alias=AliasChoices("GITHUB_TOKEN", "GH_TOKEN"))
 
     # Wiki.js (fontes [[docs]]): API key de leitura, criada em Administração → API Access
     wikijs_token: SecretStr | None = Field(None, validation_alias="WIKIJS_TOKEN")
+    # Página que cita mais repos que isto (índice, lista de times...) não liga por simples menção
+    doc_mention_max_repos: int = Field(15, validation_alias="DOC_MENTION_MAX_REPOS")
 
     # Arquivos locais (relativos a `base_dir`)
     repos_file: Path = Field(Path("repos.toml"), validation_alias="CODE_INDEX_REPOS")

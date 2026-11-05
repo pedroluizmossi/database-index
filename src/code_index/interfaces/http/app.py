@@ -9,6 +9,8 @@ Tokens só são emitidos por pessoas logadas via Google (cookie de sessão).
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import logging
 import secrets
 from collections.abc import AsyncIterator
@@ -34,6 +36,7 @@ from .security import (
     SESSION_COOKIE,
     RateLimiter,
     client_ip,
+    enforce_rate_limit,
     current_principal,
     get_service,
     require,
@@ -129,6 +132,9 @@ class SearchIn(BaseModel):
     rerank: bool = True
     kind: Literal["code", "doc"] | None = None
     include_linked_docs: bool = True
+    exclude_repos: list[str] | None = Field(None, max_length=50)
+    exclude_path_glob: list[str] | None = Field(None, max_length=50)
+    max_docs: int | None = Field(None, ge=0, le=50)
 
 
 class DocLinkIn(BaseModel):
@@ -166,8 +172,12 @@ def create_app(settings: Settings) -> FastAPI:
         return holder["svc"]
 
     mcp = build_mcp(settings, service, limiter)
+    # Sem estado: as tools são pergunta/resposta, sem notificações do servidor. Com sessão (o padrão do
+    # SDK), cada cliente mantinha um stream SSE aberto para sempre: o desligamento ficava esperando por
+    # ele, e após um restart os clientes precisavam reconectar (o id de sessão antigo deixava de existir).
     mcp_app = mcp.streamable_http_app(
-        streamable_http_path="/mcp", transport_security=transport_security(settings), host=settings.http_host
+        streamable_http_path="/mcp", transport_security=transport_security(settings), host=settings.http_host,
+        stateless_http=True, json_response=True,
     )
 
     @asynccontextmanager
@@ -283,6 +293,7 @@ def create_app(settings: Settings) -> FastAPI:
         hits = await audited(request, principal, "search", body.model_dump(exclude={"rerank"}), svc.search(
             body.query, top_k=body.top_k, repos=body.repos, language=body.language, path_glob=body.path_glob,
             mode=body.mode, rerank=body.rerank, kind=body.kind, include_linked_docs=body.include_linked_docs,
+            exclude_repos=body.exclude_repos, exclude_path_glob=body.exclude_path_glob, max_docs=body.max_docs,
         ))
         return [h.to_dict() for h in hits]
 
@@ -421,14 +432,16 @@ def create_app(settings: Settings) -> FastAPI:
     @app.post("/api/v1/sync", tags=["sync"], status_code=202,
               summary="Indexa repos (job em background; dry_run responde na hora)")
     async def sync(body: SyncIn, request: Request,
-                   principal: Principal = Depends(require(INDEX_WRITE, bucket="sync"))) -> dict[str, Any]:
+                   principal: Principal = Depends(require(INDEX_WRITE))) -> dict[str, Any]:
         svc = get_service(request)
-        if body.dry_run:
+        if body.dry_run:  # prévia: sem custo, só o balde de leitura (a interface a chama a cada mudança de lote)
             res = await audited(request, principal, "sync:dry-run", body.model_dump(), svc.sync(
                 body.repos or None, batch="default" if body.batch is None else body.batch,
                 do_discover=body.discover, dry_run=True, progress=False, allow_register=False,
             ))
             return res.to_dict()
+        # Só iniciar uma indexação (custo na Voyage) gasta o balde de sync, que é de poucas por hora.
+        enforce_rate_limit(request.app.state.limiter, settings, principal, "sync")
         try:
             job = await svc.start_sync(
                 principal, body.repos or None,
@@ -498,3 +511,21 @@ def create_app(settings: Settings) -> FastAPI:
     # MCP (Streamable HTTP) em /mcp e metadados OAuth em /.well-known/*: rotas não casadas acima.
     app.mount("/", mcp_app)
     return app
+
+
+if TYPE_CHECKING:
+    import uvicorn
+
+SHUTDOWN_TIMEOUT_S = 5  # desligamento gracioso: conexões abertas além disto são encerradas
+
+
+def server_config(app: FastAPI, host: str, port: int, *, forwarded_allow_ips: str | None = None,
+                  log_level: str = "info") -> "uvicorn.Config":
+    """Configuração do uvicorn usada pela CLI (e pelos testes): o mesmo comportamento de desligamento."""
+    import uvicorn
+
+    return uvicorn.Config(
+        app, host=host, port=port, log_level=log_level, proxy_headers=True,
+        forwarded_allow_ips=forwarded_allow_ips, server_header=False,
+        timeout_graceful_shutdown=SHUTDOWN_TIMEOUT_S,
+    )

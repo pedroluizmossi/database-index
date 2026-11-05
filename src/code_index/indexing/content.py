@@ -14,6 +14,7 @@ import pathlib
 import re
 
 import cocoindex as coco
+from cocoindex.ops.text import detect_code_language
 
 # Qualquer edição deste arquivo muda o hash e invalida o memo do process_file
 # (e dos index_repo acima), forçando reaplicar as regras aos repos já indexados.
@@ -23,7 +24,9 @@ CONTENT_LOGIC = coco.LogicDep(hashlib.sha256(pathlib.Path(__file__).read_bytes()
 MASK = "***"
 
 # Linguagens de config: `chave: valor` sem aspas é comum e o valor costuma ser literal.
-_CONFIG_LANGS = {"yaml", "json", "xml", "toml", "ini", "properties", "dotenv", "bash", "shell", "sh", "hcl", ""}
+_CONFIG_LANGS = {"yaml", "json", "xml", "toml", "ini", "properties", "dotenv", "bash", "shell", "sh", "hcl", "sdl", "pdl", ""}
+# Extensões que o detector do CocoIndex não conhece, mas que têm regras próprias aqui e em context.py.
+_EXTRA_LANGS = {"sdl": "sdl", "pdl": "pdl"}
 _DATA_LANGS = {"yaml", "json", "xml"}
 MAX_DATA_FILE_BYTES = 100 * 1024
 
@@ -42,6 +45,10 @@ _TOKENS = [
 ]
 # usuário:senha@host em URLs
 _URL_CREDS = re.compile(r"(\b[a-z][a-z0-9+.-]*://[^/\s:@'\"]+:)([^/\s@'\"]+)(@)", re.I)
+# .npmrc / .yarnrc: //registry.host/caminho/:_authToken=valor (também _auth e _password)
+# Em qualquer ponto da linha: aparece também citado em docs ("Valor atual: ...:_authToken=...").
+_NPMRC_AUTH = re.compile(r"(?i)(?<!\w)(:?_(?:authToken|auth|password)[ \t]*[=:][ \t]*[\"']?)([^\s\"';,)]+)")
+_NPM_TOKEN = re.compile(r"\bnpm_[A-Za-z0-9]{36}\b")
 # Password=...; em connection strings (qualquer linguagem)
 _CONN_STR = re.compile(r"(?i)\b(AccountKey|SharedAccessKey|Password|Pwd)=([^;\"'\s]{4,})")
 
@@ -53,8 +60,13 @@ _CONFIG_ASSIGN = re.compile(
     rf"(?im)^([ \t]*[\"']?{_KEY}[\"']?[ \t]*[:=][ \t]*)([\"']?)([^\s\"'#,}}]{{6,}})\2(?=[ \t]*(?:[,}}\]#]|$))")
 
 
+_UUID = re.compile(r"(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+
 def _is_placeholder(value: str) -> bool:
     v = value.strip()
+    if _UUID.fullmatch(v):  # client_secret/apiKey em UUID: segredo (a regra de chave i18n abaixo o aceitaria)
+        return False
     return (v.startswith(("${", "{{", "%(", "#{", "<", "$")) or v.lower() in {"changeme", "password", "secret", "null", "none", "true", "false"}
             or v.isupper() and "_" in v  # nomes de variável, ex.: DB_PASSWORD
             # identificador (exige forma de identificador; palavra solta como "mysecretpassword" É mascarada)
@@ -80,6 +92,17 @@ def redact(text: str, language: str) -> tuple[str, int]:
     for pat in _TOKENS:
         text = sub(pat, MASK, text)
     text = sub(_URL_CREDS, rf"\1{MASK}\3", text)
+    text = sub(_NPM_TOKEN, MASK, text)
+
+    def npmrc(m: re.Match) -> str:
+        nonlocal count
+        # variável de ambiente ou nome sem dígitos (password, None, true): não é segredo
+        if m.group(2).startswith("$") or re.fullmatch(r"[A-Za-z_]+", m.group(2)):
+            return m.group(0)
+        count += 1
+        return m.group(1) + MASK
+
+    text = _NPMRC_AUTH.sub(npmrc, text)
     def conn(m: re.Match) -> str:
         nonlocal count
         if _is_placeholder(m.group(2)):
@@ -122,9 +145,34 @@ def looks_binary(text: str) -> bool:
     return bad / len(sample) > _BINARY_MAX_RATIO
 
 
+_MINIFIED_MIN_BYTES = 2000
+_MINIFIED_AVG_LINE = 400
+_MINIFIED_LONGEST = 2000
+
+
+def looks_minified(text: str) -> bool:
+    """Gerado/minificado: linhas enormes (JSON numa linha só, bundle .js sem quebras).
+
+    Esses arquivos viravam dezenas de trechos com a mesma linha gigante (os trechos são
+    expandidos para linhas inteiras) e só fazem ruído na busca."""
+    if len(text) < _MINIFIED_MIN_BYTES:
+        return False
+    lines = text.split("\n")
+    longest = max(len(line) for line in lines)
+    return longest >= _MINIFIED_LONGEST and len(text) / len(lines) >= _MINIFIED_AVG_LINE
+
+
+def file_language(filename: str) -> str:
+    """Linguagem pelo nome do arquivo ("" se desconhecida). Mesma regra na indexação, na leitura e no grep."""
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    return detect_code_language(filename=filename) or _EXTRA_LANGS.get(ext, "")
+
+
 def skip_reason(path: str, language: str, text: str) -> str | None:
     if looks_binary(text):
         return "binário"
+    if looks_minified(text):
+        return "minificado"
     if language in _DATA_LANGS:
         if len(text.encode()) > MAX_DATA_FILE_BYTES:
             return "arquivo de dados grande"

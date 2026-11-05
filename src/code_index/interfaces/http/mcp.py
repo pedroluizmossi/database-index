@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable
 from typing import Any
@@ -24,9 +25,22 @@ from mcp.server.transport_security import TransportSecuritySettings
 from ...domain.auth import SEARCH_READ, Principal
 from ...services import CodeIndexService
 from ...settings import Settings
+from .mcp_guide import GUIDE, INSTRUCTIONS, investigation_prompt
 from .security import RateLimiter, enforce_rate_limit, origin_of
 
 ServiceGetter = Callable[[], CodeIndexService]
+log = logging.getLogger(__name__)
+
+MCP_CODE_MAX_CHARS = 4000  # trecho maior (ex.: JSON minificado) é cortado; o resto sai via read_file_lines
+
+
+def _compact_hit(hit: dict) -> dict:
+    """Resultado de busca enxuto para o contexto do agent: sem campos vazios e sem trechos gigantes."""
+    out = {k: v for k, v in hit.items() if v not in (None, [], "")}
+    code = out.get("code", "")
+    if len(code) > MCP_CODE_MAX_CHARS:
+        out["code"] = code[:MCP_CODE_MAX_CHARS] + f"\n… (trecho cortado: {len(code)} caracteres; leia com read_file_lines)"
+    return out
 
 
 class ServiceTokenVerifier:
@@ -78,13 +92,7 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
     base = settings.public_url.rstrip("/")
     server: MCPServer[Any] = MCPServer(
         name="code-index",
-        instructions=(
-            "Índice de código de vários repositórios. Escolha a tool pelo tipo de pergunta: "
-            "search_code para buscar por significado ('onde validamos o token'); find_symbol quando "
-            "já sabe o nome de uma classe/função/método ('onde está HmacService'); grep_code para texto "
-            "exato ou regex (mensagens de erro, chaves de configuração); read_file_lines para ler o "
-            "contexto completo de um resultado; list_repos para ver o que está indexado."
-        ),
+        instructions=INSTRUCTIONS,
         token_verifier=ServiceTokenVerifier(get_service),
         auth=AuthSettings(
             issuer_url=base,  # type: ignore[arg-type]
@@ -111,6 +119,12 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
         except (ValueError, RuntimeError, PermissionError) as e:
             await svc.audit(principal, f"mcp:{name}", params=params, status=400)
             raise ToolError(str(e)) from None
+        except ToolError:
+            raise
+        except Exception:
+            log.exception("tool MCP %s falhou", name)
+            await svc.audit(principal, f"mcp:{name}", params=params, status=500)
+            raise ToolError("erro interno ao executar a tool; tente de novo mais tarde") from None
         params = {**params, "ms": int((time.monotonic() - started) * 1000)}
         await svc.audit(principal, f"mcp:{name}", params=params, status=200)
         return result
@@ -126,6 +140,9 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
         rerank: bool = True,
         kind: str | None = None,
         include_linked_docs: bool = True,
+        exclude_repos: list[str] | None = None,
+        exclude_path_glob: list[str] | None = None,
+        max_docs: int | None = None,
     ) -> list[dict]:
         """Busca trechos de código e de documentação (README, docs/ e páginas de wiki).
 
@@ -139,25 +156,37 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
             rerank: reordena os candidatos com o reranker da Voyage (padrão: sim).
             kind: "code" (só código), "doc" (só documentação) ou vazio (ambos).
             include_linked_docs: com `repos`, inclui as páginas de wiki ligadas a esses repos (padrão: sim).
+            exclude_repos: repos que NÃO podem aparecer no resultado (nomes de list_repos).
+            exclude_path_glob: globs de caminho que NÃO podem aparecer, ex.: ["**/old/**", "**/*.generated.*"].
+            max_docs: máximo de páginas de documentação quando kind é vazio (padrão: top_k/4, mín. 2).
 
         Resultados de documentação externa trazem `url` (página original), `title` e `linked_repos`.
+        Trechos vizinhos do mesmo arquivo vêm fundidos (no máximo 2 por arquivo); trechos muito
+        longos vêm cortados (leia o resto com read_file_lines). Trecho idêntico em vários repos
+        (boilerplate) aparece uma vez, com os outros repos em `also_in`.
         """
         top_k = max(1, min(top_k, 50))
 
         async def fn(svc: CodeIndexService) -> list[dict]:
             hits = await svc.search(query, top_k=top_k, repos=repos, language=language,
                                     path_glob=path_glob, mode=mode, rerank=rerank, kind=kind,
-                                    include_linked_docs=include_linked_docs)
-            return [h.to_dict() for h in hits]
+                                    include_linked_docs=include_linked_docs, exclude_repos=exclude_repos,
+                                    exclude_path_glob=exclude_path_glob, max_docs=max_docs)
+            return [_compact_hit(h.to_dict()) for h in hits]
 
         return await run_tool("search_code", {"query": query, "top_k": top_k, "repos": repos, "language": language,
                                               "path_glob": path_glob, "mode": mode, "kind": kind,
-                                              "include_linked_docs": include_linked_docs}, "search", None, fn)
+                                              "include_linked_docs": include_linked_docs,
+                                              "exclude_repos": exclude_repos,
+                                              "exclude_path_glob": exclude_path_glob, "max_docs": max_docs},
+                               "search", None, fn)
 
     @server.tool()
     async def read_file_lines(repo: str, path: str, start_line: int | None = None, end_line: int | None = None) -> str:
         """Lê um arquivo (ou intervalo de linhas) de um repositório indexado, com números de linha.
 
+        `repo` aceita o nome como em list_repos ('org__repo') ou só 'repo'. Sem intervalo, devolve
+        até 2000 linhas e diz como continuar. Arquivos ocultos (.env, .git/...) não são lidos.
         Segredos (senhas, tokens, chaves) aparecem mascarados como ***.
         """
         return await run_tool(
@@ -193,7 +222,8 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
         Use quando já sabe o nome (ou parte dele). Mais preciso que search_code para "onde está X".
 
         Args:
-            name: nome ou parte dele ("HmacService"), ou qualificado ("WebhookService.retry").
+            name: nome ou parte dele ("HmacService"), qualificado ("WebhookService.retry"; se a classe
+                não casar, procura só o método) ou "Classe.*" para listar os membros da classe.
             kind: "container" (classe/interface/enum), "member" (método/função) ou "section"
                 (recurso Terraform, seção de Markdown, objeto do Kubernetes...).
             repos: limita a estes repositórios.
@@ -238,5 +268,23 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
 
         return await run_tool("grep_code", {"pattern": pattern, "repos": repos, "path_glob": path_glob, "regex": regex},
                               "search", None, fn)
+
+    # ------------------------------------------------------------------ guia de uso
+    # Texto fixo (sem dados do índice): não passa por run_tool. A autenticação do transporte já vale.
+
+    @server.prompt(name="guia_de_uso", title="Guia de uso do code-index",
+                   description="Como escolher e combinar as tools do code-index sem desperdício.")
+    def guia_de_uso() -> str:
+        return GUIDE
+
+    @server.prompt(name="investigar", title="Investigar com o code-index",
+                   description="Responde uma pergunta sobre o código seguindo o guia de uso.")
+    def investigar(pergunta: str) -> str:
+        return investigation_prompt(pergunta)
+
+    @server.resource("code-index://guia", name="guia", title="Guia de uso do code-index",
+                     description="Como escolher e combinar as tools do code-index.", mime_type="text/markdown")
+    def guia() -> str:
+        return GUIDE
 
     return server

@@ -216,6 +216,7 @@ class Hit:
     url: str | None = None                  # página original (documentação externa)
     title: str | None = None
     linked_repos: list[str] = field(default_factory=list)  # repos ligados à página
+    also_in: list[str] = field(default_factory=list)       # outros repos com este mesmo trecho (boilerplate)
 
     def to_dict(self) -> dict:
         return asdict(self)

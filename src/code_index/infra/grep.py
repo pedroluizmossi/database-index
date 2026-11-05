@@ -14,7 +14,6 @@ O regex do ripgrep (Rust) não tem backtracking exponencial.
 from __future__ import annotations
 
 import asyncio
-import fnmatch
 import json
 import shutil
 from collections.abc import Callable
@@ -22,6 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..domain.models import GrepMatch
+from ..domain.path_glob import glob_matcher
 
 LineMask = Callable[[str, str], str]  # (caminho relativo, linha) -> linha mascarada
 
@@ -42,13 +42,6 @@ class GrepTarget:
 class GrepResult:
     matches: list[GrepMatch]
     truncated: bool          # parou no limite de resultados ou de tempo
-
-
-def _path_filter(glob: str | None):  # type: ignore[no-untyped-def]
-    if not glob:
-        return lambda _p: True
-    pattern = glob.replace("**/", "*")  # no fnmatch, * já atravessa diretórios
-    return lambda p: fnmatch.fnmatch(p, pattern)
 
 
 class Grep:
@@ -76,7 +69,7 @@ class Grep:
         if not pattern or len(pattern) > MAX_PATTERN:
             raise ValueError(f"padrão vazio ou maior que {MAX_PATTERN} caracteres")
         max_results = max(1, min(max_results, 500))
-        keep = _path_filter(path_glob)
+        keep = glob_matcher(path_glob)
 
         # Repos com os mesmos filtros de arquivo vão numa só execução do rg.
         groups: dict[tuple[tuple[str, ...], tuple[str, ...]], list[GrepTarget]] = {}

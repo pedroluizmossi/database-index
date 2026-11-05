@@ -1,15 +1,18 @@
-import { useCallback, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
   CircleCheck,
+  X,
   Clock,
   Database,
   GitBranch,
   Layers,
   Search,
   ServerCrash,
+  ChevronLeft,
+  ChevronRight,
   Play,
   Plus,
   RefreshCw,
@@ -29,7 +32,7 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { SyncDialog } from "../components/SyncDialog";
 import { JobDialog, JobsPanel, RunningJobBanner, useJobs } from "../components/JobsPanel";
 import { formatDateTime, repoShortName, timeAgo, cx } from "../lib/utils";
-import { Alert, Badge, Button, EmptyState, Field, IconButton, Panel, Segmented, Skeleton, inputClass } from "../components/ui";
+import { Alert, Badge, Button, EmptyState, Field, IconButton, Panel, Segmented, Select, Skeleton, inputClass } from "../components/ui";
 
 type StatusFilter = "all" | RepoStatusValue;
 type SortKey = "name" | "status" | "language" | "files" | "chunks" | "indexed_at";
@@ -52,6 +55,8 @@ export function ReposPage() {
   const { session } = useAuth();
   const { push } = useToast();
   const [syncOpen, setSyncOpen] = useState<{ names: string[] | null } | null>(null);
+  // Seleção múltipla para indexar vários repos de uma vez (persiste entre páginas).
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [addOpen, setAddOpen] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<Repo | null>(null);
   const writable = canWrite(session);
@@ -102,6 +107,9 @@ export function ReposPage() {
   const [status, setStatus] = useState<StatusFilter>("all");
   const [term, setTerm] = useState("");
   const [sort, setSort] = useState<Sort>({ key: "name", dir: 1 });
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState<PageSize>(25);
+  const listTop = useRef<HTMLDivElement>(null);
 
   const counts = useMemo(() => {
     const byStatus: Record<RepoStatusValue, number> = { indexed: 0, pending: 0, error: 0, ignored: 0 };
@@ -122,6 +130,58 @@ export function ReposPage() {
       .filter((r) => !needle || r.name.toLowerCase().includes(needle) || (r.language ?? "").toLowerCase().includes(needle))
       .sort((a, b) => compare(a, b, sort.key) * sort.dir);
   }, [repos, status, term, sort]);
+
+  // Paginação: filtro, busca, ordenação ou tamanho da página voltam para a primeira página.
+  useEffect(() => setPage(0), [status, term, sort, pageSize]);
+  const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
+  const current = Math.min(page, pageCount - 1);
+  const visible = rows.slice(current * pageSize, (current + 1) * pageSize);
+
+  const isSelectable = (r: Repo) => canIndex && r.status !== "ignored";
+  const selectableOnPage = visible.filter(isSelectable);
+  const pageAllSelected = selectableOnPage.length > 0 && selectableOnPage.every((r) => selected.has(r.name));
+  const pageSomeSelected = selectableOnPage.some((r) => selected.has(r.name));
+  const selection: Selection | null = canIndex
+    ? {
+        isSelected: (r) => selected.has(r.name),
+        canSelect: isSelectable,
+        toggle: (r) =>
+          setSelected((cur) => {
+            const next = new Set(cur);
+            if (next.has(r.name)) next.delete(r.name);
+            else next.add(r.name);
+            return next;
+          }),
+      }
+    : null;
+
+  function togglePage() {
+    setSelected((cur) => {
+      const next = new Set(cur);
+      for (const r of selectableOnPage) {
+        if (pageAllSelected) next.delete(r.name);
+        else next.add(r.name);
+      }
+      return next;
+    });
+  }
+
+  // Repos que saíram da lista (removidos/ignorados) saem da seleção.
+  useEffect(() => {
+    if (!repos) return;
+    const valid = new Set(repos.filter((r) => r.status !== "ignored").map((r) => r.name));
+    setSelected((cur) => {
+      const next = new Set([...cur].filter((n) => valid.has(n)));
+      return next.size === cur.size ? cur : next;
+    });
+  }, [repos]);
+
+  const cols = 7 + (rowActions ? 1 : 0) + (selection ? 1 : 0);
+
+  function goTo(next: number) {
+    setPage(Math.min(Math.max(0, next), pageCount - 1));
+    listTop.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+  }
 
   function toggleSort(key: SortKey) {
     setSort((current) =>
@@ -187,6 +247,7 @@ export function ReposPage() {
         </section>
       )}
 
+      <div ref={listTop} className="scroll-mt-20" />
       <Panel className="overflow-hidden">
         <div className="flex flex-col gap-3 border-b border-zinc-200 p-4 sm:flex-row sm:items-center sm:justify-between dark:border-zinc-800">
           <Segmented label="Filtrar por status" value={status} onChange={setStatus} options={statusOptions} />
@@ -206,6 +267,17 @@ export function ReposPage() {
           <table className="w-full text-sm">
             <thead className="bg-zinc-50/80 text-left text-xs tracking-wide text-zinc-500 uppercase dark:bg-zinc-900 dark:text-zinc-400">
               <tr>
+                {selection && (
+                  <th className="w-10 py-3 pl-4">
+                    <Checkbox
+                      label="Selecionar todos desta página"
+                      checked={pageAllSelected}
+                      indeterminate={!pageAllSelected && pageSomeSelected}
+                      disabled={selectableOnPage.length === 0}
+                      onChange={togglePage}
+                    />
+                  </th>
+                )}
                 <SortHeader label="Repositório" sortKey="name" sort={sort} onSort={toggleSort} />
                 <SortHeader label="Status" sortKey="status" sort={sort} onSort={toggleSort} />
                 <SortHeader label="Linguagem" sortKey="language" sort={sort} onSort={toggleSort} className="hidden lg:table-cell" />
@@ -217,10 +289,10 @@ export function ReposPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-              {repos === null && loading && <SkeletonRows cols={rowActions ? 8 : 7} />}
+              {repos === null && loading && <SkeletonRows cols={cols} />}
               {repos === null && !loading && (
                 <tr>
-                  <td colSpan={rowActions ? 8 : 7}>
+                  <td colSpan={cols}>
                     <EmptyState
                       icon={ServerCrash}
                       title="Não consegui carregar os repositórios"
@@ -235,13 +307,13 @@ export function ReposPage() {
               )}
               {repos !== null && rows.length === 0 && (
                 <tr>
-                  <td colSpan={rowActions ? 8 : 7}>
+                  <td colSpan={cols}>
                     <EmptyState icon={Database} title="Nenhum repositório com esse filtro" />
                   </td>
                 </tr>
               )}
-              {rows.map((r) => (
-                <RepoRow key={r.name} repo={r} actions={rowActions} />
+              {visible.map((r) => (
+                <RepoRow key={r.name} repo={r} actions={rowActions} selection={selection} />
               ))}
             </tbody>
           </table>
@@ -258,27 +330,58 @@ export function ReposPage() {
               <EmptyState icon={Database} title="Nenhum repositório com esse filtro" />
             </li>
           )}
-          {rows.map((r) => (
-            <RepoCard key={r.name} repo={r} actions={rowActions} />
+          {visible.map((r) => (
+            <RepoCard key={r.name} repo={r} actions={rowActions} selection={selection} />
           ))}
         </ul>
 
-        {repos !== null && (
-          <p className="border-t border-zinc-200 px-4 py-2.5 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
-            Mostrando {rows.length} de {counts.total}
-          </p>
+        {repos !== null && rows.length > 0 && (
+          <Pagination
+            page={current}
+            pageCount={pageCount}
+            pageSize={pageSize}
+            total={rows.length}
+            unfiltered={counts.total}
+            onPage={goTo}
+            onPageSize={setPageSize}
+          />
         )}
       </Panel>
 
       {canSeeJobs && <JobsPanel state={jobs} onOpen={setJobDetail} />}
 
       <JobDialog job={jobDetail} onClose={() => setJobDetail(null)} />
+      {selection && selected.size > 0 && (
+        <div className="pointer-events-none fixed inset-x-0 bottom-4 z-40 flex justify-center px-4">
+          <div className="pointer-events-auto flex flex-wrap items-center gap-3 rounded-2xl border border-zinc-200 bg-white/95 px-4 py-3 shadow-xl shadow-zinc-900/10 backdrop-blur dark:border-zinc-700 dark:bg-zinc-900/95">
+            <p className="text-sm">
+              <span className="font-semibold tabular-nums">{selected.size}</span> repo(s) selecionado(s)
+            </p>
+            <Button
+              size="sm"
+              onClick={() => setSyncOpen({ names: [...selected].sort() })}
+              disabled={jobs.running !== null}
+              title={jobs.running ? "Já existe uma indexação em andamento" : undefined}
+            >
+              <Play className="size-3.5" aria-hidden="true" />
+              Indexar selecionados
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>
+              <X className="size-3.5" aria-hidden="true" />
+              Limpar
+            </Button>
+          </div>
+        </div>
+      )}
       <SyncDialog
         open={syncOpen !== null}
         onClose={() => setSyncOpen(null)}
         names={syncOpen?.names ?? null}
         onFinished={onFinished}
-        onStarted={() => void jobs.refresh()}
+        onStarted={() => {
+          setSelected(new Set());
+          void jobs.refresh();
+        }}
       />
       <AddRepoDialog open={addOpen} onClose={() => setAddOpen(false)} onDone={() => void reload()} />
       <ConfirmDialog
@@ -375,6 +478,67 @@ function AddRepoDialog({ open, onClose, onDone }: { open: boolean; onClose: () =
         {error && <Alert>{error}</Alert>}
       </form>
     </Dialog>
+  );
+}
+
+const PAGE_SIZES = [25, 50, 100] as const;
+type PageSize = (typeof PAGE_SIZES)[number];
+
+function Pagination({
+  page,
+  pageCount,
+  pageSize,
+  total,
+  unfiltered,
+  onPage,
+  onPageSize,
+}: {
+  page: number;
+  pageCount: number;
+  pageSize: PageSize;
+  total: number;
+  unfiltered: number;
+  onPage: (page: number) => void;
+  onPageSize: (size: PageSize) => void;
+}) {
+  const first = page * pageSize + 1;
+  const last = Math.min(total, (page + 1) * pageSize);
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-zinc-200 px-4 py-3 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+      <p>
+        {numberFormat.format(first)}–{numberFormat.format(last)} de {numberFormat.format(total)}
+        {total !== unfiltered && <> (filtrados de {numberFormat.format(unfiltered)})</>}
+      </p>
+      <div className="flex items-center gap-3">
+        <label className="flex items-center gap-2">
+          <span className="hidden sm:inline">Por página</span>
+          <div className="w-20">
+            <Select value={String(pageSize)} onChange={(v) => onPageSize(Number(v) as PageSize)}>
+              {PAGE_SIZES.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </Select>
+          </div>
+        </label>
+        <nav aria-label="Paginação" className="flex items-center gap-1">
+          <IconButton label="Página anterior" onClick={() => onPage(page - 1)} className={page === 0 ? "pointer-events-none opacity-40" : undefined}>
+            <ChevronLeft className="size-4" />
+          </IconButton>
+          <span className="min-w-20 text-center tabular-nums" aria-live="polite">
+            Página {page + 1} de {pageCount}
+          </span>
+          <IconButton
+            label="Próxima página"
+            onClick={() => onPage(page + 1)}
+            className={page >= pageCount - 1 ? "pointer-events-none opacity-40" : undefined}
+          >
+            <ChevronRight className="size-4" />
+          </IconButton>
+        </nav>
+      </div>
+    </div>
   );
 }
 
@@ -500,9 +664,60 @@ interface RowActions {
   onUnignore: (r: Repo) => void;
 }
 
-function RepoRow({ repo: r, actions }: { repo: Repo; actions: RowActions | null }) {
+interface Selection {
+  isSelected: (r: Repo) => boolean;
+  canSelect: (r: Repo) => boolean;
+  toggle: (r: Repo) => void;
+}
+
+function Checkbox({
+  label,
+  checked,
+  indeterminate = false,
+  disabled = false,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  indeterminate?: boolean;
+  disabled?: boolean;
+  onChange: () => void;
+}) {
   return (
-    <tr className="transition hover:bg-zinc-50/80 dark:hover:bg-white/[0.02]">
+    <input
+      type="checkbox"
+      aria-label={label}
+      title={label}
+      checked={checked}
+      disabled={disabled}
+      ref={(el) => {
+        if (el) el.indeterminate = indeterminate;
+      }}
+      onChange={onChange}
+      className="size-4 cursor-pointer accent-indigo-600 disabled:cursor-not-allowed disabled:opacity-30"
+    />
+  );
+}
+
+function RepoRow({ repo: r, actions, selection }: { repo: Repo; actions: RowActions | null; selection: Selection | null }) {
+  const checked = selection?.isSelected(r) ?? false;
+  return (
+    <tr
+      className={cx(
+        "transition hover:bg-zinc-50/80 dark:hover:bg-white/[0.02]",
+        checked && "bg-indigo-50/60 dark:bg-indigo-500/10",
+      )}
+    >
+      {selection && (
+        <td className="w-10 py-3 pl-4">
+          <Checkbox
+            label={`Selecionar ${r.name}`}
+            checked={checked}
+            disabled={!selection.canSelect(r)}
+            onChange={() => selection.toggle(r)}
+          />
+        </td>
+      )}
       <td className="max-w-[18rem] px-4 py-3">
         <div className="flex items-center gap-3">
           <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-zinc-900/5 text-zinc-500 dark:bg-white/5 dark:text-zinc-400">
@@ -548,11 +763,22 @@ function RepoRow({ repo: r, actions }: { repo: Repo; actions: RowActions | null 
 }
 
 /** Cartão para telas pequenas: mostra o essencial e as ações com texto. */
-function RepoCard({ repo: r, actions }: { repo: Repo; actions: RowActions | null }) {
+function RepoCard({ repo: r, actions, selection }: { repo: Repo; actions: RowActions | null; selection: Selection | null }) {
+  const checked = selection?.isSelected(r) ?? false;
   return (
-    <li className="space-y-3 p-4">
+    <li className={cx("space-y-3 p-4", checked && "bg-indigo-50/60 dark:bg-indigo-500/10")}>
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
+        {selection && (
+          <div className="pt-1">
+            <Checkbox
+              label={`Selecionar ${r.name}`}
+              checked={checked}
+              disabled={!selection.canSelect(r)}
+              onChange={() => selection.toggle(r)}
+            />
+          </div>
+        )}
+        <div className="min-w-0 flex-1">
           <p className="truncate font-medium" title={r.name}>
             {repoShortName(r.name, r.org)}
           </p>

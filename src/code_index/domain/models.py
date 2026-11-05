@@ -147,6 +147,7 @@ class RepoStatus:
     files: int
     chunks: int
     error: str | None
+    size_kb: int | None = None   # tamanho do repositório no GitHub (inclui histórico)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -175,6 +176,36 @@ class SyncResult:
     errors: dict[str, str] = field(default_factory=dict)
     discovered: dict[str, dict] = field(default_factory=dict)      # org -> {new, removed, total}
     remaining: int = 0                                              # candidatos para os próximos lotes
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class SymbolHit:
+    """Declaração encontrada por find_symbol."""
+
+    repo: str
+    path: str
+    line: int
+    name: str
+    kind: str          # container | member | section
+    container: str
+    signature: str
+    language: str
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class GrepMatch:
+    """Linha encontrada pelo grep (texto com segredos mascarados)."""
+
+    repo: str
+    path: str
+    line: int
+    text: str
 
     def to_dict(self) -> dict:
         return asdict(self)

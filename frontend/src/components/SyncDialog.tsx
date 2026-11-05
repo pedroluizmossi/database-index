@@ -1,11 +1,13 @@
-import { useEffect, useState } from "react";
-import { CircleCheck, CircleX, LoaderCircle } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { CircleCheck, CircleX, Info, LoaderCircle } from "lucide-react";
 import { api } from "../api/endpoints";
 import { describeError } from "../api/client";
-import type { SyncJob, SyncResult } from "../api/types";
+import type { Repo, SyncJob, SyncResult } from "../api/types";
+import { useIndex } from "../data/IndexProvider";
+import { formatDateTime, repoShortName, timeAgo } from "../lib/utils";
 import { useToast } from "./Toaster";
 import { Dialog } from "./Dialog";
-import { Alert, Button, Field, inputClass } from "./ui";
+import { Alert, Badge, Button, Field, Skeleton, inputClass } from "./ui";
 
 interface SyncDialogProps {
   open: boolean;
@@ -20,13 +22,32 @@ interface SyncDialogProps {
 
 const POLL_MS = 2000;
 const MAX_BATCH = 50;
+const numberFormat = new Intl.NumberFormat("pt-BR");
+
+function formatSize(kb: number | null | undefined): string {
+  if (!kb) return "—";
+  if (kb < 1024) return `${numberFormat.format(kb)} KB`;
+  return `${(kb / 1024).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} MB`;
+}
+
+/** O que acontece com cada repo ao indexar. */
+function plan(repo: Repo | undefined): { label: string; tone: "accent" | "neutral" | "warning"; hint: string } {
+  if (!repo || repo.chunks === 0) {
+    return { label: "1ª indexação", tone: "accent", hint: "todo o código (após os filtros) vai para a Voyage" };
+  }
+  if (repo.outdated) {
+    return { label: "Atualizar", tone: "warning", hint: "houve push: só arquivos alterados vão para a Voyage" };
+  }
+  return { label: "Revarrer", tone: "neutral", hint: "sem push novo: quase nada (ou nada) vai para a Voyage" };
+}
 
 /**
- * Indexação em duas etapas: prévia sem custo (dry-run), depois confirmação.
- * Só então o job roda em segundo plano, e o diálogo acompanha até o fim.
+ * Indexação em duas etapas: prévia sem custo (dry-run) com os detalhes de cada repo,
+ * depois confirmação. Só então o job roda em segundo plano, e o diálogo acompanha até o fim.
  */
 export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished, onStarted }: SyncDialogProps) {
   const { push } = useToast();
+  const { repos } = useIndex();
   const [batch, setBatch] = useState(defaultBatch);
   const [preview, setPreview] = useState<SyncResult | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
@@ -34,6 +55,7 @@ export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished,
   const [starting, setStarting] = useState(false);
   const [job, setJob] = useState<SyncJob | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
+  const namesKey = names?.join("|") ?? "";
 
   // Ao abrir (ou mudar o tamanho do lote), refaz a prévia.
   useEffect(() => {
@@ -52,9 +74,9 @@ export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished,
     return () => {
       active = false;
     };
-    // names é uma lista nova a cada render; comparamos pelo conteúdo.
+    // `names` é uma lista nova a cada render: a dependência é o conteúdo (namesKey).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, batch, names?.join("|")]);
+  }, [open, batch, namesKey]);
 
   // Acompanha o job até terminar.
   useEffect(() => {
@@ -66,16 +88,20 @@ export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished,
           setJob(next);
           if (next.status !== "running") {
             onFinished();
+            const failedRepos = next.result ? Object.keys(next.result.errors).length : 0;
             push({
-              tone: next.status === "done" ? "success" : "error",
-              title: next.status === "done" ? "Indexação concluída" : "Indexação falhou",
+              tone: next.status === "done" && failedRepos === 0 ? "success" : "error",
+              title:
+                next.status === "failed"
+                  ? "Indexação falhou"
+                  : failedRepos > 0
+                    ? `Indexação concluída com ${failedRepos} erro(s)`
+                    : "Indexação concluída",
               description: next.error ?? undefined,
             });
           }
         })
-        .catch((err: unknown) => {
-          setJob({ ...job, status: "failed", error: describeError(err) });
-        });
+        .catch((err: unknown) => setJob({ ...job, status: "failed", error: describeError(err) }));
     }, POLL_MS);
     return () => window.clearTimeout(timer);
   }, [job, onFinished, push]);
@@ -102,16 +128,26 @@ export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished,
     }
   }
 
+  const byName = useMemo(() => new Map((repos ?? []).map((r) => [r.name, r])), [repos]);
   const selected = preview?.selected ?? [];
+  const details = selected.map((name) => ({ name, repo: byName.get(name) }));
+  const firstTime = details.filter((d) => plan(d.repo).tone === "accent").length;
+  const totalKb = details.reduce((sum, d) => sum + (d.repo?.size_kb ?? 0), 0);
+  const languages = [...new Set(details.map((d) => d.repo?.language).filter(Boolean))] as string[];
+
   const finished = job !== null && job.status !== "running";
-  const title = names ? `Indexar ${names.length === 1 ? names[0] : `${names.length} repositórios`}` : "Indexar lote";
+  const title = names
+    ? names.length === 1
+      ? `Indexar ${names[0]}`
+      : `Indexar ${names.length} repositórios`
+    : "Indexar lote automático";
 
   return (
     <Dialog
       open={open}
       onClose={onClose}
       title={title}
-      description="Indexar gera custo de embedding na Voyage para os trechos novos. Confira antes."
+      description="Confira o que vai ser processado. A prévia não gera custo; a indexação gera custo de embedding na Voyage."
       size="lg"
       footer={
         finished ? (
@@ -147,20 +183,74 @@ export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished,
       )}
 
       {previewError && <Alert>{previewError}</Alert>}
-      {loadingPreview && <p className="flex items-center gap-2 text-sm"><LoaderCircle className="size-4 animate-spin" /> Calculando a prévia…</p>}
+
+      {loadingPreview && (
+        <div className="space-y-3">
+          <p className="flex items-center gap-2 text-sm text-zinc-500 dark:text-zinc-400">
+            <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
+            {names ? "Calculando a prévia…" : "Consultando o GitHub para montar o lote (alguns segundos)…"}
+          </p>
+          <Skeleton className="h-16 w-full" />
+        </div>
+      )}
 
       {preview && !job && (
-        <div className="space-y-3">
-          <p className="text-sm">
-            <strong>{selected.length}</strong> repo(s) seriam processados
-            {preview.remaining > 0 && <> · <span className="text-zinc-500">{preview.remaining} ficam para depois</span></>}.
-          </p>
-          {selected.length > 0 && (
-            <ul className="max-h-60 divide-y divide-zinc-100 overflow-y-auto rounded-xl border border-zinc-200 font-mono text-xs dark:divide-zinc-800 dark:border-zinc-800">
-              {selected.map((n) => (
-                <li key={n} className="px-3 py-2">{n}</li>
-              ))}
-            </ul>
+        <div className="space-y-4">
+          {selected.length === 0 ? (
+            <p className="text-sm text-zinc-600 dark:text-zinc-300">Nada a indexar: não há repos pendentes ou alterados.</p>
+          ) : (
+            <>
+              <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <Stat label="Repositórios" value={numberFormat.format(selected.length)} />
+                <Stat label="1ª indexação" value={numberFormat.format(firstTime)} />
+                <Stat label="Tamanho no GitHub" value={formatSize(totalKb)} hint="inclui histórico do git" />
+                <Stat label="Linguagens" value={languages.length ? languages.slice(0, 3).join(", ") : "—"} />
+              </dl>
+
+              <ul className="max-h-[45dvh] divide-y divide-zinc-100 overflow-y-auto rounded-xl border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
+                {details.map(({ name, repo }) => {
+                  const p = plan(repo);
+                  return (
+                    <li key={name} className="space-y-1.5 px-3 py-2.5">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium" title={name}>
+                            {repo ? repoShortName(repo.name, repo.org) : name}
+                          </p>
+                          <p className="truncate text-xs text-zinc-500 dark:text-zinc-400">
+                            {repo?.org ?? "repositório avulso"} · {repo?.language ?? "linguagem desconhecida"} ·{" "}
+                            {formatSize(repo?.size_kb)}
+                          </p>
+                        </div>
+                        <Badge tone={p.tone}>{p.label}</Badge>
+                      </div>
+                      <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                        {repo && repo.chunks > 0
+                          ? `${numberFormat.format(repo.chunks)} chunks hoje · indexado ${timeAgo(repo.indexed_at)}`
+                          : "ainda não indexado"}
+                        {repo?.pushed_at && (
+                          <span title={formatDateTime(repo.pushed_at)}> · último push {timeAgo(repo.pushed_at)}</span>
+                        )}
+                        {" · "}
+                        {p.hint}
+                      </p>
+                      {repo?.error && <p className="text-xs text-rose-600 dark:text-rose-400">último erro: {repo.error}</p>}
+                    </li>
+                  );
+                })}
+              </ul>
+
+              {preview.remaining > 0 && (
+                <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                  {numberFormat.format(preview.remaining)} repo(s) ficam para os próximos lotes.
+                </p>
+              )}
+              <p className="flex items-start gap-2 text-xs text-zinc-500 dark:text-zinc-400">
+                <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+                Testes, dependências, builds e arquivos gerados são ignorados, e segredos são mascarados antes do
+                envio. Arquivos que não mudaram reaproveitam o cache: só trechos novos geram custo.
+              </p>
+            </>
           )}
           {startError && <Alert>{startError}</Alert>}
         </div>
@@ -169,14 +259,29 @@ export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished,
       {job && (
         <div className="space-y-3">
           <p className="flex items-center gap-2 text-sm font-medium">
-            {job.status === "running" && <><LoaderCircle className="size-4 animate-spin text-indigo-500" /> Indexando… pode levar alguns minutos.</>}
-            {job.status === "done" && <><CircleCheck className="size-4 text-emerald-500" /> Concluído.</>}
-            {job.status === "failed" && <><CircleX className="size-4 text-rose-500" /> Falhou.</>}
+            {job.status === "running" && (
+              <>
+                <LoaderCircle className="size-4 animate-spin text-indigo-500" /> Indexando… pode levar alguns minutos. Você
+                pode fechar: o andamento fica na seção Jobs.
+              </>
+            )}
+            {job.status === "done" && (
+              <>
+                <CircleCheck className="size-4 text-emerald-500" /> Concluído.
+              </>
+            )}
+            {job.status === "failed" && (
+              <>
+                <CircleX className="size-4 text-rose-500" /> Falhou.
+              </>
+            )}
           </p>
           {job.error && <Alert>{job.error}</Alert>}
           {job.result && (
             <div className="space-y-2 text-sm">
-              <p>{Object.keys(job.result.indexed).length} indexado(s), {Object.keys(job.result.errors).length} com erro.</p>
+              <p>
+                {Object.keys(job.result.indexed).length} indexado(s), {Object.keys(job.result.errors).length} com erro.
+              </p>
               {Object.entries(job.result.errors).map(([name, msg]) => (
                 <p key={name} className="text-rose-600 dark:text-rose-400">
                   <span className="font-mono">{name}</span>: {msg}
@@ -187,5 +292,16 @@ export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished,
         </div>
       )}
     </Dialog>
+  );
+}
+
+function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  return (
+    <div className="rounded-xl border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+      <dt className="text-xs text-zinc-500 dark:text-zinc-400">{label}</dt>
+      <dd className="truncate text-sm font-semibold" title={hint ? `${value} (${hint})` : value}>
+        {value}
+      </dd>
+    </div>
   );
 }

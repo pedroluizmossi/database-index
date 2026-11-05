@@ -68,9 +68,20 @@ Por padrão ficam de fora (`domain/file_patterns.py`: `DEFAULT_EXCLUDE`, `TEST_E
   `test_*.py`, `*_test.go`, `*Tests.cs`, `*_spec.rb`...);
 - `CHANGELOG*`/`CHANGES*`/`HISTORY*`, **`openapi.*`/`swagger.*`** (OpenAPI é indexado por outra fonte)
   e migrations de outros bancos (`migration/**/H2|Oracle|SqlServer|MySql`). Fica só a de PostgreSql;
-- conteúdo (`indexing/content.py`): CRDs do Kubernetes e yaml/json/xml acima de 100 KB.
+- conteúdo (`indexing/content.py`): binários com extensão de texto (byte nulo ou >10% de caracteres
+  inválidos, ex.: vídeo `.ts`), CRDs do Kubernetes e yaml/json/xml acima de 100 KB.
 
 Traduções e pastas `spec/` continuam indexadas.
+
+Além de código, entram Terraform (`.tf`, `.tfvars`, `.hcl`; o `terraform.tfstate` fica de fora), contratos
+(`.proto`, `.graphql`), `Jenkinsfile`/`.groovy`, templates Helm (`.tpl`), `.cjs`/`.mts`/`.cts` e `.less`/`.sass`.
+
+**Como cada trecho é guardado (`indexing/context.py`):**
+- o código guardado e devolvido são **linhas inteiras**, iguais às do `read_file`, e CRLF vira LF;
+- o texto embedado leva um cabeçalho de contexto, com caminho, linguagem, a classe ou seção que envolve o
+  trecho e o que ele declara. Exemplo: `# org__repo/src/HmacServiceImpl.java (java)` seguido de
+  `# em: HmacServiceImpl · declara: sign`. A extração usa expressões regulares por linguagem e cobre
+  Java/Kotlin/C#, TS/JS, Python, Go, Rust, Ruby, PHP, SQL, Terraform, `.sdl`, Kubernetes YAML e Markdown.
 
 **Segredos são mascarados antes do embedding.** O texto que vai para a Voyage e para o Postgres já
 sai com `***` no lugar de:
@@ -103,11 +114,32 @@ uv run code-index search -m keyword UserRepository -r minha-org__meu-backend
 uv run code-index search "criação de tabela" -l sql -p "**/migration/**"
 uv run code-index show minha-org__meu-backend/src/main/App.java:10-40
 uv run code-index search "..." --no-rerank                 # só busca híbrida
+uv run code-index symbol HmacServiceImpl                    # onde está declarado (também Classe.metodo)
+uv run code-index grep "Saldo insuficiente" -p "**/*.java"  # texto exato via ripgrep (-E para regex)
 ```
 
-Pipeline de busca: vetor (top 80) + full-text (top 80) são combinados por RRF. Os 40 melhores
-(`RERANK_CANDIDATES`) vão para o reranker (`RERANK_MODEL=voyage/rerank-2.5`), que devolve os top-k:
-8 na CLI (`-k`) e 8 no MCP (`top_k`). Se o rerank falhar, a resposta usa a ordem híbrida.
+**Pipeline de busca.** Duas fontes, combinadas por RRF (Reciprocal Rank Fusion) **com pesos**:
+- **vetor** (pgvector HNSW), com o embedding do trecho mais um cabeçalho de contexto;
+- **termos**, com tokenização própria para código (`domain/search_text.py`): `HmacServiceImpl` vira
+  `hmacserviceimpl hmac service impl`, então a busca acha o nome exato e pedaços dele. Nomes de símbolos e
+  o caminho pesam mais que o corpo do código. O motor é escolhido conforme o banco:
+
+  | Motor | Quando |
+  |---|---|
+  | `bm25` | o banco tem `pg_search` (imagem `docker/postgres`) e o índice já tem as colunas de busca |
+  | `fts` | Postgres comum: full-text nativo nas mesmas colunas, com pesos A/B |
+  | `fts-legacy` | tabela antiga, antes de reindexar: full-text sobre o código |
+
+Os pesos da fusão dependem da consulta: frases favorecem o vetor (1,0 contra 0,4); consultas que parecem um
+identificador (`HmacServiceImpl`, `get_user`, `Classe.metodo`) favorecem os termos (1,0 contra 0,6). Os 40
+melhores (`RERANK_CANDIDATES`) vão para o reranker (`RERANK_MODEL=voyage/rerank-2.5`), que devolve os top-k.
+Se o rerank falhar, a resposta usa a ordem da fusão.
+
+**Símbolos.** A tabela `code_symbols` é preenchida na indexação, sem custo de API, com as declarações de
+cada arquivo: nome, tipo, classe envolvente, linha e assinatura.
+
+**Grep.** Roda o ripgrep nos clones locais, com os mesmos filtros de arquivo do índice. Respeita o
+`.gitignore`, ignora arquivos ocultos e binários, mascara segredos e tem limites de resultado e tempo.
 
 ## Servidor HTTP: API REST + MCP
 
@@ -200,7 +232,8 @@ claude mcp add --scope user --transport http code-index https://<host>/mcp \
   --header "Authorization: Bearer cix_..."
 ```
 
-Ferramentas: `search_code`, `read_file_lines` e `list_repos`, todas com `search:read`. O MCP não indexa:
+Ferramentas, todas com `search:read`: `search_code` (por significado), `find_symbol` (onde algo é
+declarado), `grep_code` (texto exato ou regex), `read_file_lines` e `list_repos`. O MCP não indexa:
 sync fica na API e na interface, que mostram a prévia e pedem confirmação.
 
 ### Login Google: configuração
@@ -259,7 +292,22 @@ uv run mypy src
 ```
 
 Os testes de integração usam o schema `code_index_test`, pastas temporárias e embeddings/rerank falsos.
-Não tocam no índice real e não chamam a Voyage.
+Não tocam no índice real e não chamam a Voyage. Para testar o caminho BM25 contra outro Postgres (por
+exemplo, a imagem `docker/postgres` numa porta livre), use
+`CODE_INDEX_TEST_PG_URL=postgres://...:5433/... uv run pytest -q -m integration`.
+
+### Postgres com BM25 (`pg_search`)
+
+O `docker-compose.yml` constrói `docker/postgres`: a mesma `pgvector/pgvector:pg17` de antes, mais a extensão
+`pg_search` do ParadeDB (`.deb` oficial com SHA-256 conferido, carregada em `shared_preload_libraries`).
+O volume e a versão do pgvector não mudam. Para trocar a imagem do seu banco:
+
+```bash
+docker compose build postgres && docker compose up -d postgres   # recria o container com o mesmo volume
+```
+
+O servidor cria a extensão e o índice BM25 sozinho, na inicialização e após cada sync. Sem a extensão,
+a busca por termos usa o full-text do Postgres.
 
 ## Notas
 

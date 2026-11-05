@@ -22,7 +22,6 @@ import cocoindex as coco
 from cocoindex.connectors import localfs, postgres
 from cocoindex.ops.litellm import LiteLLMEmbedder
 from cocoindex.ops.text import RecursiveSplitter, detect_code_language
-from cocoindex.resources.chunk import Chunk
 from cocoindex.resources.file import FileLike, PatternFilePathMatcher
 from cocoindex.resources.id import IdGenerator
 from numpy.typing import NDArray
@@ -31,6 +30,9 @@ from ..domain.models import Repo
 from ..infra import llm
 from ..settings import get_settings
 from .content import CONTENT_LOGIC, redact, skip_reason
+from .context import Decl, chunk_bounds, chunk_header, declarations, full_lines, symbol_names
+from ..domain.search_text import code_terms
+from ..infra.chunk_store import FTS_DOCUMENT
 
 PG_DB = coco.ContextKey[asyncpg.Pool]("code_index_db")
 EMBEDDER = coco.ContextKey[LiteLLMEmbedder]("code_index_embedder", detect_change=True)
@@ -47,7 +49,23 @@ class CodeChunk:
     code: str
     start_line: int
     end_line: int
+    search_symbols: str   # caminho + nomes declarados/envolventes, tokenizados para busca (peso maior)
+    search_terms: str     # identificadores e palavras do código, tokenizados para busca
     embedding: Annotated[NDArray, EMBEDDER]
+
+
+@dataclass
+class CodeSymbol:
+    """Declaração encontrada na indexação (classe, método, função, recurso, seção). Sem embedding."""
+
+    repo: str
+    path: str
+    line: int
+    name: str
+    kind: str             # container | member | section
+    container: str        # classe/seção que envolve a declaração ("" se nenhuma)
+    signature: str        # a linha da declaração (com segredos mascarados)
+    language: str
 
 
 @coco.lifespan
@@ -64,40 +82,54 @@ async def _lifespan(builder: coco.EnvironmentBuilder) -> AsyncIterator[None]:
 
 @coco.fn
 async def process_chunk(
-    chunk: Chunk,
+    item: ChunkInput,
     repo: str,
     path: str,
     language: str,
     id_gen: IdGenerator,
     table: postgres.TableTarget[CodeChunk],
 ) -> None:
-    # Cabeçalho com o caminho dá contexto ao modelo (ajuda em buscas por módulo/arquivo).
-    text = f"# {repo}/{path}\n{chunk.text}"
-    embedding = await coco.use_context(EMBEDDER).embed(text, input_type="document")
+    # Cabeçalho (caminho, linguagem, classe envolvente, declarações) dá contexto ao embedding.
+    embedding = await coco.use_context(EMBEDDER).embed(f"{item.header}\n{item.code}", input_type="document")
     table.declare_row(
         row=CodeChunk(
             repo=repo,
             path=path,
-            id=await id_gen.next_id(chunk.text),
+            id=await id_gen.next_id(item.code),
             language=language,
-            code=chunk.text,
-            start_line=chunk.start.line,
-            end_line=chunk.end.line,
+            code=item.code,
+            start_line=item.start_line,
+            end_line=item.end_line,
+            search_symbols=code_terms(item.symbols),
+            search_terms=code_terms(item.code),
             embedding=embedding,
         )
     )
 
 
-@coco.fn(memo=True, version=2)
+@dataclass(frozen=True)
+class ChunkInput:
+    """Chunk pronto para embedar: linhas inteiras (o que é guardado/exibido) + cabeçalho de contexto."""
+
+    code: str
+    header: str
+    symbols: str          # caminho + nomes de declarações relevantes para o trecho
+    start_line: int
+    end_line: int
+
+
+@coco.fn(memo=True, version=4)
 async def process_file(
-    file: FileLike, repo: str, root: str, table: postgres.TableTarget[CodeChunk]
+    file: FileLike,
+    repo: str,
+    root: str,
+    table: postgres.TableTarget[CodeChunk],
+    symbols_table: postgres.TableTarget[CodeSymbol],
 ) -> None:
     coco.use_logic_dep(CONTENT_LOGIC)
     path = file.file_path.path.relative_to(root).as_posix()
-    try:
-        text = await file.read_text()
-    except UnicodeDecodeError:
-        return
+    text = await file.read_text()  # decodifica com errors="replace": binários são barrados em skip_reason
+    text = text.replace("\r\n", "\n").replace("\r", "\n")  # CRLF/CR: linhas iguais às do read_file
     if not text.strip() or len(text.encode()) > get_settings().max_file_bytes:
         return
     language = detect_code_language(filename=file.file_path.path.name) or ""
@@ -111,12 +143,54 @@ async def process_file(
         chunk_overlap=200,
         language=language or None,
     )
+    lines = text.split("\n")
+    decls = declarations(text, language, file.file_path.path.name)
+    _declare_symbols(symbols_table, repo, path, language, decls, lines)
+    items = []
+    for c in chunks:
+        start, end = chunk_bounds(c.start.line, c.end.line, c.end.column)
+        items.append(ChunkInput(
+            code=full_lines(lines, start, end),
+            header=chunk_header(repo, path, language, decls, start, end),
+            symbols=" ".join([path, *symbol_names(decls, start, end)]),
+            start_line=start,
+            end_line=end,
+        ))
     id_gen = IdGenerator()
-    await coco.map(process_chunk, chunks, repo, path, language, id_gen, table)
+    await coco.map(process_chunk, items, repo, path, language, id_gen, table)
+
+
+def _declare_symbols(
+    symbols_table: postgres.TableTarget[CodeSymbol],
+    repo: str,
+    path: str,
+    language: str,
+    decls: list[Decl],
+    lines: list[str],
+) -> None:
+    container = ""
+    seen: set[tuple[int, str]] = set()
+    for d in decls:
+        if (d.line, d.name) in seen:  # duas regras podem casar a mesma declaração
+            continue
+        seen.add((d.line, d.name))
+        symbols_table.declare_row(row=CodeSymbol(
+            repo=repo, path=path, line=d.line, name=d.name, kind=d.kind,
+            container=container if d.kind == "member" else "",
+            signature=lines[d.line - 1].strip()[:240] if 0 < d.line <= len(lines) else "",
+            language=language,
+        ))
+        if d.kind == "container":
+            container = d.name
 
 
 @coco.fn(memo=True)
-async def index_repo(repo: Repo, revision: str, table: postgres.TableTarget[CodeChunk]) -> None:
+async def index_repo(
+    repo: Repo,
+    revision: str,
+    table: postgres.TableTarget[CodeChunk],
+    symbols_table: postgres.TableTarget[CodeSymbol],
+) -> None:
     """Memoizado por (repo, revision): se o commit não mudou, o repo nem é percorrido
     e as linhas já gravadas são mantidas. Por isso o custo de um sync é proporcional
     aos repos que mudaram, não ao tamanho da org."""
@@ -129,7 +203,7 @@ async def index_repo(repo: Repo, revision: str, table: postgres.TableTarget[Code
             excluded_patterns=repo.all_excludes,
         ),
     )
-    await coco.mount_each(process_file, files.items(), repo.name, str(root), table)
+    await coco.mount_each(process_file, files.items(), repo.name, str(root), table, symbols_table)
 
 
 @coco.fn
@@ -146,14 +220,32 @@ async def app_main(repos: list[tuple[Repo, str]]) -> None:
         pg_schema_name=settings.pg_schema,
     )
     table.declare_vector_index(column="embedding", metric="cosine", method="hnsw")
+    # Full-text do Postgres com pesos (símbolos A, código B): usado quando o banco não tem BM25.
+    # O índice BM25 (pg_search), quando disponível, é criado pelo ChunkStore após o sync.
     table.declare_sql_command_attachment(
         name="fts_index",
         setup_sql=f"CREATE INDEX IF NOT EXISTS code_chunks_fts ON {settings.chunks_table_qualified} "
-        f"USING gin (to_tsvector('simple', code))",
+        f"USING gin ({FTS_DOCUMENT})",
         teardown_sql=f'DROP INDEX IF EXISTS "{settings.pg_schema}".code_chunks_fts',
     )
+    symbols_table = await postgres.mount_table_target(
+        PG_DB,
+        table_name=settings.symbols_table,
+        table_schema=await postgres.TableSchema.from_class(
+            CodeSymbol, primary_key=["repo", "path", "line", "name"]
+        ),
+        pg_schema_name=settings.pg_schema,
+    )
+    symbols_table.declare_sql_command_attachment(
+        name="name_index",
+        setup_sql=f"CREATE INDEX IF NOT EXISTS code_symbols_name ON {settings.symbols_table_qualified} "
+        f"(lower(name) text_pattern_ops)",
+        teardown_sql=f'DROP INDEX IF EXISTS "{settings.pg_schema}".code_symbols_name',
+    )
     for repo, revision in repos:
-        await coco.mount(coco.component_subpath("repo", repo.name), index_repo, repo, revision, table)
+        await coco.mount(
+            coco.component_subpath("repo", repo.name), index_repo, repo, revision, table, symbols_table
+        )
 
 
 def build_app(plan: list[tuple[Repo, str]]) -> coco.App:

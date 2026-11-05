@@ -291,15 +291,20 @@ class Indexer:
 
     @staticmethod
     def _to_repo(row: RepoState, orgs: list[Org], manual: dict[str, Repo]) -> Repo:
-        if row.org is None:
-            if row.name in manual:
-                return manual[row.name]
-            return Repo(name=row.name, url=row.url, path=row.path)
-        org = next((o for o in orgs if o.name == row.org), None) or Org(name=row.org)
-        return Repo(
-            name=row.name,
-            url=row.url,
-            include=org.include,
-            exclude=org.exclude,
-            extra_exclude=org.extra_exclude,
-        )
+        return repo_for_row(row, orgs, manual)
+
+
+def repo_for_row(row: RepoState, orgs: list[Org], manual: dict[str, Repo]) -> Repo:
+    """Repo (com pasta e filtros de arquivo) de uma linha da tabela de estado."""
+    if row.org is None:
+        if row.name in manual:
+            return manual[row.name]
+        return Repo(name=row.name, url=row.url, path=row.path)
+    org = next((o for o in orgs if o.name == row.org), None) or Org(name=row.org)
+    return Repo(
+        name=row.name,
+        url=row.url,
+        include=org.include,
+        exclude=org.exclude,
+        extra_exclude=org.extra_exclude,
+    )

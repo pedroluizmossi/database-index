@@ -102,7 +102,29 @@ def redact(text: str, language: str) -> tuple[str, int]:
     return text, count
 
 
+_BINARY_SAMPLE = 8192
+_BINARY_MAX_RATIO = 0.10
+_TEXT_CONTROLS = {"\t", "\n", "\r", "\f", "\v", "\x1b"}
+
+
+def looks_binary(text: str) -> bool:
+    """Heurística em cima do texto já decodificado (o CocoIndex decodifica com errors="replace").
+
+    Binário: byte nulo, ou mais de 10% de caracteres inválidos (U+FFFD) / de controle na amostra.
+    Texto em Latin-1 decodificado como UTF-8 só troca os acentos, fica bem abaixo disso.
+    """
+    sample = text[:_BINARY_SAMPLE]
+    if not sample:
+        return False
+    if "\x00" in sample:
+        return True
+    bad = sum(1 for c in sample if c == "\ufffd" or (c < " " and c not in _TEXT_CONTROLS))
+    return bad / len(sample) > _BINARY_MAX_RATIO
+
+
 def skip_reason(path: str, language: str, text: str) -> str | None:
+    if looks_binary(text):
+        return "binário"
     if language in _DATA_LANGS:
         if len(text.encode()) > MAX_DATA_FILE_BYTES:
             return "arquivo de dados grande"

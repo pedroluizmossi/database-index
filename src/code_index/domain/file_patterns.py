@@ -16,6 +16,11 @@ DEFAULT_INCLUDE = [
     "**/*.toml", "**/*.yaml", "**/*.yml", "**/*.json", "**/*.xml", "**/*.gradle",
     "**/*.md", "**/*.mdx", "**/*.rst", "**/Dockerfile", "**/Makefile",
     "**/*.sdl", "**/*.pdl", "**/*.properties",
+    # infraestrutura e contratos
+    "**/*.tf", "**/*.tfvars", "**/*.hcl", "**/*.proto", "**/*.graphql", "**/*.gql",
+    "**/Jenkinsfile", "**/*.groovy", "**/*.tpl",
+    # variações de JS/TS e estilos
+    "**/*.cjs", "**/*.mts", "**/*.cts", "**/*.less", "**/*.sass",
 ]
 DEFAULT_EXCLUDE = [
     "**/.*", "**/node_modules", "**/vendor", "**/dist", "**/build", "**/target",

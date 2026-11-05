@@ -34,10 +34,10 @@ O executável `code-index` só existe no ambiente do projeto: use `uv run`.
 | Pasta/arquivo | Responsabilidade |
 |---|---|
 | `settings.py` | `Settings` (env/.env). `get_settings()`, `use_settings()` (testes), `bootstrap()` (efeitos de runtime) |
-| `domain/` | **Puro, sem I/O**: `models`, `file_patterns` (o que indexar/excluir), `policies` (lote, nomes), `auth` (scopes) |
-| `infra/` | Mundo externo: `db` (pool + migrations), `repo_store`, `chunk_store`, `auth_store`, `config_file` (repos.toml), `git`, `github`, `google_oidc`, `llm` |
+| `domain/` | **Puro, sem I/O**: `models`, `file_patterns` (o que indexar/excluir), `policies` (lote, nomes), `auth` (scopes), `search_text` (tokenização de código para busca, pesos da fusão) |
+| `infra/` | Mundo externo: `db` (pool, migrations, extensões), `repo_store`, `chunk_store` (busca: motor bm25/fts/fts-legacy detectado no banco), `symbol_store`, `job_store`, `auth_store`, `config_file` (repos.toml), `git`, `github`, `grep` (ripgrep), `google_oidc`, `llm` |
 | `sources/` | De onde vêm os repos (`RepoSource`). Ponto de extensão para novas fontes |
-| `indexing/` | `content` (máscara de segredos/skip), `code_flow` (app CocoIndex), `orchestrator` (sync em etapas) |
+| `indexing/` | `content` (máscara de segredos/skip/binários), `context` (linhas inteiras + cabeçalho do embedding), `code_flow` (app CocoIndex), `orchestrator` (sync em etapas) |
 | `retrieval/` | `search` (híbrida + rerank), `files` (leitura com máscara) |
 | `services.py` | Casos de uso: **único** ponto usado pelas interfaces |
 | `interfaces/` | `cli.py` e `http/` (`app.py` FastAPI, `mcp.py`, `security.py`): só parsing e formatação |
@@ -112,6 +112,15 @@ Os testes de integração são isolados: schema `code_index_test`, pastas em `tm
 Podem rodar sem medo; só precisam do Postgres no ar (sem ele, são pulados).
 
 ## Armadilhas conhecidas
+
+- **pg_search (BM25) + asyncpg:** parâmetro usado em `::pdb.boost(n)` precisa de `::text` antes
+  (`$1::text::pdb.boost(3)`); sem isso o asyncpg infere o tipo `pdb.boost` sem typmod e dá
+  `invalid typemod -1`. O tokenizador `pdb.source_code` descarta o identificador inteiro: por isso a
+  tokenização de código é feita em Python (`domain/search_text.py`) e o índice usa `pdb.whitespace`.
+- **Não troque a imagem do Postgres pela `paradedb/paradedb`:** ela traz `vector` 0.8.6, e o banco usa a
+  0.8.7, o que seria um downgrade de extensão. Use `docker/postgres` (pgvector oficial + `pg_search`).
+- **SDK MCP:** tools que devolvem `list` vêm em `structured_content["result"]`; as que devolvem `dict`
+  vêm como texto JSON em `content[0].text`.
 
 - **CocoIndex 1.x** tem API diferente da 0.x (`coco.App`, `@coco.fn`, `mount_each`, `ContextKey`,
   `@coco.lifespan`). Na dúvida, leia o pacote instalado em `.venv/lib/python3.12/site-packages/cocoindex/`

@@ -23,6 +23,8 @@ export interface Repo {
   files: number;
   chunks: number;
   error: string | null;
+  /** Tamanho do repositório no GitHub, em KB (inclui o histórico do git). */
+  size_kb: number | null;
 }
 
 export interface OrgSummary {

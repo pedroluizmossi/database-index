@@ -7,6 +7,7 @@ embeddings/rerank falsos (fixture fake_llm). Nenhuma chamada ao Google ou à Voy
 from __future__ import annotations
 
 import asyncio
+import json
 import socket
 import threading
 import time
@@ -187,7 +188,9 @@ async def _mcp(server: Server, token: str) -> tuple[list[str], Any, Any]:
             await s.initialize()
             tools = [t.name for t in (await s.list_tools()).tools]
             search = await s.call_tool("search_code", {"query": "ola", "mode": "keyword"})
-            return tools, search
+            symbol = await s.call_tool("find_symbol", {"name": "Qualquer"})
+            grep = await s.call_tool("grep_code", {"pattern": "ola"})
+            return tools, search, symbol, grep
 
 
 def test_mcp_exige_token(server: Server) -> None:
@@ -199,9 +202,10 @@ def test_mcp_exige_token(server: Server) -> None:
 
 
 def test_mcp_so_expoe_leitura(server: Server) -> None:
-    tools, search = asyncio.run(_mcp(server, "leitor"))
-    assert tools == ["search_code", "read_file_lines", "list_repos"]
-    assert not search.is_error
+    tools, search, symbol, grep = asyncio.run(_mcp(server, "leitor"))
+    assert tools == ["search_code", "read_file_lines", "list_repos", "find_symbol", "grep_code"]
+    assert not search.is_error and not symbol.is_error and not grep.is_error
+    assert json.loads(grep.content[0].text) == {"matches": [], "truncated": False}
 
 
 # ------------------------------------------------------------------ jobs persistentes

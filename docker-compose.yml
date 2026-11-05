@@ -1,6 +1,8 @@
 services:
   postgres:
-    image: pgvector/pgvector:pg17
+    # pgvector/pgvector:pg17 + pg_search (BM25). Mesmo volume e mesmo pgvector da imagem anterior.
+    build: ./docker/postgres
+    image: code-index-postgres:pg17-pgsearch0.26.5
     restart: unless-stopped
     environment:
       POSTGRES_USER: cocoindex

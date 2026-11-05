@@ -79,9 +79,11 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
     server: MCPServer[Any] = MCPServer(
         name="code-index",
         instructions=(
-            "Índice semântico + full-text de repositórios de código. Use search_code para "
-            "encontrar implementações por descrição em linguagem natural ou por identificadores; "
-            "depois read_file_lines para ver o contexto completo."
+            "Índice de código de vários repositórios. Escolha a tool pelo tipo de pergunta: "
+            "search_code para buscar por significado ('onde validamos o token'); find_symbol quando "
+            "já sabe o nome de uma classe/função/método ('onde está HmacService'); grep_code para texto "
+            "exato ou regex (mensagens de erro, chaves de configuração); read_file_lines para ler o "
+            "contexto completo de um resultado; list_repos para ver o que está indexado."
         ),
         token_verifier=ServiceTokenVerifier(get_service),
         auth=AuthSettings(
@@ -169,5 +171,64 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
             return [r.to_dict() for r in await svc.list_repos(status=status, org=org, name=name)]
 
         return await run_tool("list_repos", {"status": status, "org": org, "name": name}, "read", None, fn)
+
+    @server.tool()
+    async def find_symbol(
+        name: str,
+        kind: str | None = None,
+        repos: list[str] | None = None,
+        language: str | None = None,
+        limit: int = 20,
+    ) -> list[dict]:
+        """Onde uma classe, interface, função, método ou recurso é DECLARADO (arquivo e linha).
+
+        Use quando já sabe o nome (ou parte dele). Mais preciso que search_code para "onde está X".
+
+        Args:
+            name: nome ou parte dele ("HmacService"), ou qualificado ("WebhookService.retry").
+            kind: "container" (classe/interface/enum), "member" (método/função) ou "section"
+                (recurso Terraform, seção de Markdown, objeto do Kubernetes...).
+            repos: limita a estes repositórios.
+            language: filtra por linguagem.
+            limit: máximo de resultados (até 200).
+        """
+
+        async def fn(svc: CodeIndexService) -> list[dict]:
+            hits = await svc.find_symbol(name, kind=kind, repos=repos, language=language, limit=limit)
+            return [h.to_dict() for h in hits]
+
+        return await run_tool("find_symbol", {"name": name, "kind": kind, "repos": repos, "language": language},
+                              "read", None, fn)
+
+    @server.tool()
+    async def grep_code(
+        pattern: str,
+        repos: list[str] | None = None,
+        path_glob: str | None = None,
+        regex: bool = False,
+        case_sensitive: bool = False,
+        max_results: int = 50,
+    ) -> dict:
+        """Busca TEXTO EXATO (ou regex) nos repositórios: mensagens de erro, chaves de configuração,
+        strings, chamadas específicas. Complementa search_code, que busca por significado.
+
+        Args:
+            pattern: texto a procurar (ou expressão regular, se regex=true).
+            repos: limita a estes repositórios.
+            path_glob: filtra caminhos, ex.: "**/*.java".
+            regex: trata `pattern` como expressão regular (sintaxe do ripgrep).
+            case_sensitive: diferencia maiúsculas/minúsculas (padrão: não).
+            max_results: máximo de linhas (até 500).
+
+        Retorna {"matches": [{repo, path, line, text}], "truncated": bool}. Segredos aparecem como ***.
+        """
+
+        async def fn(svc: CodeIndexService) -> dict:
+            res = await svc.grep(pattern, repos=repos, path_glob=path_glob, regex=regex,
+                                 case_sensitive=case_sensitive, max_results=max_results)
+            return {"matches": [m.to_dict() for m in res.matches], "truncated": res.truncated}
+
+        return await run_tool("grep_code", {"pattern": pattern, "repos": repos, "path_glob": path_glob, "regex": regex},
+                              "search", None, fn)
 
     return server

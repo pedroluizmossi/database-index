@@ -164,3 +164,46 @@ async def test_migracoes_sao_aplicadas_uma_vez(int_settings: Settings) -> None:
 
     assert "001_repos" in versions
     assert "language" in columns
+
+
+async def test_chunks_em_linhas_inteiras_com_cabecalho_e_sem_crlf(
+    int_settings: Settings, tmp_path: Path, fake_llm: Any
+) -> None:
+    """O código guardado são linhas inteiras do arquivo (como o read_file devolve), o texto embedado
+    leva o cabeçalho de contexto, e CRLF é normalizado. Arquivos .tf entram no índice."""
+    project = tmp_path / "proj-crlf"
+    (project / "src").mkdir(parents=True)
+    java = "".join(
+        f"    public int metodo{i}(int a) {{\r\n        return a + {i};\r\n    }}\r\n\r\n" for i in range(60)
+    )
+    (project / "src" / "Calculadora.java").write_bytes(
+        ("package x;\r\n\r\npublic class Calculadora {\r\n" + java + "}\r\n").encode()
+    )
+    (project / "main.tf").write_text('resource "keycloak_realm" "demo" {\n  realm = "demo"\n}\n')
+
+    async with open_service(int_settings) as svc:
+        await svc.add_repo(str(project), name="proj-crlf")
+        result = await svc.sync(["proj-crlf"], batch=None, do_discover=False, progress=False)
+        assert result.errors == {}
+
+        conn = await asyncpg.connect(int_settings.database_url, timeout=5)
+        try:
+            rows = await conn.fetch(
+                f"SELECT path, code, start_line, end_line FROM {int_settings.chunks_table_qualified} ORDER BY path, start_line"
+            )
+        finally:
+            await conn.close()
+
+        assert {r["path"] for r in rows} == {"src/Calculadora.java", "main.tf"}
+        java_rows = [r for r in rows if r["path"] == "src/Calculadora.java"]
+        assert len(java_rows) > 1, "o arquivo deveria virar vários chunks"
+        file_lines = (project / "src" / "Calculadora.java").read_text().splitlines()
+        for r in java_rows:
+            assert "\r" not in r["code"]
+            # exatamente as linhas start..end do arquivo: nada começa ou termina no meio da linha
+            assert r["code"] == "\n".join(file_lines[r["start_line"] - 1: r["end_line"]])
+
+        java_embedded = [t for t in fake_llm.embedded if "Calculadora.java" in t.splitlines()[0]]
+        assert java_embedded and all(t.startswith("# proj-crlf/src/Calculadora.java (java)") for t in java_embedded)
+        assert any("em: Calculadora" in t and "declara: metodo" in t for t in java_embedded)
+        assert any(t.startswith("# proj-crlf/main.tf (hcl)\n# declara: resource keycloak_realm demo") for t in fake_llm.embedded)

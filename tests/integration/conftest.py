@@ -8,6 +8,7 @@ Nenhuma chamada à Voyage: `litellm.aembedding` e `litellm.arerank` são substit
 from __future__ import annotations
 
 import asyncio
+import os
 import hashlib
 import math
 import re
@@ -22,7 +23,8 @@ import pytest
 from code_index import settings as settings_module
 from code_index.settings import Settings, bootstrap, use_settings
 
-PG_TEST_URL = "postgres://cocoindex:cocoindex@localhost:5432/cocoindex"
+# Outro Postgres (ex.: a imagem com pg_search para testar o BM25): CODE_INDEX_TEST_PG_URL=...
+PG_TEST_URL = os.getenv("CODE_INDEX_TEST_PG_URL", "postgres://cocoindex:cocoindex@localhost:5432/cocoindex")
 TEST_SCHEMA = "code_index_test"
 EMBED_DIM = 1024
 _TOKEN = re.compile(r"\w+")

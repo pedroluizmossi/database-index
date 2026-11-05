@@ -110,6 +110,15 @@ class SyncIn(BaseModel):
     dry_run: bool = False
 
 
+class GrepIn(BaseModel):
+    pattern: str = Field(min_length=1, max_length=500)
+    repos: list[str] | None = None
+    path_glob: str | None = None
+    regex: bool = False
+    case_sensitive: bool = False
+    max_results: int = Field(50, ge=1, le=500)
+
+
 class SearchIn(BaseModel):
     query: str = Field(min_length=1, max_length=2000)
     top_k: int = Field(8, ge=1, le=50)
@@ -267,6 +276,25 @@ def create_app(settings: Settings) -> FastAPI:
             mode=body.mode, rerank=body.rerank,
         ))
         return [h.to_dict() for h in hits]
+
+    @app.get("/api/v1/symbols", tags=["busca"], summary="Onde um símbolo é declarado")
+    async def symbols(request: Request, name: str = Query(min_length=1, max_length=200), kind: str | None = None,
+                      repo: list[str] | None = Query(None), language: str | None = None,
+                      limit: int = Query(20, ge=1, le=200),
+                      principal: Principal = Depends(require(SEARCH_READ))) -> list[dict[str, Any]]:
+        hits = await audited(request, principal, "symbols", {"name": name, "kind": kind, "repo": repo},
+                             get_service(request).find_symbol(name, kind=kind, repos=repo, language=language,
+                                                              limit=limit))
+        return [h.to_dict() for h in hits]
+
+    @app.post("/api/v1/grep", tags=["busca"], summary="Texto exato ou regex nos repositórios")
+    async def grep(body: GrepIn, request: Request,
+                   principal: Principal = Depends(require(SEARCH_READ, bucket="search"))) -> dict[str, Any]:
+        res = await audited(request, principal, "grep", body.model_dump(exclude={"case_sensitive"}),
+                            get_service(request).grep(body.pattern, repos=body.repos, path_glob=body.path_glob,
+                                                      regex=body.regex, case_sensitive=body.case_sensitive,
+                                                      max_results=body.max_results))
+        return {"matches": [m.to_dict() for m in res.matches], "truncated": res.truncated}
 
     @app.get("/api/v1/files/{repo}/{path:path}", tags=["busca"], summary="Lê arquivo (segredos mascarados)")
     async def read_file(repo: str, path: str, request: Request, start_line: int | None = Query(None, ge=1),

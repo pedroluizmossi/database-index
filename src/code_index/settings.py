@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     )
     pg_schema: str = "code_index"
     chunks_table: str = "code_chunks"
+    symbols_table: str = "code_symbols"
 
     # Embedding / rerank (nomes no formato LiteLLM)
     embed_model: str = Field("voyage/voyage-code-4", validation_alias="EMBED_MODEL")
@@ -104,6 +105,10 @@ class Settings(BaseSettings):
     @property
     def chunks_table_qualified(self) -> str:
         return f'"{self.pg_schema}"."{self.chunks_table}"'
+
+    @property
+    def symbols_table_qualified(self) -> str:
+        return f'"{self.pg_schema}"."{self.symbols_table}"'
 
     @property
     def admin_set(self) -> frozenset[str]:

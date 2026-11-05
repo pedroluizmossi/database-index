@@ -33,10 +33,12 @@ export const api = {
   logout: () => postJson<{ status: string }>("/auth/logout", undefined),
 
   // sync (index:write). A prévia (dry_run) não custa nada; a indexação gera custo na Voyage.
+  // Redescobrir a org (API do GitHub, alguns segundos) só faz sentido no lote automático:
+  // com repos escolhidos pelo nome, a seleção não depende dela.
   syncPreview: (repos: string[] | null, batch: number) =>
-    postJson<SyncResult>("/api/v1/sync", { repos, batch, discover: true, pull: true, dry_run: true }),
+    postJson<SyncResult>("/api/v1/sync", { repos, batch, discover: repos === null, pull: true, dry_run: true }),
   syncStart: (repos: string[] | null, batch: number) =>
-    postJson<SyncStart>("/api/v1/sync", { repos, batch, discover: true, pull: true, dry_run: false }),
+    postJson<SyncStart>("/api/v1/sync", { repos, batch, discover: repos === null, pull: true, dry_run: false }),
   syncJob: (id: string) => getJson<SyncJob>(`/api/v1/sync/jobs/${seg(id)}`),
   syncJobs: (limit = 20) => getJson<SyncJob[]>("/api/v1/sync/jobs", { query: { limit } }),
 

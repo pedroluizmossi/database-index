@@ -20,10 +20,13 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
+from cocoindex.ops.text import detect_code_language
+
 from .domain.auth import ADMIN, Principal, check_can_issue, scopes_for_user, validate_scopes
-from .domain.models import Hit, Org, Repo, RepoState, RepoStatus, SyncResult, validate_name
-from .domain.policies import name_from_path, name_from_url, normalize_source
-from .indexing.orchestrator import Indexer
+from .domain.models import Hit, SymbolHit, Org, Repo, RepoState, RepoStatus, SyncResult, validate_name
+from .domain.policies import name_from_path, name_from_url, normalize_source, resolve_name
+from .indexing.content import redact
+from .indexing.orchestrator import Indexer, repo_for_row
 from .infra import llm
 from .infra.auth_store import AuditStore, TokenInfo, TokenStore
 from .infra.chunk_store import ChunkStore
@@ -32,6 +35,8 @@ from .infra.db import open_pool
 from .infra.job_store import JobRecord, JobStore
 from .infra.git import GitClient, resolve_github_token
 from .infra.github import GitHubClient
+from .infra.grep import Grep, GrepResult, GrepTarget
+from .infra.symbol_store import SymbolStore
 from .infra.repo_store import RepoStore
 from .retrieval import files as retrieval_files
 from .retrieval.search import Searcher
@@ -61,11 +66,15 @@ class CodeIndexService:
         tokens: TokenStore,
         audit: AuditStore,
         jobs: JobStore,
+        symbols: SymbolStore,
+        grep: Grep,
     ) -> None:
         self.settings = settings
         self._tokens = tokens
         self._audit = audit
         self._jobs = jobs
+        self._symbols = symbols
+        self._grep = grep
         self._job_lock = asyncio.Lock()  # checagem + criação de job, sem corrida entre requisições
         self._job_tasks: set[asyncio.Task[None]] = set()
         self._repos = repos
@@ -274,7 +283,7 @@ class CodeIndexService:
         """
         if isinstance(batch, str):
             batch = self.settings.default_batch
-        return await self._indexer.sync(
+        result = await self._indexer.sync(
             names,
             batch=batch,
             do_discover=do_discover,
@@ -284,6 +293,16 @@ class CodeIndexService:
             dry_run=dry_run,
             allow_register=allow_register,
         )
+        if not dry_run:
+            await self._ensure_search_indexes()
+        return result
+
+    async def _ensure_search_indexes(self) -> None:
+        """Índice BM25 (se o banco tiver pg_search). O CocoIndex pode ter recriado a tabela no sync."""
+        try:
+            await self._chunks.ensure_bm25_index()
+        except Exception as e:  # noqa: BLE001 - índice é otimização; a busca cai no full-text
+            log.warning("não consegui criar o índice BM25: %s", e)
 
     async def search(
         self,
@@ -331,6 +350,73 @@ class CodeIndexService:
         return self.settings.repos_dir / repo
 
 
+    # ------------------------------------------------------------ símbolos e grep
+
+    async def _resolve_repos(self, repos: Sequence[str] | None) -> list[str] | None:
+        """Aceita 'org__repo', 'org/repo' ou só 'repo'. Nome desconhecido → ValueError."""
+        if not repos:
+            return None
+        known = (await self._repos.all_rows()).keys()
+        out = []
+        for name in repos:
+            resolved = resolve_name(name, known)
+            if resolved is None:
+                raise ValueError(f"repositório desconhecido: {name}")
+            out.append(resolved)
+        return out
+
+    async def search_engine(self) -> str:
+        """Motor da busca por termos em uso: bm25 | fts | fts-legacy | none (ver infra/chunk_store)."""
+        return (await self._chunks.capabilities(refresh=True)).keyword_engine
+
+    async def find_symbol(
+        self,
+        name: str,
+        *,
+        kind: str | None = None,
+        repos: Sequence[str] | None = None,
+        language: str | None = None,
+        limit: int = 20,
+    ) -> list[SymbolHit]:
+        """Onde uma classe/função/método/recurso é declarado (tabela preenchida na indexação)."""
+        return await self._symbols.find(
+            name, kind=kind, repos=await self._resolve_repos(repos), language=language, limit=limit
+        )
+
+    async def grep(
+        self,
+        pattern: str,
+        *,
+        repos: Sequence[str] | None = None,
+        path_glob: str | None = None,
+        regex: bool = False,
+        case_sensitive: bool = False,
+        max_results: int = 50,
+    ) -> GrepResult:
+        """Texto exato ou regex nos clones locais, com os filtros de arquivo do índice e segredos mascarados."""
+        wanted = await self._resolve_repos(repos)
+        rows = await self._repos.all_rows()
+        orgs = self._config.load_orgs()
+        manual = {r.name: r for r in self._config.load_repos()}
+        targets: list[GrepTarget] = []
+        for row in rows.values():
+            if row.ignored or (wanted is not None and row.name not in wanted):
+                continue
+            repo = repo_for_row(row, orgs, manual)
+            root = repo.local_path(self.settings.repos_dir)
+            if root.is_dir():
+                targets.append(GrepTarget(repo.name, root.resolve(), repo.include, tuple(repo.all_excludes)))
+        if not targets:
+            return GrepResult(matches=[], truncated=False)
+
+        def mask(path: str, line: str) -> str:
+            return redact(line, detect_code_language(filename=path.rsplit("/", 1)[-1]) or "")[0]
+
+        return await self._grep.search(
+            targets, pattern, regex=regex, case_sensitive=case_sensitive, path_glob=path_glob,
+            max_results=max_results, mask=mask,
+        )
+
     # ------------------------------------------------------------ jobs de sync
 
     async def start_sync(
@@ -376,6 +462,11 @@ class CodeIndexService:
                 allow_register=principal is None or principal.has(ADMIN),
             )
             status, result = "done", res.to_dict()
+            if res.selected and not res.indexed and res.errors:
+                # Nada foi indexado e todos os selecionados falharam: o job falhou, não "concluiu".
+                first = next(iter(res.errors.values())).splitlines()[0]
+                status = "failed"
+                error = f"todos os {len(res.selected)} repo(s) falharam; ex.: {first[:300]}"
         except asyncio.CancelledError:
             error = "interrompido: o servidor foi encerrado durante a indexação"
             await self._jobs.finish(job_id, status=status, result=None, error=error)
@@ -510,6 +601,7 @@ def _to_status(r: RepoState, n_files: int, n_chunks: int) -> RepoStatus:
         files=n_files,
         chunks=n_chunks,
         error=r.error,
+        size_kb=r.size_kb,
     )
 
 
@@ -544,7 +636,10 @@ async def open_service(settings: Settings | None = None) -> AsyncIterator[CodeIn
                 tokens=TokenStore(pool, settings),
                 audit=AuditStore(pool, settings),
                 jobs=jobs,
+                symbols=SymbolStore(pool, settings),
+                grep=Grep(),
             )
+            await svc._ensure_search_indexes()
             try:
                 yield svc
             finally:

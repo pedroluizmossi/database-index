@@ -201,6 +201,36 @@ async def _cmd_search(a: argparse.Namespace, settings: Settings) -> None:
         print()
 
 
+async def _cmd_symbol(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        hits = await svc.find_symbol(a.name, kind=a.kind, repos=a.repo, language=a.lang, limit=a.limit)
+    if a.json:
+        print(json.dumps([h.to_dict() for h in hits], indent=2, ensure_ascii=False))
+        return
+    if not hits:
+        print("nenhum símbolo encontrado (a tabela de símbolos é preenchida no sync).")
+    for h in hits:
+        where = f" em {h.container}" if h.container else ""
+        print(f"\033[1m{h.repo}/{h.path}:{h.line}\033[0m  {h.kind} {h.name}{where}")
+        print(f"    {h.signature}")
+
+
+async def _cmd_grep(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        res = await svc.grep(" ".join(a.pattern), repos=a.repo, path_glob=a.path, regex=a.regex,
+                             case_sensitive=a.case_sensitive, max_results=a.max)
+    if a.json:
+        print(json.dumps({"matches": [m.to_dict() for m in res.matches], "truncated": res.truncated},
+                         indent=2, ensure_ascii=False))
+        return
+    for m in res.matches:
+        print(f"\033[1m{m.repo}/{m.path}:{m.line}\033[0m  {m.text}")
+    if res.truncated:
+        print(f"... parou em {len(res.matches)} resultados (use -n para mais, ou filtre com -r/-p).")
+    elif not res.matches:
+        print("nada encontrado.")
+
+
 async def _cmd_show(a: argparse.Namespace, settings: Settings) -> None:
     repo, _, path = a.target.partition("/")
     rng = None
@@ -353,6 +383,25 @@ def main() -> None:
     q.add_argument("-c", "--candidates", type=int, help="candidatos enviados ao reranker (padrão RERANK_CANDIDATES=40)")
     q.add_argument("--json", action="store_true")
     q.set_defaults(fn=_cmd_search)
+
+    sy = sub.add_parser("symbol", help="onde uma classe/função/método é declarado")
+    sy.add_argument("name", help="nome, parte dele ou Classe.metodo")
+    sy.add_argument("-k", "--kind", choices=["container", "member", "section"])
+    sy.add_argument("-r", "--repo", action="append", help="filtra por repo (pode repetir)")
+    sy.add_argument("-l", "--lang", help="filtra por linguagem")
+    sy.add_argument("-n", "--limit", type=int, default=20)
+    sy.add_argument("--json", action="store_true")
+    sy.set_defaults(fn=_cmd_symbol)
+
+    g = sub.add_parser("grep", help="texto exato (ou regex) nos repositórios, via ripgrep")
+    g.add_argument("pattern", nargs="+")
+    g.add_argument("-r", "--repo", action="append", help="filtra por repo (pode repetir)")
+    g.add_argument("-p", "--path", help="filtra caminhos, ex.: '**/*.java'")
+    g.add_argument("-E", "--regex", action="store_true", help="trata o padrão como regex")
+    g.add_argument("-s", "--case-sensitive", action="store_true")
+    g.add_argument("-n", "--max", type=int, default=50, help="máximo de linhas (padrão 50)")
+    g.add_argument("--json", action="store_true")
+    g.set_defaults(fn=_cmd_grep)
 
     v = sub.add_parser("show", help="mostra arquivo: repo/caminho[:inicio-fim]")
     v.add_argument("target")

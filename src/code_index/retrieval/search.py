@@ -1,4 +1,8 @@
-"""Busca: híbrida (vetor + full-text, fusão RRF no ChunkStore) seguida de rerank opcional."""
+"""Busca: híbrida (vetor + termos, fusão RRF ponderada no ChunkStore) seguida de rerank opcional.
+
+Os termos usam a mesma tokenização de código da indexação (domain.search_text), e os pesos da
+fusão dependem do tipo da consulta: frases favorecem o vetor; identificadores, o termo exato.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +10,8 @@ import logging
 
 from ..domain.models import Hit
 from ..infra import llm
-from ..infra.chunk_store import ChunkStore, keyword_tsquery
+from ..domain.search_text import fusion_weights, query_kind, query_terms
+from ..infra.chunk_store import ChunkStore
 from ..settings import Settings
 
 log = logging.getLogger(__name__)
@@ -45,10 +50,17 @@ class Searcher:
         use_rerank = rerank and bool(s.rerank_model)
         fetch_n = max(top_k, candidates or s.rerank_candidates) if use_rerank else top_k
 
+        vec_weight, kw_weight = fusion_weights(query_kind(query))
+        if mode == "semantic":
+            kw_weight = 0.0
+        elif mode == "keyword":
+            vec_weight = 0.0
         query_vec = await llm.embed_query(s, query) if use_vec else None
         hits = await self._chunks.hybrid_search(
             query_vec=query_vec,
-            tsquery=keyword_tsquery(query) if use_kw else None,
+            terms=query_terms(query) if use_kw else [],
+            vec_weight=vec_weight,
+            kw_weight=kw_weight,
             limit=fetch_n,
             per_source=max(fetch_n * 2, 40),
             repos=repos,

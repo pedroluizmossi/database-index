@@ -15,6 +15,13 @@ const STATUS: Record<SyncJob["status"], { label: string; tone: BadgeTone }> = {
   failed: { label: "Falhou", tone: "error" },
 };
 
+/** Status exibido: um job "done" em que algum repo falhou aparece como "Com erros". */
+function display(job: SyncJob): { label: string; tone: BadgeTone } {
+  const errors = job.result ? Object.keys(job.result.errors).length : 0;
+  if (job.status === "done" && errors > 0) return { label: "Com erros", tone: "warning" };
+  return STATUS[job.status];
+}
+
 interface JobsState {
   jobs: SyncJob[] | null;
   error: string | null;
@@ -148,8 +155,8 @@ export function JobsPanel({ state, onOpen }: { state: JobsState; onOpen: (job: S
                 onClick={() => onOpen(job)}
                 className="flex w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-zinc-50/80 dark:hover:bg-white/[0.02]"
               >
-                <Badge tone={STATUS[job.status].tone} dot>
-                  {STATUS[job.status].label}
+                <Badge tone={display(job).tone} dot>
+                  {display(job).label}
                 </Badge>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium">{scopeLabel(job)}</p>
@@ -161,7 +168,11 @@ export function JobsPanel({ state, onOpen }: { state: JobsState; onOpen: (job: S
                 <p
                   className={cx(
                     "hidden max-w-[45%] truncate text-sm sm:block",
-                    job.status === "failed" ? "text-rose-600 dark:text-rose-400" : "text-zinc-600 dark:text-zinc-300",
+                    job.status === "failed"
+                      ? "text-rose-600 dark:text-rose-400"
+                      : display(job).tone === "warning"
+                        ? "text-amber-600 dark:text-amber-400"
+                        : "text-zinc-600 dark:text-zinc-300",
                   )}
                   title={summary(job)}
                 >
@@ -207,8 +218,8 @@ export function JobDialog({ job, onClose }: { job: SyncJob | null; onClose: () =
         <div className="space-y-5 text-sm">
           <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
             <Item label="Status">
-              <Badge tone={STATUS[current.status].tone} dot>
-                {STATUS[current.status].label}
+              <Badge tone={display(current).tone} dot>
+                {display(current).label}
               </Badge>
             </Item>
             <Item label="Escopo">{scopeLabel(current)}</Item>

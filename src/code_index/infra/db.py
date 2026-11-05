@@ -7,6 +7,7 @@ pelo CocoIndex.
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -17,6 +18,7 @@ from pgvector.asyncpg import register_vector
 
 from code_index.settings import Settings
 
+log = logging.getLogger(__name__)
 SQL_DIR = Path(__file__).parent / "sql"
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -25,12 +27,23 @@ async def _init_connection(conn: asyncpg.Connection) -> None:
     await register_vector(conn)
 
 
-async def _ensure_vector_extension(dsn: str) -> None:
-    """Garante a extensão `vector` antes de registrar o codec (o CocoIndex também a cria)."""
+async def _ensure_extensions(dsn: str) -> None:
+    """Garante `vector` (obrigatória; antes de registrar o codec) e `pg_search` (BM25, opcional).
+
+    `pg_search` só existe na imagem do ParadeDB. Na imagem pgvector comum ela não está disponível
+    e a busca por termos usa o full-text do Postgres (ver infra/chunk_store.py).
+    """
     conn = await asyncpg.connect(dsn)
     try:
         if not await conn.fetchval("SELECT 1 FROM pg_extension WHERE extname = 'vector'"):
             await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        available = await conn.fetchval("SELECT 1 FROM pg_available_extensions WHERE name = 'pg_search'")
+        installed = await conn.fetchval("SELECT 1 FROM pg_extension WHERE extname = 'pg_search'")
+        if available and not installed:
+            try:
+                await conn.execute("CREATE EXTENSION IF NOT EXISTS pg_search")
+            except asyncpg.PostgresError as e:  # ex.: não carregada em shared_preload_libraries
+                log.warning("pg_search disponível mas não pôde ser criada (%s); seguindo sem BM25", e)
     finally:
         await conn.close()
 
@@ -42,8 +55,16 @@ def _check_identifier(name: str) -> str:
 
 
 async def create_pool(settings: Settings) -> asyncpg.Pool:
-    await _ensure_vector_extension(settings.database_url)
-    return await asyncpg.create_pool(settings.database_url, init=_init_connection, min_size=1)
+    await _ensure_extensions(settings.database_url)
+    return await asyncpg.create_pool(
+        settings.database_url,
+        init=_init_connection,
+        min_size=1,
+        # O pg_search avisa (WARNING) quando não usa o plano de agregação dele (ex.: COUNT ... GROUP BY):
+        # é só ruído. Vai como parâmetro de conexão porque o pool faz RESET ALL ao devolver a conexão
+        # (um SET no init seria perdido). Parâmetro com ponto é aceito mesmo sem a extensão.
+        server_settings={"paradedb.planner_warnings": "off"},
+    )
 
 
 async def migrate(pool: asyncpg.Pool, settings: Settings) -> list[str]:

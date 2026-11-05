@@ -157,3 +157,32 @@ def test_crd_dentro_de_codigo_python_nao_e_descartado() -> None:
     text = 'DOC = "kind: CustomResourceDefinition"\n'
 
     assert skip_reason("gen.py", "python", text) is None
+
+
+# ------------------------------------------------------------------ binários
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "GIF89a\x00\x01\x00\x80",                               # byte nulo
+        "\x47\x40\x00\x10" * 50,                                  # MPEG-TS com extensão .ts
+        "��\x01\x02abc��\x03\x04" * 100,      # bytes inválidos e de controle
+        "h\x00e\x00l\x00l\x00o\x00",                              # UTF-16 sem BOM lido como UTF-8
+    ],
+)
+def test_binario_e_ignorado(text: str) -> None:
+    assert skip_reason("video/aula.ts", "typescript", text) == "binário"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "export const x = 1;\n\tconsole.log(x)\r\n",
+        "// coment�rio com acento em Latin-1\nint a�o = 1;\n" * 20,   # poucos caracteres trocados
+        "\x1b[31mvermelho\x1b[0m\n",                                     # ESC de cores ANSI em script
+        "",
+    ],
+)
+def test_texto_nao_e_tratado_como_binario(text: str) -> None:
+    assert skip_reason("src/app.ts", "typescript", text) is None

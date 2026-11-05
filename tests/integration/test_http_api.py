@@ -114,12 +114,33 @@ def test_saude_e_autenticacao(server: Server) -> None:
 def test_scopes(server: Server) -> None:
     leitor, indexador, admin = client(server, "leitor"), client(server, "indexador"), client(server, "admin-bot")
     assert leitor.get("/api/v1/repos").status_code == 200
+    assert client(server).get("/api/v1/xray").status_code == 401
+    assert leitor.get("/api/v1/xray").status_code == 200
     assert leitor.post("/api/v1/sync", json={"dry_run": True}).status_code == 403
     assert leitor.post("/api/v1/repos", json={"source": "org/x"}).status_code == 403
     assert leitor.get("/api/v1/audit").status_code == 403
     assert indexador.post("/api/v1/sync", json={"dry_run": True, "discover": False}).status_code == 202
     assert indexador.get("/api/v1/audit").status_code == 403
     assert admin.get("/api/v1/audit").status_code == 200
+
+
+def test_openapi_scopes_e_previa(server: Server, monkeypatch: pytest.MonkeyPatch) -> None:
+    from code_index.services import CodeIndexService
+
+    async def catalog(self: CodeIndexService) -> list[dict[str, Any]]:
+        return [{"domain": "platform", "service": "scheduler", "key": "platform_scheduler.swagger.yaml",
+                 "modified": "2026-01-01", "size": 100}]
+
+    monkeypatch.setattr(CodeIndexService, "openapi_catalog", catalog)
+    reader = client(server, "leitor")
+    assert client(server).get("/api/v1/openapi/status").status_code == 401
+    assert reader.get("/api/v1/openapi/status").json() == []
+    selection = {"domain": "platform", "services": ["scheduler"]}
+    assert reader.get("/api/v1/openapi/catalog").status_code == 200
+    assert reader.post("/api/v1/openapi/preview", json=selection).json()["services"] == ["scheduler"]
+    assert reader.post("/api/v1/openapi/preview", json={"domain": "platform", "services": []}).status_code == 400
+    assert reader.post("/api/v1/openapi/index", json=selection).status_code == 403
+    assert client(server, "indexador").post("/api/v1/openapi/index", json=selection).status_code == 403
 
 
 def test_index_write_nao_registra_repo_desconhecido(server: Server) -> None:

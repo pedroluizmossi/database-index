@@ -209,6 +209,41 @@ dos manifestos: `package.json`, `pom.xml`, `pyproject.toml`, `setup.cfg`, `go.mo
 (`include_linked_docs=false`) para desligar. `--kind code|doc` (`kind`) restringe a código ou a documentação;
 README, `docs/` e outros Markdown/RST/AsciiDoc dos repos contam como `doc`.
 
+### APIs Swagger no S3
+
+A aba **APIs** permite listar domínios e serviços, ver uma prévia e iniciar a indexação (admin).
+A listagem e a prévia não geram embeddings. Pela CLI:
+
+```bash
+uv run code-index api domains
+uv run code-index api services --domain platform
+uv run code-index api index --domain platform --service scheduler --dry-run
+uv run code-index api index --domain platform --service scheduler
+uv run code-index api index --domain platform --dry-run
+uv run code-index api index --domain platform
+```
+
+Repita `--service` para selecionar vários serviços. Sem `--service`, seleciona o domínio inteiro,
+incluindo serviços adicionados no futuro, quando a fonte for sincronizada novamente. A seleção é
+persistida como fonte `docs__openapi-<domínio>`; seleções individuais são cumulativas. Uma execução
+com serviços específicos atualiza somente esses serviços e preserva os demais já indexados.
+Para atualizar a seleção persistida inteira use `code-index index docs__openapi-platform`.
+O download e a conversão são incrementais por ETag; cada operação vira um documento pesquisável.
+As operações preservam todos os campos e as referências locais alcançáveis são incluídas, com detecção
+de ciclos. Referências externas só são buscadas via HTTPS dentro do mesmo bucket configurado, sem
+redirecionamentos. As que não puderem ser resolvidas ficam sinalizadas no documento. Fontes que usam
+referências externas são verificadas novamente a cada sync. A indexação gera custos de embeddings; a prévia não.
+
+A descrição completa do serviço fica em uma página de visão geral; cada operação recebe somente a
+primeira linha. Operações e visão geral são ligadas por nome ao repo do serviço quando existe um único
+repo compatível (ignorando o prefixo `snr-`, separadores e o sufixo `-service` ou `-backend`).
+Quando há ambiguidade, nenhuma ligação automática é feita; vínculos manuais continuam disponíveis.
+
+Na interface, **Raio X** permite navegar entre repos, documentos e serviços de API indexados. O vínculo
+de cada item ao repo mostra sua origem. Relações entre documentos e APIs por um repo em comum são
+indicadas como inferidas; não comprovam que o documento descreva aquela API. A consulta usa o índice
+existente e não gera embeddings.
+
 ## Servidor HTTP: API REST + MCP
 
 `code-index serve` sobe num único processo:

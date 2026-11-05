@@ -20,7 +20,7 @@ import asyncpg
 
 from ..settings import Settings
 
-ORIGIN_ORDER = ("manual", "agent", "explicit", "tag", "url", "mention")  # da mais confiável para a menos
+ORIGIN_ORDER = ("manual", "agent", "explicit", "service", "tag", "url", "mention")  # da mais confiável para a menos
 
 
 def _doc_links(settings: Settings) -> str:
@@ -37,10 +37,39 @@ def links_sql(settings: Settings) -> str:
     return f"""
         SELECT m.doc_repo, m.doc_path, a.repo, m.origin
         FROM {m} m JOIN {a} a ON a.alias = m.term AND a.repo <> m.doc_repo
-        WHERE m.origin IN ('tag', 'url') OR (m.origin = 'mention' AND a.strong AND (m.doc_repo, m.doc_path) NOT IN (
+        WHERE left(m.doc_repo, 14) <> 'docs__openapi-' AND (m.origin IN ('tag', 'url') OR (m.origin = 'mention' AND a.strong AND (m.doc_repo, m.doc_path) NOT IN (
             SELECT m2.doc_repo, m2.doc_path FROM {m} m2
             JOIN {a} a2 ON a2.alias = m2.term AND a2.repo <> m2.doc_repo AND a2.strong
-            WHERE m2.origin = 'mention' GROUP BY 1, 2 HAVING count(DISTINCT a2.repo) > {max_repos}))
+            WHERE m2.origin = 'mention' GROUP BY 1, 2 HAVING count(DISTINCT a2.repo) > {max_repos})))
+        UNION
+        SELECT p.repo, p.path, matched.repo, 'service'
+        FROM {pages} p JOIN (
+          SELECT services.service, match.repo FROM (
+            SELECT DISTINCT split_part(path, '/', 2) AS service FROM {pages}
+            WHERE left(repo, 14) = 'docs__openapi-'
+          ) services CROSS JOIN LATERAL (
+            SELECT min(name) AS repo FROM (
+                SELECT name, rank, min(rank) OVER () AS best_rank FROM (
+                    SELECT name, CASE WHEN repo_name = service_name THEN 0 ELSE 1 END AS rank
+                    FROM (
+                        SELECT r.name,
+                          regexp_replace(regexp_replace(lower(regexp_replace(r.name, '^.*__', '')),
+                                         '^snr-', ''), '[^a-z0-9]', '', 'g') AS repo_name,
+                          regexp_replace(lower(services.service), '[^a-z0-9]', '', 'g') AS service_name
+                        FROM {r} r WHERE r.kind = 'code' AND NOT r.ignored
+                    ) names
+                    WHERE length(service_name) >= 4 AND (
+                        repo_name = service_name OR (
+                            length(regexp_replace(service_name, '(service|backend)$', '')) >= 4 AND
+                            regexp_replace(repo_name, '(service|backend)$', '') =
+                            regexp_replace(service_name, '(service|backend)$', '')
+                        )
+                    )
+                ) candidates
+            ) ranked WHERE rank = best_rank HAVING count(*) = 1
+          ) match WHERE match.repo IS NOT NULL
+        ) matched ON matched.service = split_part(p.path, '/', 2)
+        WHERE left(p.repo, 14) = 'docs__openapi-'
         UNION
         SELECT m.doc_repo, m.doc_path, r.name, 'explicit'
         FROM {m} m JOIN {r} r ON m.origin = 'explicit' AND r.kind = 'code' AND NOT r.ignored AND (r.name LIKE m.term OR r.name LIKE '%\\_\\_' || m.term)
@@ -70,6 +99,32 @@ class DocLinkStore:
             _doc_links(s),
         ))
 
+    async def openapi_counts(self, repos: list[str]) -> list[dict]:
+        """Conta documentos de operações por domínio e serviço já gravados no índice."""
+        if not repos or not await self.available():
+            return []
+        pages = self._settings.qualified(self._settings.doc_pages_table)
+        rows = await self._pool.fetch(
+            f"SELECT repo, split_part(path, '/', 1) AS domain, split_part(path, '/', 2) AS service, "
+            f"count(*) AS operations FROM {pages} WHERE repo = ANY($1::text[]) "
+            "AND split_part(path, '/', 3) <> '__overview.md' "
+            "GROUP BY repo, 2, 3", repos,
+        )
+        return [dict(row) for row in rows]
+
+    async def xray(self) -> dict:
+        """Inventário e vínculos existentes, sem truncar a lista de páginas."""
+        if not await self.available():
+            return {"available": False, "pages": [], "links": []}
+        pages = self._settings.qualified(self._settings.doc_pages_table)
+        rows = await self._pool.fetch(f"SELECT repo, path, title, url FROM {pages} ORDER BY repo, path")
+        links = await self._pool.fetch(
+            f"SELECT DISTINCT l.doc_repo, l.doc_path, l.repo, l.origin FROM ({links_sql(self._settings)}) l "
+            f"JOIN {pages} p ON p.repo = l.doc_repo AND p.path = l.doc_path "
+            "ORDER BY l.doc_repo, l.doc_path, l.repo, l.origin"
+        )
+        return {"available": True, "pages": [dict(r) for r in rows], "links": [dict(r) for r in links]}
+
     # ------------------------------------------------------------------ vínculos gravados (manual/agent)
 
     async def set_link(self, doc_repo: str, doc_path: str, repo: str, *, origin: str, reason: str) -> None:
@@ -98,14 +153,16 @@ class DocLinkStore:
         )
         return [{**dict(r), "created_at": r["created_at"].isoformat()} for r in rows]
 
-    async def overview(self, *, limit: int) -> list[dict]:
+    async def overview(self, *, limit: int, offset: int = 0, docs_only: bool = False) -> list[dict]:
         """Páginas indexadas, cada uma com os repos ligados: origens automáticas e gravadas (manual/agent)."""
         if not await self.available():
             return []
         s = self._settings
         pages = await self._pool.fetch(
-            f"SELECT repo, path, url, title FROM {s.qualified(s.doc_pages_table)} ORDER BY repo, path LIMIT $1",
-            max(1, min(limit, 2000)),
+            f"SELECT repo, path, url, title FROM {s.qualified(s.doc_pages_table)} "
+            "WHERE (NOT $3::boolean OR left(repo, 14) <> 'docs__openapi-') "
+            "ORDER BY repo, path LIMIT $1 OFFSET $2",
+            max(1, min(limit, 2000)), max(0, offset), docs_only,
         )
         links = await self._pool.fetch(f"SELECT doc_repo, doc_path, repo, origin FROM ({links_sql(s)}) l")
         manual = await self._pool.fetch(f"SELECT doc_repo, doc_path, repo, reason FROM {_doc_links(s)}")

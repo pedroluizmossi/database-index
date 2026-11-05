@@ -2,7 +2,7 @@
 
 - Toda requisição exige `Authorization: Bearer cix_...` com scope `search:read`
   (o SDK do MCP responde 401/403 antes de chegar às tools).
-- O MCP só lê: indexar (que gera custo na Voyage) fica na API e na interface, com confirmação.
+- O MCP só lê: indexar fica na API e na interface, com confirmação.
 - Proteção contra DNS rebinding: só aceita os hosts/origens configurados.
 - Cada chamada de tool passa pelo rate limit e vai para a auditoria (sem o conteúdo retornado).
 """
@@ -152,8 +152,12 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
             repos: limita a estes repositórios (nomes de list_repos).
             language: filtra por linguagem (ex.: "python", "java", "typescript").
             path_glob: filtra por caminho, ex.: "src/**/*.ts".
-            mode: "hybrid" (padrão), "semantic" ou "keyword".
-            rerank: reordena os candidatos com o reranker da Voyage (padrão: sim).
+            mode: "hybrid" (padrão) combina significado e termos; prefira para investigar comportamentos.
+                "semantic" busca por significado; use para explorar conceitos com palavras diferentes.
+                "keyword" busca termos e identificadores; use quando souber palavras específicas. Pode
+                perder implementações que usam outros nomes. Para texto exato, prefira grep_code.
+            rerank: reordena candidatos pela relevância para a consulta (padrão: sim). É independente
+                do mode; mantenha ativado para investigar, salvo necessidade específica.
             kind: "code" (só código), "doc" (só documentação) ou vazio (ambos).
             include_linked_docs: com `repos`, inclui as páginas de wiki ligadas a esses repos (padrão: sim).
             exclude_repos: repos que NÃO podem aparecer no resultado (nomes de list_repos).

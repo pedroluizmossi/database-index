@@ -110,6 +110,9 @@ async def test_wiki_ligada_aos_repos(int_settings: Settings, tmp_path: Path, fak
         result = await svc.sync(None, batch=None, do_discover=False, progress=False)
         assert result.errors == {}
         assert "docs__wiki" in result.indexed
+        graph = await svc.xray()
+        assert graph["available"] and sum(p["repo"] == "docs__wiki" for p in graph["pages"]) == 3
+        assert any(link["doc_repo"] == "docs__wiki" and link["repo"] == "snr-email-backend" for link in graph["links"])
         assert sorted(wiki.fetched) == [1, 2, 3]
         kinds = {r.name: r.kind for r in await svc.list_repos()}
         assert kinds["docs__wiki"] == "docs" and kinds["outro"] == "code"
@@ -294,6 +297,8 @@ async def test_visao_geral_e_vinculos_por_chave(int_settings: Settings, tmp_path
         overview = await svc.docs_overview()
         assert [(o["doc_repo"], o["doc_path"], o["page"], o["root"]) for o in overview] == [
             ("docs__wiki", "pt-br/Plataforma/Email.md", "Plataforma/Email", "Plataforma")]
+        assert await svc.docs_overview(docs_only=True) == overview
+        assert await svc.docs_overview(docs_only=True, offset=1) == []
         assert overview[0]["links"] == []
 
         # Gravado pela chave da página (como a tela envia).

@@ -1,6 +1,7 @@
 import { getJson, getText, postJson, sendJson } from "./client";
 import type {
   AuditEntry,
+  XrayData,
   Hit,
   Me,
   NewToken,
@@ -27,6 +28,13 @@ function encodeRepoPath(repo: string, path: string): string {
 const seg = (value: string) => encodeURIComponent(value);
 
 export const api = {
+  xray: () => getJson<XrayData>("/api/v1/xray"),
+  openapiCatalog: () => getJson<{ domain: string; service: string; key: string; size: number; url: string }[]>("/api/v1/openapi/catalog"),
+  openapiStatus: () => getJson<{ domain: string; repo: string; all_services: boolean; selected_services: string[]; status: string; indexed_at: string | null; error: string | null; services: { service: string; operations: number }[] }[]>("/api/v1/openapi/status"),
+  openapiPreview: (domain: string, services: string[] | null) =>
+    postJson<{ domain: string; services: string[]; bytes: number }>("/api/v1/openapi/preview", { domain, services }),
+  openapiIndex: (domain: string, services: string[] | null) =>
+    postJson<SyncStart>("/api/v1/openapi/index", { domain, services }),
   // leitura
   me: (token?: string) => getJson<Me>("/api/v1/me", { token }),
   repos: () => getJson<Repo[]>("/api/v1/repos"),
@@ -39,7 +47,7 @@ export const api = {
   // Redescobrir a org (API do GitHub, alguns segundos) só faz sentido no lote automático:
   // com repos escolhidos pelo nome, a seleção não depende dela.
   docsPreview: (name: string) => getJson<DocsPreview>(`/api/v1/docs/${encodeURIComponent(name)}/preview`),
-  docsOverview: () => getJson<DocPageRow[]>("/api/v1/docs/overview"),
+  docsOverview: (offset = 0) => getJson<DocPageRow[]>("/api/v1/docs/overview", { query: { limit: 2000, offset, docs_only: true } }),
   repoDocs: (name: string) => getJson<RepoDocLink[]>(`/api/v1/repos/${seg(name)}/docs`),
   addDocLink: (body: { doc_repo: string; doc_path: string; repo: string; reason: string }) =>
     postJson<unknown>("/api/v1/docs/links", body),

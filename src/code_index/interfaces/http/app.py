@@ -113,6 +113,11 @@ class SyncIn(BaseModel):
     dry_run: bool = False
 
 
+class OpenApiSelection(BaseModel):
+    domain: str = Field(min_length=1, max_length=100)
+    services: list[str] | None = None
+
+
 class GrepIn(BaseModel):
     pattern: str = Field(min_length=1, max_length=500)
     repos: list[str] | None = None
@@ -344,8 +349,13 @@ def create_app(settings: Settings) -> FastAPI:
     @app.get("/api/v1/docs/overview", tags=["docs"],
              summary="Páginas de documentação indexadas, com os repos ligados a cada uma")
     async def docs_overview(request: Request, limit: int = Query(500, ge=1, le=2000),
+                            offset: int = Query(0, ge=0), docs_only: bool = False,
                             _: Principal = Depends(require(SEARCH_READ))) -> list[dict[str, Any]]:
-        return await get_service(request).docs_overview(limit=limit)
+        return await get_service(request).docs_overview(limit=limit, offset=offset, docs_only=docs_only)
+
+    @app.get("/api/v1/xray", tags=["repos"], summary="Inventário e vínculos para o Raio X")
+    async def xray(request: Request, _: Principal = Depends(require(SEARCH_READ))) -> dict[str, Any]:
+        return await get_service(request).xray()
 
     @app.get("/api/v1/repos/{name}/skipped", tags=["repos"],
              summary="Arquivos descartados na indexação de um repo, com o motivo")
@@ -426,6 +436,37 @@ def create_app(settings: Settings) -> FastAPI:
     async def refresh_orgs(request: Request, name: str | None = None,
                            principal: Principal = Depends(require(ADMIN))) -> dict[str, Any]:
         return await audited(request, principal, "org:refresh", {"name": name}, get_service(request).refresh_orgs(name))
+
+    @app.get("/api/v1/openapi/catalog", tags=["openapi"])
+    async def openapi_catalog(request: Request, _: Principal = Depends(require(SEARCH_READ))) -> list[dict[str, Any]]:
+        return await get_service(request).openapi_catalog()
+
+    @app.get("/api/v1/openapi/status", tags=["openapi"])
+    async def openapi_status(request: Request, _: Principal = Depends(require(SEARCH_READ))) -> list[dict[str, Any]]:
+        return await get_service(request).openapi_status()
+
+    @app.post("/api/v1/openapi/preview", tags=["openapi"])
+    async def openapi_preview(body: OpenApiSelection, request: Request,
+                              _: Principal = Depends(require(SEARCH_READ))) -> dict[str, Any]:
+        try:
+            return await get_service(request).openapi_preview(body.domain, body.services)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.post("/api/v1/openapi/index", tags=["openapi"], status_code=202)
+    async def openapi_index(body: OpenApiSelection, request: Request,
+                            principal: Principal = Depends(require(ADMIN))) -> dict[str, Any]:
+        svc = get_service(request)
+        enforce_rate_limit(request.app.state.limiter, settings, principal, "sync")
+        try:
+            job = await svc.start_sync(principal, None, batch=1, do_discover=False,
+                                       openapi_domain=body.domain, openapi_services=body.services)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except RuntimeError as e:
+            raise HTTPException(status_code=409, detail=str(e)) from e
+        await svc.audit(principal, "openapi:index", params={"job": job.id, **body.model_dump()})
+        return {"job_id": job.id, "status": job.status, "url": f"/api/v1/sync/jobs/{job.id}"}
 
     # ---------------------------------------------------------- sync
 

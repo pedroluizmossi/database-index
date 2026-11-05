@@ -167,7 +167,7 @@ export interface AuditEntry {
 }
 
 /** Origem de um vínculo: automática (explicit, tag, url, mention) ou gravada (manual, agent). */
-export type OriginKind = "manual" | "agent" | "explicit" | "tag" | "url" | "mention";
+export type OriginKind = "manual" | "agent" | "explicit" | "service" | "tag" | "url" | "mention";
 
 export interface DocLink {
   repo: string;
@@ -186,6 +186,12 @@ export interface DocPageRow {
   title: string | null;
   url: string | null;
   links: DocLink[];
+}
+
+export interface XrayData {
+  available: boolean;
+  pages: { repo: string; path: string; title: string | null; url: string | null }[];
+  links: { doc_repo: string; doc_path: string; repo: string; origin: OriginKind }[];
 }
 
 /** Página ligada a um repo (GET /api/v1/repos/{name}/docs). */

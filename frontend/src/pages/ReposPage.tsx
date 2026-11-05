@@ -14,6 +14,7 @@ import {
   ChevronLeft,
   ChevronRight,
   BookOpen,
+  Network,
   Play,
   Plus,
   RefreshCw,
@@ -35,6 +36,7 @@ import { SyncDialog } from "../components/SyncDialog";
 import { JobDialog, JobsPanel, RunningJobBanner, useJobs } from "../components/JobsPanel";
 import { formatDateTime, repoShortName, timeAgo, cx } from "../lib/utils";
 import { Alert, Badge, Button, EmptyState, Field, IconButton, Panel, Segmented, Select, Skeleton, inputClass } from "../components/ui";
+import type { XrayTarget } from "../lib/xray";
 
 type StatusFilter = "all" | RepoStatusValue;
 type SortKey = "name" | "status" | "language" | "files" | "chunks" | "indexed_at";
@@ -52,7 +54,7 @@ const STATUS_LABEL: Record<RepoStatusValue, string> = {
 
 const numberFormat = new Intl.NumberFormat("pt-BR");
 
-export function ReposPage() {
+export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) {
   const { repos, orgs, loading, reload } = useIndex();
   const { session } = useAuth();
   const { push } = useToast();
@@ -315,7 +317,7 @@ export function ReposPage() {
                 </tr>
               )}
               {visible.map((r) => (
-                <RepoRow key={r.name} repo={r} actions={rowActions} selection={selection} />
+                <RepoRow key={r.name} repo={r} actions={rowActions} selection={selection} onXray={onXray} />
               ))}
             </tbody>
           </table>
@@ -333,7 +335,7 @@ export function ReposPage() {
             </li>
           )}
           {visible.map((r) => (
-            <RepoCard key={r.name} repo={r} actions={rowActions} selection={selection} />
+            <RepoCard key={r.name} repo={r} actions={rowActions} selection={selection} onXray={onXray} />
           ))}
         </ul>
 
@@ -701,7 +703,7 @@ function Checkbox({
   );
 }
 
-function RepoRow({ repo: r, actions, selection }: { repo: Repo; actions: RowActions | null; selection: Selection | null }) {
+function RepoRow({ repo: r, actions, selection, onXray }: { repo: Repo; actions: RowActions | null; selection: Selection | null; onXray: (target: XrayTarget) => void }) {
   const checked = selection?.isSelected(r) ?? false;
   return (
     <tr
@@ -731,6 +733,7 @@ function RepoRow({ repo: r, actions, selection }: { repo: Repo; actions: RowActi
             </p>
             <p className="truncate text-xs text-zinc-500 dark:text-zinc-400">{r.org ?? "repositório avulso"}</p>
             <RepoDocsButton repo={r} />
+            {r.kind === "code" && <button type="button" aria-label={`Raio X de ${r.name}`} onClick={() => onXray({ kind: "repo", id: r.name })} className="ml-3 inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"><Network className="size-3.5" aria-hidden="true" /> Raio X</button>}
             {r.skipped > 0 && (
               <p
                 className="text-xs text-amber-600 dark:text-amber-400"
@@ -774,7 +777,7 @@ function RepoRow({ repo: r, actions, selection }: { repo: Repo; actions: RowActi
 }
 
 /** Cartão para telas pequenas: mostra o essencial e as ações com texto. */
-function RepoCard({ repo: r, actions, selection }: { repo: Repo; actions: RowActions | null; selection: Selection | null }) {
+function RepoCard({ repo: r, actions, selection, onXray }: { repo: Repo; actions: RowActions | null; selection: Selection | null; onXray: (target: XrayTarget) => void }) {
   const checked = selection?.isSelected(r) ?? false;
   return (
     <li className={cx("space-y-3 p-4", checked && "bg-indigo-50/60 dark:bg-indigo-500/10")}>
@@ -795,6 +798,7 @@ function RepoCard({ repo: r, actions, selection }: { repo: Repo; actions: RowAct
           </p>
           <p className="truncate text-xs text-zinc-500 dark:text-zinc-400">{r.org ?? "repositório avulso"}</p>
           <RepoDocsButton repo={r} />
+          {r.kind === "code" && <button type="button" aria-label={`Raio X de ${r.name}`} onClick={() => onXray({ kind: "repo", id: r.name })} className="ml-3 inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"><Network className="size-3.5" aria-hidden="true" /> Raio X</button>}
           {r.skipped > 0 && (
             <p
               className="text-xs text-amber-600 dark:text-amber-400"

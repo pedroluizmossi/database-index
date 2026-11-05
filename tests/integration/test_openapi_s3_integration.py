@@ -111,3 +111,34 @@ async def test_indexacao_seletiva_e_incremental(int_settings: Settings, fake_llm
         assert (await svc.sync(["snr-scheduler-backend"], batch=None, do_discover=False, progress=False)).errors == {}
         assert await svc.linked_docs("snr-scheduler-service") == []
         assert await svc.linked_docs("snr-scheduler-backend") == []
+
+
+async def test_vinculo_pelo_sdl_do_repo(int_settings: Settings, fake_llm: Any,
+                                        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Repo com nome sem relação com o serviço liga pela declaração `domain`/`service` do .sdl."""
+    from code_index.sources import openapi_s3
+    from code_index.services import open_service
+
+    xml = '''<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><IsTruncated>false</IsTruncated>
+      <Contents><Key>platform_blob_service.swagger.yaml</Key><ETag>1</ETag><Size>1</Size></Contents></ListBucketResult>'''
+    swagger = "swagger: '2.0'\ninfo: {title: blob}\npaths: {/blob: {get: {responses: {}}}}\n"
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=xml if "list-type" in req.url.params else swagger)
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(openapi_s3.httpx, "AsyncClient", lambda *args, **kwargs: real(transport=httpx.MockTransport(handler)))
+    use_settings(int_settings)
+    async with open_service(int_settings) as svc:
+        folder = tmp_path / "armazenamento-arquivos"
+        folder.mkdir()
+        (folder / "blob.sdl").write_text('domain platform ("p")\nservice blob_service ("Blob") {\n'
+                                         '  endpoints { query healthcheck { } }\n}\n')
+        (folder / "main.py").write_text("def exemplo():\n    return 1\n")
+        await svc.add_repo(str(folder), name="armazenamento-arquivos")
+        name = await svc.register_openapi("platform", ["blob_service"])
+        res = await svc.sync(["armazenamento-arquivos", name], batch=None, do_discover=False, progress=False)
+        assert res.errors == {}
+        # o nome não casa, mas o sync coleta os fatos do .sdl e recalcula as relações sozinho
+        linked = await svc.linked_docs("armazenamento-arquivos")
+        assert len(linked) == 1 and linked[0]["origins"] == ["sdl"]

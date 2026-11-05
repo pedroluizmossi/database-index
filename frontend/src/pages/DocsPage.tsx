@@ -3,9 +3,10 @@ import { BookOpen, ExternalLink, Network, Plus, Search, X } from "lucide-react";
 import { pageId, type XrayTarget } from "../lib/xray";
 import { api } from "../api/endpoints";
 import { describeError } from "../api/client";
-import type { DocPageRow } from "../api/types";
+import { API_DOC_TYPES, type DocPageRow } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { AddDocLinkDialog } from "../components/AddDocLinkDialog";
+import { DocSuggestionsPanel } from "../components/DocSuggestionsPanel";
 import { OriginBadges } from "../components/docs";
 import { useToast } from "../components/Toaster";
 import { Alert, Button, EmptyState, IconButton, Panel, Select, Skeleton, Switch, inputClass } from "../components/ui";
@@ -39,7 +40,7 @@ export function DocsPage({ onXray }: { onXray: (target: XrayTarget) => void }) {
         }
         pages.push(...batch);
       } while (batch.length === FETCH_SIZE);
-      setRows(pages.filter((row) => !row.doc_repo.startsWith("docs__openapi-")));
+      setRows(pages.filter((row) => !API_DOC_TYPES.includes(row.type)));
       setError(null);
     } catch (err) {
       setError(describeError(err));
@@ -93,6 +94,8 @@ export function DocsPage({ onXray }: { onXray: (target: XrayTarget) => void }) {
           </p>
         )}
       </header>
+
+      <DocSuggestionsPanel admin={admin} onChanged={() => void load()} />
 
       <Panel className="flex flex-wrap items-center gap-3 p-3">
         <div className="relative min-w-[14rem] flex-1">

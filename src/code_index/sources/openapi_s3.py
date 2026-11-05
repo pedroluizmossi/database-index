@@ -9,14 +9,20 @@ import posixpath
 import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from typing import Any
 from pathlib import Path
 from urllib.parse import quote, unquote, urldefrag, urljoin, urlsplit
 
+import asyncpg
 import httpx
 import yaml
 
+from ..domain.doc_links import parse_front_matter
+from ..domain.documents import API_OPERATION, API_OVERVIEW, API_TYPES, DocumentMeta
 from ..domain.models import DocSource
+from ..domain.relations import DESCRIBES, DOCUMENTS, Relation, op_key, repo_key
 from ..settings import Settings
+from .base import Linker
 
 log = logging.getLogger(__name__)
 _RENDER_VERSION = 3
@@ -315,7 +321,7 @@ async def _external_documents(client: httpx.AsyncClient, content: str, item: Swa
 
 async def sync_source(source: DocSource, dest: Path, settings: Settings, only: frozenset[str] | None = None) -> str:
     """Baixa os selecionados e só altera arquivos depois de validar todos os documentos."""
-    manifest_path = dest / ".openapi-manifest.json"
+    manifest_path = dest / _MANIFEST_NAME
     old = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
     async with httpx.AsyncClient(timeout=60, follow_redirects=False) as client:
         items = select_objects(await list_objects(client, source.url), source.locale,
@@ -371,3 +377,154 @@ async def sync_source(source: DocSource, dest: Path, settings: Settings, only: f
     raw = json.dumps(new, ensure_ascii=False, sort_keys=True)
     manifest_path.write_text(raw, encoding="utf-8")
     return hashlib.sha256(raw.encode()).hexdigest()
+
+
+# ------------------------------------------------------------------ plugin
+
+_OP_PATH = re.compile(r"^/([^/\s]+)/(queries|actions|signals)/([A-Za-z_]\w*)$")
+_OP_KIND = {"queries": "query", "actions": "action", "signals": "signal"}
+_MANIFEST_NAME = ".openapi-manifest.json"
+
+
+def _operation_attrs(title: str, service: str) -> dict[str, str]:
+    """'POST /email/queries/listBlacklistedEmails' (título que esta fonte grava) → método, caminho e operação."""
+    method, _, http_path = title.strip().partition(" ")
+    attrs = {"method": method.upper(), "http_path": http_path.strip()}
+    m = _OP_PATH.match(attrs["http_path"])
+    if m and m.group(1).lower() == service.lower():
+        attrs.update(kind=_OP_KIND[m.group(2)], operation=m.group(3))
+    return attrs
+
+
+class OpenApiPlugin:
+    """Swagger 2.0 publicado num bucket S3: uma página por operação + visão geral por serviço."""
+
+    type = "openapi_s3"
+    label = "OpenAPI (S3)"
+
+    async def fetch(self, source: DocSource, dest: Path, settings: Settings, *,
+                    only: frozenset[str] | None = None) -> str:
+        return await sync_source(source, dest, settings, only=only)
+
+    async def preview(self, source: DocSource, settings: Settings, *, limit: int) -> dict[str, Any]:
+        """Serviços do domínio que entrariam (lista o bucket; não baixa as especificações)."""
+        async with httpx.AsyncClient(timeout=60) as client:
+            items = [x for x in await list_objects(client, source.url) if x.domain == source.locale]
+        selected = [x for x in items if not source.include or x.service in source.include]
+        cap = max(1, min(limit, 1000))
+        return {"name": source.repo_name, "url": source.url, "locale": source.locale, "total": len(selected),
+                "pages_in_locale": len(items), "roots": [{"root": source.locale, "pages": len(selected)}],
+                "pages": [{"path": x.key, "title": x.service, "url": x.url, "tags": [source.locale, x.service],
+                           "updated_at": x.modified} for x in selected[:cap]],
+                "truncated": len(selected) > cap}
+
+    def documents(self, source: DocSource, dest: Path) -> list[DocumentMeta]:
+        try:
+            manifest = json.loads((dest / _MANIFEST_NAME).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        out: list[DocumentMeta] = []
+        for key, entry in manifest.items():
+            m = _KEY.fullmatch(key)
+            if not m:
+                continue
+            domain, service = m.group(1), m.group(2)
+            for rel in entry.get("files", []):
+                file = dest / rel
+                if not file.is_file():
+                    continue
+                with file.open(encoding="utf-8", errors="replace") as fh:
+                    meta = parse_front_matter(fh.read(4096))[0]
+                title = str(meta.get("title") or rel)
+                overview = rel.endswith("/__overview.md")
+                attrs: dict[str, object] = {"domain": domain, "service": service}
+                if not overview:
+                    attrs.update(_operation_attrs(title, service))
+                out.append(DocumentMeta(
+                    path=rel, type=API_OVERVIEW if overview else API_OPERATION, title=title,
+                    url=str(meta.get("url") or ""), tags=tuple(str(t) for t in meta.get("tags") or []),
+                    updated_at=str(entry.get("etag") or ""), attrs=attrs,
+                ))
+        return out
+
+    def linkers(self) -> list[Linker]:
+        return [DescribesLinker(), ServiceNameLinker(), SdlLinker()]
+
+
+class DescribesLinker:
+    """Página de operação → operação (`op:domínio/serviço/operação`), pelos atributos da própria página."""
+
+    name = "openapi-describes"
+    origins = frozenset({"source"})
+
+    async def run(self, conn: asyncpg.Connection, settings: Settings) -> list[Relation]:
+        rows = await conn.fetch(
+            f"""SELECT key, attrs->>'domain' AS domain, attrs->>'service' AS service, attrs->>'operation' AS op,
+                       attrs->>'kind' AS kind
+                FROM "{settings.pg_schema}".documents
+                WHERE present AND type = $1 AND attrs ? 'operation'""",
+            API_OPERATION,
+        )
+        return [Relation(r["key"], op_key(r["domain"], r["service"], r["op"]), DESCRIBES, "source",
+                         evidence={"kind": r["kind"]}) for r in rows]
+
+
+class ServiceNameLinker:
+    """Páginas de um serviço de API → o único repo de código com o mesmo nome (sem `snr-`, separadores e
+    sufixo -service/-backend). Ambíguo (2+ repos) → nenhum vínculo."""
+
+    name = "openapi-service-name"
+    origins = frozenset({"service"})
+
+    async def run(self, conn: asyncpg.Connection, settings: Settings) -> list[Relation]:
+        s = f'"{settings.pg_schema}"'
+        rows = await conn.fetch(
+            f"""WITH services AS (
+                  SELECT DISTINCT attrs->>'service' AS service FROM {s}.documents
+                  WHERE present AND type = ANY($1::text[])
+                ), names AS (
+                  SELECT services.service, r.name,
+                         regexp_replace(regexp_replace(lower(regexp_replace(r.name, '^.*__', '')), '^snr-', ''),
+                                        '[^a-z0-9]', '', 'g') AS repo_name,
+                         regexp_replace(lower(services.service), '[^a-z0-9]', '', 'g') AS service_name
+                  FROM services CROSS JOIN {s}.repos r WHERE r.kind = 'code' AND NOT r.ignored
+                ), candidates AS (
+                  SELECT service, name, CASE WHEN repo_name = service_name THEN 0 ELSE 1 END AS rank FROM names
+                  WHERE length(service_name) >= 4 AND (repo_name = service_name OR (
+                      length(regexp_replace(service_name, '(service|backend)$', '')) >= 4 AND
+                      regexp_replace(repo_name, '(service|backend)$', '') =
+                      regexp_replace(service_name, '(service|backend)$', '')))
+                ), best AS (
+                  SELECT service, min(name) AS repo FROM (
+                    SELECT service, name, rank, min(rank) OVER (PARTITION BY service) AS best_rank FROM candidates
+                  ) c WHERE rank = best_rank GROUP BY service HAVING count(*) = 1
+                )
+                SELECT d.key, best.repo, best.service FROM {s}.documents d
+                JOIN best ON best.service = d.attrs->>'service'
+                WHERE d.present AND d.type = ANY($1::text[])""",
+            sorted(API_TYPES),
+        )
+        return [Relation(r["key"], repo_key(r["repo"]), DOCUMENTS, "service", evidence={"service": r["service"]})
+                for r in rows]
+
+
+class SdlLinker:
+    """Páginas de um serviço de API → repos cujo `.sdl` declara o mesmo domain/service."""
+
+    name = "openapi-sdl"
+    origins = frozenset({"sdl"})
+
+    async def run(self, conn: asyncpg.Connection, settings: Settings) -> list[Relation]:
+        s = f'"{settings.pg_schema}"'
+        rows = await conn.fetch(
+            f"""SELECT DISTINCT d.key, c.repo, sdl->>'path' AS sdl_path
+                FROM {s}.repo_cards c
+                CROSS JOIN LATERAL jsonb_array_elements(c.material->'facts'->'sdl') sdl
+                JOIN {s}.documents d ON d.present AND d.type = ANY($1::text[])
+                     AND lower(d.attrs->>'domain') = lower(sdl->>'domain')
+                     AND lower(d.attrs->>'service') = lower(sdl->>'service')
+                JOIN {s}.repos r ON r.name = c.repo AND r.kind = 'code' AND NOT r.ignored""",
+            sorted(API_TYPES),
+        )
+        return [Relation(r["key"], repo_key(r["repo"]), DOCUMENTS, "sdl", evidence={"sdl": r["sdl_path"]})
+                for r in rows]

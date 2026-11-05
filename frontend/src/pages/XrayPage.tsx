@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, BookOpen, Braces, ChevronRight, Database, ExternalLink, FileCode2, FileText, GitBranch, Network, RefreshCw, Search } from "lucide-react";
 import { api } from "../api/endpoints";
 import { describeError } from "../api/client";
-import type { OriginKind, Repo, XrayData } from "../api/types";
+import { API_DOC_TYPES, type OriginKind, type Repo, type XrayData } from "../api/types";
 import { FileDrawer, type FileTarget } from "../components/FileDrawer";
 import { OriginBadges } from "../components/docs";
 import { Alert, Badge, Button, EmptyState, Panel, Skeleton, inputClass } from "../components/ui";
@@ -34,16 +34,16 @@ function buildGraph(data: XrayData, repos: Repo[]): Graph {
   const pageTargets = new Map<string, XrayTarget>();
   for (const p of data.pages) {
     const pid = pageId(p.repo, p.path);
-    if (p.repo.startsWith("docs__openapi-")) {
-      const [domain, service, file] = p.path.split("/");
-      if (!domain || !service || !file) continue;
+    if (API_DOC_TYPES.includes(p.type)) {
+      const { domain, service } = p.attrs;
+      if (!domain || !service) continue;
       const id = apiId(p.repo, domain, service);
       let node = apiNodes.get(id);
       if (!node) {
         node = { kind: "api", id, title: service, subtitle: domain, operations: [], url: p.url };
         apiNodes.set(id, node);
       }
-      if (file !== "__overview.md") node.operations?.push(p);
+      if (p.type === "api_operation") node.operations?.push(p);
       pageTargets.set(pid, { kind: "api", id });
     } else {
       nodes.push({ kind: "doc", id: pid, title: p.title || p.path.split("/").pop() || p.path,

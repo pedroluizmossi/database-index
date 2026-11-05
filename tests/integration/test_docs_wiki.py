@@ -338,3 +338,78 @@ async def test_pagina_ignorada_some_da_busca_e_volta(int_settings: Settings, fak
         assert await svc.unignore_doc("wiki", "Plataforma/Email") is False
         volta = await svc.search("envio transacional de mensagens", kind="doc", mode="keyword", rerank=False)
         assert {h.path for h in volta} == {"pt-br/Plataforma/Email.md"}
+
+
+async def test_fila_de_vinculos_sugeridos_por_llm(int_settings: Settings, tmp_path: Path, fake_llm: Any,
+                                                  wiki: FakeWiki) -> None:
+    """Todas as páginas → tarefa para agent → sugestões (adicionar e remover) que só valem depois de aprovadas."""
+    settings = int_settings.model_copy(update={"wikijs_token": SecretStr("tok-wiki")})
+    use_settings(settings)
+    from code_index.services import open_service
+
+    wiki.pages = {
+        1: {"path": "Plataforma/Remetente", "title": "Configurar remetente", "tags": [],
+            "content": "# Remetente\n\nComo configurar o remetente na tela."},
+        2: {"path": "Plataforma/Processo", "title": "Processo de deploy", "tags": [],
+            "content": "# Processo\n\nFluxo geral do time. Exemplo de repo: snr-email-backend."},
+    }
+    wiki.updated = {pid: "2026-01-01T00:00:00Z" for pid in wiki.pages}
+    front = write(tmp_path / "front", {"src/remetente.ts": "export function configurarRemetente() { return 1; }\n"})
+    backend = write(tmp_path / "snr-email-backend", {"src/sender.py": "def send():\n    return 1\n"})
+    remetente, processo = "pt-br/Plataforma/Remetente.md", "pt-br/Plataforma/Processo.md"
+
+    async with open_service(settings) as svc:
+        await svc.add_repo(str(front), name="email-front")
+        await svc.add_repo(str(backend), name="snr-email-backend")
+        await svc.add_docs("wiki", url=WIKI, locale="pt-br", include=(), exclude=(), links=[])
+        assert (await svc.sync(None, batch=None, do_discover=False, progress=False)).errors == {}
+        # a menção solta liga o processo ao backend (heurística)
+        assert [d["path"] for d in await svc.linked_docs("snr-email-backend")] == [processo]
+
+        assert await svc.enrich_next(kind="doc_links", scope="sem-vinculo") is not None  # só o remetente
+        status = await svc.enrich_status()
+        assert status["docs"]["pending_unlinked"] == 0 and status["docs"]["pending_pages"] == 1
+        [leased] = status["leased"]
+        assert await svc.enrich_release(leased["id"])
+
+        task = await svc.enrich_next(kind="doc_links", agent="haiku")  # escopo padrão: todas
+        assert task is not None and task["folder"] == "pt-br/Plataforma"
+        assert sorted(task["pages"]) == [processo, remetente]
+        assert "snr-email-backend (termo do texto igual a um apelido forte do repo) [contestável]" in task["text"]
+        assert await svc.enrich_next(kind="doc_links") is None  # as duas estão reservadas
+
+        with pytest.raises(ValueError, match="falta veredito para snr-email-backend"):
+            await svc.enrich_submit(task["id"], json.dumps({"pages": [
+                {"path": remetente, "repos": []}, {"path": processo, "repos": []}]}))
+        res = await svc.enrich_submit(task["id"], json.dumps({"pages": [
+            {"path": remetente, "repos": [{"repo": "email-front", "basis": "assunto", "confidence": "alta",
+                                           "why": "tela de configuração do remetente"}]},
+            {"path": processo, "repos": [], "nota": "processo genérico", "vinculos_atuais": [
+                {"repo": "snr-email-backend", "veredito": "remover", "confidence": "alta", "why": "só um exemplo"}]},
+        ]}))
+        assert res == {"kind": "doc_links", "repo": "docs__wiki", "pages": 2, "suggested": 2, "removals": 1,
+                       "remaining": 0}
+
+        # nada vale antes da aprovação; páginas analisadas saem da fila
+        assert await svc.linked_docs("email-front") == []
+        assert [d["path"] for d in await svc.linked_docs("snr-email-backend")] == [processo]
+        assert await svc.enrich_next(kind="doc_links") is None
+        sugs = {(s["action"], s["repo"]) for s in await svc.doc_suggestions()}
+        assert sugs == {("add", "email-front"), ("remove", "snr-email-backend")}
+        assert (await svc.enrich_status())["docs"]["suggested_remove"] == 1
+
+        assert await svc.approve_doc_suggestions(confidence="alta", action="add") == 1
+        assert [(d["path"], d["origins"]) for d in await svc.linked_docs("email-front")] == [(remetente, ["llm"])]
+        assert await svc.approve_doc_suggestions(confidence="alta") == 1  # a remoção
+        assert await svc.linked_docs("snr-email-backend") == []
+
+        # rejeitar desfaz: o vínculo automático volta; a sugestão rejeitada não volta para a fila
+        assert await svc.review_doc_suggestion("docs__wiki", processo, "snr-email-backend", approve=False)
+        assert [d["path"] for d in await svc.linked_docs("snr-email-backend")] == [processo]
+        assert {s["repo"] for s in await svc.doc_suggestions(status="rejected")} == {"snr-email-backend"}
+
+        # vínculo manual por cima de uma remoção aprovada vale (a remoção só anula a heurística: a menção)
+        assert await svc.review_doc_suggestion("docs__wiki", processo, "snr-email-backend", approve=True)
+        assert await svc.linked_docs("snr-email-backend") == []
+        await svc.link_doc_key("docs__wiki", processo, "snr-email-backend", reason="é sim")
+        assert [d["origins"] for d in await svc.linked_docs("snr-email-backend")] == [["manual"]]

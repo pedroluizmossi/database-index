@@ -27,6 +27,7 @@ from itsdangerous import BadSignature, URLSafeTimedSerializer
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from ...domain.relations import origins_payload
 from ...domain.auth import ADMIN, INDEX_WRITE, SEARCH_READ, Principal
 from ...infra.google_oidc import GoogleOIDC, LoginError
 from ...services import CodeIndexService, open_service
@@ -147,6 +148,13 @@ class DocLinkIn(BaseModel):
     doc_path: str = Field(min_length=1, max_length=1000)
     repo: str = Field(min_length=1, max_length=200)
     reason: str = Field("", max_length=500)
+
+
+class SuggestionReviewIn(BaseModel):
+    doc_repo: str = Field(min_length=1, max_length=200)
+    doc_path: str = Field(min_length=1, max_length=1000)
+    repo: str = Field(min_length=1, max_length=200)
+    approve: bool
 
 
 class TokenIn(BaseModel):
@@ -340,11 +348,85 @@ def create_app(settings: Settings) -> FastAPI:
         rows = await get_service(request).list_repos(status=status_, org=org, name=name)
         return [r.to_dict() for r in rows]
 
+    @app.get("/api/v1/repos/find", tags=["repos"],
+             summary="Repos cujo cartão casa com a pergunta (full-text, sem custo de API)")
+    async def find_repos(request: Request, q: str = Query(..., min_length=1, max_length=500),
+                         limit: int = Query(10, ge=1, le=50),
+                         _: Principal = Depends(require(SEARCH_READ))) -> list[dict[str, Any]]:
+        try:
+            return await get_service(request).find_repos(q, limit=limit)
+        except ValueError as e:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from None
+
+    @app.get("/api/v1/api-impls", tags=["openapi"],
+             summary="Onde uma operação da API é implementada (handler do .sdl; sem custo)")
+    async def api_impls(request: Request, operation: str = Query(..., min_length=1, max_length=300),
+                        service: str | None = None, domain: str | None = None,
+                        limit: int = Query(20, ge=1, le=100),
+                        _: Principal = Depends(require(SEARCH_READ))) -> list[dict[str, Any]]:
+        try:
+            return await get_service(request).find_api_impl(operation, service=service, domain=domain, limit=limit)
+        except ValueError as e:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from None
+
+    @app.get("/api/v1/repos/{name}/card", tags=["repos"],
+             summary="Cartão do repo (resumo escrito por agent) e fatos extraídos sem LLM")
+    async def repo_card(name: str, request: Request, _: Principal = Depends(require(SEARCH_READ))) -> dict[str, Any]:
+        try:
+            info = await get_service(request).repo_card(name)
+        except ValueError as e:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(e)) from None
+        if info is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "sem cartão nem fatos para este repo")
+        return info
+
     @app.get("/api/v1/docs/{name}/preview", tags=["docs"],
              summary="Prévia das páginas de uma fonte de documentação (sem custo)")
     async def docs_preview(name: str, request: Request, limit: int = Query(200, ge=1, le=1000),
                            _: Principal = Depends(require(SEARCH_READ))) -> dict[str, Any]:
         return await get_service(request).docs_preview(name, limit=limit)
+
+    @app.get("/api/v1/relations/origins", tags=["relações"],
+             summary="Origens de relação: rótulo, ordem, se é contestável ou gravada por pessoa/agent")
+    async def relation_origins(_: Principal = Depends(require(SEARCH_READ))) -> list[dict[str, Any]]:
+        return origins_payload()
+
+    @app.get("/api/v1/relations", tags=["relações"], summary="Tudo ligado a uma entidade (repo, doc:, op:, code:)")
+    async def relations_of(request: Request, entity: str = Query(..., min_length=1, max_length=1500),
+                           type: str | None = None, limit: int = Query(200, ge=1, le=1000),
+                           _: Principal = Depends(require(SEARCH_READ))) -> dict[str, Any]:
+        try:
+            return await get_service(request).related(entity, type_=type, limit=limit)
+        except ValueError as e:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from None
+
+    @app.post("/api/v1/relations/rebuild", tags=["relações"],
+              summary="Recalcula documentos e relações derivadas (sem custo de API)")
+    async def relations_rebuild(request: Request, principal: Principal = Depends(require(INDEX_WRITE))) -> dict[str, Any]:
+        return await audited(request, principal, "relations:rebuild", None, get_service(request).rebuild_relations())
+
+    @app.get("/api/v1/docs/suggestions", tags=["docs"],
+             summary="Vínculos página → repo sugeridos por LLM (para revisar)")
+    async def doc_suggestions(request: Request, status_: str = Query("suggested", alias="status"),
+                              source: str | None = None, confidence: str | None = None,
+                              action: str | None = None, limit: int = Query(200, ge=1, le=2000),
+                              _: Principal = Depends(require(SEARCH_READ))) -> list[dict[str, Any]]:
+        try:
+            return await get_service(request).doc_suggestions(status=status_, source=source, confidence=confidence,
+                                                              action=action, limit=limit)
+        except ValueError as e:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from None
+
+    @app.post("/api/v1/docs/suggestions/review", tags=["docs"],
+              summary="Aprova ou rejeita uma sugestão de vínculo (admin)")
+    async def review_doc_suggestion(body: SuggestionReviewIn, request: Request,
+                                    principal: Principal = Depends(require(ADMIN))) -> dict[str, bool]:
+        ok = await audited(request, principal, "docs:suggestion", body.model_dump(),
+                           get_service(request).review_doc_suggestion(body.doc_repo, body.doc_path, body.repo,
+                                                                      approve=body.approve))
+        if not ok:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "sugestão não encontrada (ou já revisada)")
+        return {"ok": True}
 
     @app.get("/api/v1/docs/overview", tags=["docs"],
              summary="Páginas de documentação indexadas, com os repos ligados a cada uma")

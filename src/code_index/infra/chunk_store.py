@@ -25,7 +25,8 @@ import numpy as np
 from code_index.domain.models import Hit
 from code_index.domain.path_glob import glob_regex
 from code_index.domain.search_text import STOPWORDS
-from code_index.infra.doc_link_store import DocLinkStore, ignores_table, links_sql
+from code_index.infra.document_store import DocumentStore
+from code_index.infra.relation_store import RelationStore
 from code_index.infra.skip_store import SkipStore
 from code_index.settings import Settings
 
@@ -136,7 +137,6 @@ class SearchCapabilities:
     table: bool            # a tabela de chunks existe (já houve um sync)
     search_columns: bool   # colunas search_symbols/search_terms existem (índice migrado)
     bm25: bool             # índice BM25 (pg_search) existe
-    links: bool = False    # tabelas de documentação (páginas, apelidos, menções) existem
 
     @property
     def keyword_engine(self) -> KeywordEngine:
@@ -148,14 +148,20 @@ class SearchCapabilities:
 
 
 class ChunkStore:
-    def __init__(self, pool: asyncpg.Pool, settings: Settings) -> None:
+    def __init__(self, pool: asyncpg.Pool, settings: Settings, *, documents: DocumentStore | None = None,
+                 relations: RelationStore | None = None) -> None:
         self._pool = pool
         self._settings = settings
         self._table = settings.chunks_table_qualified
         self._caps: SearchCapabilities | None = None
         self._caps_at = 0.0
-        self._links = DocLinkStore(pool, settings)
+        self._documents = documents or DocumentStore(pool, settings)
+        self._relations = relations or RelationStore(pool, settings)
         self._skips = SkipStore(pool, settings)
+
+    @property
+    def pool(self) -> asyncpg.Pool:
+        return self._pool
 
     # ------------------------------------------------------------------ capacidades do banco
 
@@ -170,8 +176,7 @@ class ChunkStore:
                       EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = $2 AND indexname = $4) AS has_bm25""",
             self._table, s.pg_schema, s.chunks_table, BM25_INDEX,
         )
-        self._caps = SearchCapabilities(row["has_table"], row["has_cols"], row["has_bm25"],
-                                        links=await self._links.available())
+        self._caps = SearchCapabilities(row["has_table"], row["has_cols"], row["has_bm25"])
         self._caps_at = time.monotonic()
         return self._caps
 
@@ -230,11 +235,11 @@ class ChunkStore:
 
         p = _Params()
         k = p(per_source)
-        linked = links_sql(self._settings) if (repos and include_linked_docs and caps.links) else None
+        linked = self._relations.doc_links_sql() if (repos and include_linked_docs) else None
         where = _filters(p, repos, language, path_glob, kind=kind, linked_docs_sql=linked,
                          exclude_repos=exclude_repos, exclude_path_glob=exclude_path_glob)
         # páginas de documentação ignoradas (docs ignore) não aparecem em nenhum resultado
-        where = f"({where}) AND (repo, path) NOT IN (SELECT doc_repo, doc_path FROM {ignores_table(self._settings)})"
+        where = f"({where}) AND (repo, path) NOT IN ({self._documents.ignored_sql()})"
         t = self._table
         parts: list[str] = []
         weights: list[float] = []
@@ -288,35 +293,29 @@ class ChunkStore:
             )
             for r in rows
         ]
-        if caps.links:
-            await self._annotate_docs(hits)
+        await self._annotate_docs(hits)
         return hits
-
-    @property
-    def links(self) -> DocLinkStore:
-        return self._links
 
     @property
     def skips(self) -> SkipStore:
         return self._skips
 
-    async def linked_docs(self, repo: str, *, limit: int = 100) -> list[dict]:
-        """Páginas de documentação ligadas a um repo (ver infra/doc_link_store)."""
-        return await self._links.docs_for_repo(repo, limit=limit)
-
     async def _annotate_docs(self, hits: list[Hit]) -> None:
-        """Páginas de documentação externa: URL original, título e repos ligados."""
+        """Documentos externos: URL original, título, repos ligados e, em página de API, o handler."""
         docs = [(h.repo, h.path) for h in hits if h.kind == "doc"]
-        try:
-            info = await self._links.annotate(docs)
-        except (asyncpg.UndefinedTableError, asyncpg.UndefinedColumnError):
-            self._caps = None
+        if not docs:
             return
+        meta = await self._documents.get_many(docs)
+        links = await self._relations.links_for_docs(docs)
+        impls = await self._relations.impls_for_docs(docs)
         for h in hits:
-            entry = info.get((h.repo, h.path))
-            if entry:
-                h.url, h.title = entry["url"], entry["title"]
-                h.linked_repos = sorted(entry["linked"])
+            key = (h.repo, h.path)
+            if key in meta:
+                h.url, h.title = meta[key]["url"] or None, meta[key]["title"] or None
+            if key in links:
+                h.linked_repos = sorted(links[key])
+            if key in impls:
+                h.implemented_in = impls[key]
 
     def _keyword_sql(self, engine: KeywordEngine, p: _Params, terms: Sequence[str], where: str, k: str) -> str | None:
         t = self._table

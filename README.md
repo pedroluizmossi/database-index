@@ -44,6 +44,8 @@ uv run code-index index https://github.com/org/novo.git    # nome desconhecido: 
 uv run code-index org add minha-org                        # só descobre os repos (sem custo de embedding)
 uv run code-index org add outra-org --match "api-*" --skip "*-legacy" --max-size-mb 200
 uv run code-index org list                                 # progresso: indexed / pending / error / ignored
+uv run code-index org refresh [minha-org]                  # redescobre: repos novos, removidos e pushes
+uv run code-index org remove minha-org --keep-clones       # tira a org (os chunks somem no próximo sync)
 
 uv run code-index sync --dry-run -b 5                      # mostra o próximo lote, sem custo
 uv run code-index sync -b 5                                # indexa até 5: alterados > pendentes > com erro
@@ -95,6 +97,12 @@ mascarados. A mesma máscara vale para `show` e para a tool `read_file_lines` do
 `sync` reaplicar as regras a todos os repos, reembedando só os trechos que mudaram.
 
 Use `--exclude` em `repo add` ou `org add` para somar padrões (`extra_exclude` no `repos.toml`).
+
+Arquivos descartados na indexação (acima do limite de tamanho ou binários) ficam registrados com o motivo:
+
+```bash
+uv run code-index skips [repo] [--limit 200] [--json]
+```
 
 ### Filtrar e priorizar a org por linguagem
 
@@ -175,10 +183,21 @@ uv run code-index docs add wiki --url https://wiki.exemplo.com --locale pt-br \
   --include 'Plataforma/**' --exclude 'Rascunhos/**' \
   --link 'Plataforma/Email/**=snr-email-backend,snr-email-frontend'
 uv run code-index docs list
+uv run code-index docs preview docs__wiki        # páginas que entrariam, por raiz (sem baixar conteúdo)
 uv run code-index sync --dry-run                 # mostra o que entraria (custo zero)
 uv run code-index index docs__wiki               # baixa as páginas e indexa
 uv run code-index docs links snr-email-backend   # páginas ligadas ao repo, e por quê
 uv run code-index docs remove wiki
+```
+
+Vínculos gravados à mão (sem reindexar) e páginas fora da busca:
+
+```bash
+uv run code-index docs link wiki Plataforma/Email snr-email-backend --reason "descreve o serviço"
+uv run code-index docs unlink wiki Plataforma/Email snr-email-backend
+uv run code-index docs vinculos [--source wiki] [--repo snr-email-backend]   # vínculos gravados
+uv run code-index docs ignore wiki Rascunhos/Velho --reason "obsoleta"      # some dos resultados
+uv run code-index docs unignore wiki Rascunhos/Velho
 ```
 
 - **Incremental:** a cada sync, só a lista de páginas é consultada. O conteúdo só é baixado para páginas
@@ -238,11 +257,74 @@ A descrição completa do serviço fica em uma página de visão geral; cada ope
 primeira linha. Operações e visão geral são ligadas por nome ao repo do serviço quando existe um único
 repo compatível (ignorando o prefixo `snr-`, separadores e o sufixo `-service` ou `-backend`).
 Quando há ambiguidade, nenhuma ligação automática é feita; vínculos manuais continuam disponíveis.
+Repos com arquivo `.sdl` (plataforma Senior) também são ligados pela declaração `domain`/`service`
+(origem **SDL**), mesmo com nome diferente do serviço. Isso vem dos fatos do `code-index enrich facts`.
+
+**Onde cada operação é implementada.** Pela convenção do SDK, a operação `listBlacklistedEmails` do `.sdl`
+é tratada pela classe `ListBlacklistedEmailsHandler` (`login__9` → `LoginV9Handler`). O `enrich facts`
+casa operação e classe sem LLM (cerca de 80% das operações) e grava o resultado. Nos resultados de busca
+de uma página de API aparece `implemented_in` (repo/arquivo:linha); na interface, "implementado em".
+
+```bash
+uv run code-index api impl email.listBlacklistedEmails     # ou só a operação, ou 'POST /email/queries/...'
+```
+
+API: `GET /api/v1/api-impls?operation=...`. MCP: `find_api_impl`.
 
 Na interface, **Raio X** permite navegar entre repos, documentos e serviços de API indexados. O vínculo
 de cada item ao repo mostra sua origem. Relações entre documentos e APIs por um repo em comum são
 indicadas como inferidas; não comprovam que o documento descreva aquela API. A consulta usa o índice
 existente e não gera embeddings.
+
+### Cartão do repo (enriquecimento offline por agents)
+
+Um resumo por repo (o que faz, capacidades, tags, repos relacionados) escrito por um agent em modelo
+barato (Claude Code com Haiku, opencode, kiro-cli...). O `code-index` não chama LLM: ele coleta os dados,
+entrega uma tarefa por vez e valida o que volta. Detalhes e próximos passos em `ENRIQUECIMENTO.md`.
+
+```bash
+uv run code-index enrich facts            # fatos sem LLM: catalog-info, manifestos, .sdl, pastas (custo zero)
+uv run code-index enrich next             # reserva um repo e imprime instruções + dados para o agent
+uv run code-index enrich submit <id> -f cartao.json   # valida e grava (erros legíveis se recusar)
+uv run code-index enrich status           # progresso e reservas ativas
+uv run code-index enrich show <repo>      # fatos e cartão
+uv run code-index enrich release <id>     # devolve uma tarefa à fila
+```
+
+Prompt para o agent: *"Rode `uv run code-index enrich next`, siga as instruções e repita até não haver
+tarefas (no máximo 20)."* Vários agents em paralelo não pegam o mesmo repo (reserva de
+`ENRICH_LEASE_MINUTES`, padrão 20). Libere para o agent só `uv run code-index enrich|show|symbol|grep`:
+o conteúdo dos repos não é confiável. O cartão volta para a fila quando o material do repo muda.
+
+Onde o cartão aparece (sem custo de API: full-text do Postgres sobre os cartões e os fatos do SDL):
+
+```bash
+uv run code-index repo find "quem cuida da blocklist de e-mail"   # qual repo trata do assunto
+uv run code-index repo list email -c                               # lista com resumo e tags
+```
+
+- API: `GET /api/v1/repos` traz `summary`, `tags` e `card_stale`; `GET /api/v1/repos/find?q=...` e
+  `GET /api/v1/repos/{nome}/card`.
+- MCP: `list_repos` (resumo na 1ª frase), `find_repos` e `repo_card`.
+As páginas da wiki também podem ser revisadas por agents (mesma fila, outro tipo de tarefa). Cada
+tarefa é um lote de até 8 páginas da mesma pasta, com os vínculos atuais de cada página e repos
+candidatos achados pelo cartão. O agent sugere repos novos e dá um veredito (manter/remover) para cada
+vínculo automático por menção, tag ou link. Tudo entra como **sugestão** e só vale depois de aprovado
+(aba Documentação, ou pela CLI): uma remoção aprovada faz a página deixar de ser ligada àquele repo.
+Rejeitar desfaz e a sugestão não volta. Vínculos gravados à mão e regras `--link` não são contestados.
+
+```bash
+uv run code-index enrich next --kind doc_links      # lote de páginas (todas, padrão) → o agent sugere
+uv run code-index enrich next --kind doc_links --escopo varios       # ou: sem-vinculo | varios (2+ repos)
+uv run code-index docs sugestoes [--confianca alta] [--acao add|remove]   # revisar
+uv run code-index docs aprovar <doc_repo> <caminho> <repo>   # ou: docs aprovar --confianca alta [--acao add]
+uv run code-index docs rejeitar <doc_repo> <caminho> <repo>
+```
+
+A qualidade dos candidatos depende dos cartões: rode a fila de cartões antes da de páginas.
+
+- Interface: resumo e botão **Cartão** na aba Repositórios (o filtro também procura no resumo e nas tags);
+  na Busca, o quadro "Repos que tratam do assunto" sugere o filtro de repo.
 
 ## Servidor HTTP: API REST + MCP
 
@@ -337,7 +419,9 @@ claude mcp add --scope user --transport http code-index https://<host>/mcp \
 
 Ferramentas, todas com `search:read`: `search_code` (por significado; `kind` e `include_linked_docs` como
 na API), `find_symbol` (onde algo é
-declarado), `grep_code` (texto exato ou regex), `read_file_lines` e `list_repos`. O MCP não indexa:
+declarado), `grep_code` (texto exato ou regex), `read_file_lines`, `list_repos` (com o resumo do cartão),
+`find_repos` (qual repo cuida de um assunto, pelo cartão), `repo_card` (cartão completo), `find_api_impl`
+(operação → handler) e `related` (tudo ligado a um repo, página, operação ou arquivo). O MCP não indexa:
 sync fica na API e na interface, que mostram a prévia e pedem confirmação.
 
 ### Login Google: configuração
@@ -361,18 +445,45 @@ Depois do login, o `/docs` funciona como painel: as chamadas usam o cookie de se
 ```
 src/code_index/
   settings.py        Settings (pydantic-settings: env/.env) + bootstrap() de runtime
-  domain/            puro, sem I/O: models, file_patterns (o que indexar), policies (lote, nomes)
-  infra/             mundo externo: db (pool + migrations sql/NNN_*.sql), repo_store, chunk_store,
-                     config_file (repos.toml), git, github, llm (LiteLLM: embed/rerank)
-  sources/           de onde vêm os repos (RepoSource): github_org, wikijs (docs via GraphQL)
-  indexing/          content (máscara/skip), code_flow (app CocoIndex), orchestrator (sync em etapas)
+  domain/            puro, sem I/O: models, file_patterns, policies, auth, search_text, doc_links,
+                     relations (chaves, tipos, origens), documents (tipos), repo_card, api_impl, doc_task
+  infra/             mundo externo: db (pool + migrations sql/NNN_*.sql), repo_store, chunk_store (busca),
+                     relation_store (relações), document_store (catálogo de documentos), enrich_store,
+                     symbol_store, auth_store, config_file (repos.toml), git, github, grep, llm
+  sources/           base.py (contratos RepoSource, DocSourcePlugin, Linker), registry.py (plugins),
+                     github_org, wikijs, openapi_s3
+  indexing/          content (máscara/skip), code_flow (app CocoIndex), orchestrator (sync em etapas),
+                     linkers (núcleo + rebuild_relations), enrich (material do cartão)
   retrieval/         search (híbrida + rerank), files (leitura com máscara)
-  services.py        casos de uso: ÚNICO ponto usado pelas interfaces
+  services/          casos de uso, um módulo por área: ÚNICO ponto usado pelas interfaces
   interfaces/        cli.py e http/ (app FastAPI, mcp em /mcp, security): só parsing/formatação
-  domain/auth.py     scopes e regras de emissão de token (puro)
-  infra/auth_store   tokens (hash HMAC) e auditoria; infra/google_oidc: login Google
-  domain/doc_links   apelidos de repos (manifestos) e menções das páginas; infra/doc_link_store: vínculos
 ```
+
+**Modelo de dados.** Toda fonte vira arquivos `.md` e passa pelo mesmo pipeline (chunks, embedding,
+busca). Cada fonte de documentação é um plugin que também descreve o que materializou (tabela
+`documents`: tipo e atributos, ex.: domínio/serviço/operação de uma página de API). Os vínculos são
+**relações** (tabela `relations`) entre entidades com chave em texto:
+
+| Relação | De → para | Origens |
+|---|---|---|
+| `documents` | `doc:<fonte>/<caminho>` → `repo:<nome>` | manual, agent, llm, regra, SDL, nome do serviço, tag, link, menção |
+| `describes` | página de API → `op:<domínio>/<serviço>/<operação>` | fonte |
+| `implemented_by` | operação → `code:<repo>/<caminho>:<linha>` | handler (`<op>Handler`) |
+| `related_to` | `repo:` → `repo:` | cartão do repo |
+
+Linkers recalculam as relações derivadas no fim de cada sync (menos de 1 s, sem custo). A view
+`effective_relations` é a única leitura: aplica sugestões não aprovadas, remoções aprovadas e repos ou
+páginas que saíram.
+
+```bash
+uv run code-index relations show snr-email-backend               # tudo ligado ao repo
+uv run code-index relations show op:platform/email/sendEmail     # página da API, handler
+uv run code-index relations stats                                # por tipo e origem
+uv run code-index relations rebuild                              # recalcula (o sync já faz)
+```
+
+API: `GET /api/v1/relations?entity=...`, `GET /api/v1/relations/origins`, `POST /api/v1/relations/rebuild`.
+MCP: `related`.
 
 Regras:
 - **Direção das dependências:** `interfaces → services → indexing/retrieval/sources → infra → domain/settings`.
@@ -380,10 +491,12 @@ Regras:
 - **Configuração:** sempre via `Settings` injetado. A única exceção é o lifespan do CocoIndex, que usa
   `get_settings()`.
 - **Núcleo assíncrono:** há um só `asyncio.run` por comando, na CLI.
-- **Schema da tabela `repos`:** evolui com uma migration nova em `infra/sql/` (`NNN_descricao.sql`,
-  placeholder `{schema}`). A tabela `code_chunks` é gerenciada pelo CocoIndex.
-- **Nova fonte de dados** (ex.: OpenAPI): crie um `RepoSource`/fluxo próprio em `sources/` e `indexing/`
-  e exponha pelo `services.py`.
+- **Schema das nossas tabelas** (`repos`, auth, `documents`, `relations`, `repo_cards`...): evolui com uma
+  migration nova em `infra/sql/` (`NNN_descricao.sql`, placeholder `{schema}`). `code_chunks`,
+  `code_symbols`, `doc_pages`, `repo_aliases` e `doc_mentions` são do CocoIndex.
+- **Nova fonte de documentação:** um plugin `DocSourcePlugin` em `sources/`, registrado em
+  `sources/registry.py`. **Ligação nova:** um `Linker` (núcleo ou do plugin) e, se for uma origem nova, uma
+  entrada em `domain/relations.ORIGINS`.
 - Mudar `indexing/code_flow.py` faz o CocoIndex revarrer e re-chunkar, mas os embeddings ficam no cache
   pelo texto: só textos novos vão para a Voyage. Mantenha estáveis o nome do app, as ContextKeys, o
   subpath `("repo", nome)` e o schema da tabela.

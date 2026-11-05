@@ -34,6 +34,19 @@ log = logging.getLogger(__name__)
 MCP_CODE_MAX_CHARS = 4000  # trecho maior (ex.: JSON minificado) é cortado; o resto sai via read_file_lines
 
 
+_REPO_DROP = ("source", "pushed_at", "size_kb", "skipped", "card_stale")
+
+
+def _compact_repo(repo: dict) -> dict:
+    """list_repos no MCP: sem campos vazios ou de operação, resumo do cartão cortado na 1ª frase."""
+    out = {k: v for k, v in repo.items() if k not in _REPO_DROP and v not in (None, [], "", 0, False)}
+    summary = out.get("summary")
+    if summary:
+        first = summary.split(". ", 1)[0].rstrip(".")
+        out["summary"] = (first[:200] + "…") if len(first) > 200 else first + "."
+    return out
+
+
 def _compact_hit(hit: dict) -> dict:
     """Resultado de busca enxuto para o contexto do agent: sem campos vazios e sem trechos gigantes."""
     out = {k: v for k, v in hit.items() if v not in (None, [], "")}
@@ -209,9 +222,70 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
         """
 
         async def fn(svc: CodeIndexService) -> list[dict]:
-            return [r.to_dict() for r in await svc.list_repos(status=status, org=org, name=name)]
+            return [_compact_repo(r.to_dict()) for r in await svc.list_repos(status=status, org=org, name=name)]
 
         return await run_tool("list_repos", {"status": status, "org": org, "name": name}, "read", None, fn)
+
+    @server.tool()
+    async def find_repos(query: str, limit: int = 10) -> list[dict]:
+        """Descobre QUAL repo cuida de um assunto, pelo cartão do repo (resumo, capacidades, tags, operações SDL).
+
+        Use antes de search_code quando não souber o repo: "quem envia e-mail", "serviço de tenants".
+        Devolve repo, score, summary, kind e tags; filtre search_code por esses repos em seguida.
+        Os cartões são escritos por agents a partir do código: confirme no código antes de afirmar.
+
+        Args:
+            query: assunto ou pergunta, em português ou inglês.
+            limit: máximo de repos (até 50).
+        """
+        limit = max(1, min(limit, 50))
+        return await run_tool("find_repos", {"query": query, "limit": limit}, "read", None,
+                              lambda svc: svc.find_repos(query, limit=limit))
+
+    @server.tool()
+    async def find_api_impl(operation: str, service: str | None = None) -> list[dict]:
+        """Onde uma operação da API da plataforma é implementada: repo, classe handler, arquivo e linha.
+
+        Use com resultados de documentação de API (título 'POST /servico/queries/operacao') ou quando
+        souber o nome da operação. Casamento pela convenção do SDK (`<operacao>Handler`), sem LLM.
+
+        Args:
+            operation: 'listBlacklistedEmails', 'email.listBlacklistedEmails' ou 'POST /email/queries/listBlacklistedEmails'.
+            service: filtra pelo serviço (ex.: 'email').
+        """
+        return await run_tool("find_api_impl", {"operation": operation, "service": service}, "read", None,
+                              lambda svc: svc.find_api_impl(operation, service=service))
+
+    @server.tool()
+    async def related(entity: str, type: str | None = None) -> dict:
+        """Tudo ligado a uma entidade: páginas que documentam um repo, repos relacionados, operação ↔ handler,
+        página de API → operação. Cada relação traz a origem (manual, sdl, handler, tag, menção...).
+
+        Args:
+            entity: nome do repo ('snr-email-backend') ou chave: 'repo:<nome>', 'doc:<fonte>/<caminho>',
+                'op:<domínio>/<serviço>/<operação>', 'code:<repo>/<caminho>:<linha>'.
+            type: filtra o tipo: documents | describes | implemented_by | related_to.
+        """
+        return await run_tool("related", {"entity": entity, "type": type}, "read", None,
+                              lambda svc: svc.related(entity, type_=type, limit=200))
+
+    @server.tool()
+    async def repo_card(repo: str) -> dict:
+        """Cartão completo de um repo: resumo, capacidades, glossário, repos relacionados (com a base:
+        "codigo" = referência vista no código, "nome" = só pelo nome), por onde começar a ler e os fatos
+        extraídos sem LLM (catalog-info, operações e eventos do .sdl, propriedades do .pdl, pastas).
+
+        Args:
+            repo: nome como em list_repos ('org__repo') ou só 'repo'.
+        """
+
+        async def fn(svc: CodeIndexService) -> dict:
+            info = await svc.repo_card(repo)
+            if info is None:
+                raise ValueError(f"sem cartão nem fatos para {repo}")
+            return info
+
+        return await run_tool("repo_card", {"repo": repo}, "read", None, fn)
 
     @server.tool()
     async def find_symbol(

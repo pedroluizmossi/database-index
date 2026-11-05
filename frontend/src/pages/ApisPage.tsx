@@ -55,7 +55,8 @@ export function ApisPage({ onXray }: { onXray: (target: XrayTarget) => void }) {
   useEffect(() => { void load(); }, [load]);
   const onFinished = useCallback(() => { void load(); void reload(); }, [load, reload]);
   const jobs = useJobs(canSeeJobs, onFinished);
-  const apiJobs = { ...jobs, jobs: jobs.jobs?.filter((j) => j.params?.repos?.some((r) => r.startsWith("docs__openapi-"))) ?? null };
+  const apiRepos = new Set(sources?.map((s) => s.repo) ?? []);
+  const apiJobs = { ...jobs, jobs: jobs.jobs?.filter((j) => j.params?.openapi_domain != null || j.params?.repos?.some((r) => apiRepos.has(r))) ?? null };
   const domains = useMemo(() => [...new Set((items ?? []).map((i) => i.domain))].sort(), [items]);
   const services = useMemo(() => (items ?? []).filter((i) => i.domain === domain), [items, domain]);
   const source = sources?.find((s) => s.domain === domain);

@@ -28,7 +28,7 @@ class DocLinkRule:
 
 @dataclass(frozen=True)
 class DocSource:
-    """Fonte de documentação externa (hoje: Wiki.js via GraphQL).
+    """Fonte de documentação externa. `type` escolhe o plugin (sources/registry.py: wikijs, openapi_s3...).
 
     As páginas viram arquivos .md em <repos_dir>/docs__<name>/ e são indexadas como um "repo" de
     kind="docs" pelo mesmo pipeline do código. Só páginas novas/alteradas são baixadas.
@@ -44,8 +44,8 @@ class DocSource:
 
     def __post_init__(self) -> None:
         validate_name(self.name)
-        if self.type not in ("wikijs", "openapi_s3"):
-            raise ValueError(f"fonte {self.name!r}: tipo não suportado {self.type!r}")
+        if not self.type or not self.type.replace("_", "").isalnum():
+            raise ValueError(f"fonte {self.name!r}: tipo inválido {self.type!r}")
 
     @property
     def repo_name(self) -> str:
@@ -196,6 +196,9 @@ class RepoStatus:
     size_kb: int | None = None   # tamanho do repositório no GitHub (inclui histórico)
     kind: str = "code"
     skipped: int = 0             # arquivos descartados na indexação (tamanho, binário...)
+    summary: str | None = None   # resumo do cartão do repo (code-index enrich), se houver
+    tags: list[str] = field(default_factory=list)  # domain_tags do cartão
+    card_stale: bool = False     # o repo mudou desde que o cartão foi escrito
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -217,6 +220,7 @@ class Hit:
     title: str | None = None
     linked_repos: list[str] = field(default_factory=list)  # repos ligados à página
     also_in: list[str] = field(default_factory=list)       # outros repos com este mesmo trecho (boilerplate)
+    implemented_in: list[str] = field(default_factory=list)  # página de API: handler da operação (repo/path:linha)
 
     def to_dict(self) -> dict:
         return asdict(self)

@@ -1,4 +1,4 @@
-"""CLI: code-index {org, repo, sync|index, watch, search, show}.
+"""CLI: code-index {org, repo, sync|index, watch, search, show, enrich, relations, ...}.
 
 Só parsing e formatação: as regras de negócio estão em `services.CodeIndexService`.
 Cada comando roda em UM `asyncio.run` dentro de `open_service()`.
@@ -110,6 +110,23 @@ async def _cmd_repo_unignore(a: argparse.Namespace, settings: Settings) -> None:
     print(f"{a.name} volta à fila de indexação.")
 
 
+async def _cmd_repo_find(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        hits = await svc.find_repos(" ".join(a.query), limit=a.limit)
+    if a.json:
+        print(json.dumps(hits, indent=2, ensure_ascii=False))
+        return
+    if not hits:
+        print("nenhum repo casou (só repos com fatos/cartão entram; veja `code-index enrich status`).")
+    for h in hits:
+        print(f"\033[1m{h['repo']}\033[0m  {h['score']:.3f}" + (f"  [{h['kind']}]" if h["kind"] else "")
+              + ("  (cartão desatualizado)" if h["stale"] else ""))
+        if h["summary"]:
+            print(f"    {h['summary'][:300]}")
+        if h["tags"]:
+            print(f"    tags: {', '.join(h['tags'])}")
+
+
 async def _cmd_repo_list(a: argparse.Namespace, settings: Settings) -> None:
     async with open_service(settings) as svc:
         rows = await svc.list_repos(status=a.status, org=a.org, name=a.filter)
@@ -125,6 +142,10 @@ async def _cmd_repo_list(a: argparse.Namespace, settings: Settings) -> None:
               f"{r.files:>5} arq {r.chunks:>6} chunks{flag}")
         if r.error:
             print(f"    erro: {r.error.splitlines()[0][:150]}")
+        if a.cards and r.summary:
+            print(f"    {r.summary[:300]}" + (" (cartão desatualizado)" if r.card_stale else ""))
+            if r.tags:
+                print(f"    tags: {', '.join(r.tags)}")
     c = Counter(r.status for r in rows)
     print(f"\n{len(rows)} repos: " + ", ".join(f"{k} {v}" for k, v in sorted(c.items())))
 
@@ -336,6 +357,19 @@ async def _cmd_api(a: argparse.Namespace, settings: Settings) -> None:
                     raise SystemExit(1)
 
 
+async def _cmd_api_impl(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        rows = await svc.find_api_impl(" ".join(a.operation), service=a.service, domain=a.domain, limit=a.limit)
+    if a.json:
+        print(json.dumps(rows, indent=2, ensure_ascii=False))
+        return
+    if not rows:
+        print("nenhum handler encontrado (só operações de .sdl casadas por nome; rode `code-index enrich facts`).")
+    for r in rows:
+        print(f"\033[1m{r['domain']}/{r['service']} {r['kind']} {r['operation']}\033[0m  → "
+              f"{r['repo']}/{r['path']}:{r['line']}  ({r['symbol']}, por {r['origin']})")
+
+
 async def _cmd_docs_add(a: argparse.Namespace, settings: Settings) -> None:
     async with open_service(settings) as svc:
         res = await svc.add_docs(
@@ -427,6 +461,37 @@ async def _cmd_docs_links(a: argparse.Namespace, settings: Settings) -> None:
         print(f"    {d['url'] or d['doc_repo'] + '/' + d['path']}")
 
 
+async def _cmd_docs_suggestions(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        rows = await svc.doc_suggestions(status=a.status, source=a.source, confidence=a.confianca,
+                                         action=a.acao, limit=a.limit)
+    if a.json:
+        print(json.dumps(rows, indent=2, ensure_ascii=False))
+        return
+    if not rows:
+        print("nenhuma sugestão.")
+    for r in rows:
+        verb = "REMOVER" if r["action"] == "remove" else "adicionar"
+        print(f"[{r['confidence'] or '-'}] {verb} {r['doc_repo']}/{r['doc_path']}  →  \033[1m{r['repo']}\033[0m"
+              + (f"  ({r['basis']})" if r["basis"] else ""))
+        print(f"    {r['title'] or ''} — {r['reason']}")
+    if rows and a.status == "suggested":
+        print("\naprovar: code-index docs aprovar <doc_repo> <caminho> <repo>   (ou --confianca alta para o lote)")
+
+
+async def _cmd_docs_review(a: argparse.Namespace, settings: Settings) -> None:
+    approve = a.docs_review == "aprovar"
+    async with open_service(settings) as svc:
+        if approve and a.confianca:
+            n = await svc.approve_doc_suggestions(confidence=a.confianca, source=a.source, action=a.acao)
+            print(f"{n} sugestão(ões) de confiança {a.confianca} aprovada(s).")
+            return
+        if not (a.doc_repo and a.doc_path and a.repo):
+            raise ValueError("informe <doc_repo> <caminho> <repo>" + (" ou --confianca" if approve else ""))
+        ok = await svc.review_doc_suggestion(a.doc_repo, a.doc_path, a.repo, approve=approve)
+    print(("aprovada." if approve else "rejeitada.") if ok else "sugestão não encontrada (ou já revisada).")
+
+
 async def _cmd_docs_remove(a: argparse.Namespace, settings: Settings) -> None:
     async with open_service(settings) as svc:
         await svc.remove_docs(a.name, keep_files=a.keep_files)
@@ -445,6 +510,123 @@ async def _cmd_show(a: argparse.Namespace, settings: Settings) -> None:
     async with open_service(settings) as svc:
         text = await svc.read_file(repo, path, start, end)
     print(text)
+
+
+# ---------------------------------------------------------------- enrich (cartão do repo)
+
+async def _cmd_enrich_facts(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        st = await svc.enrich_facts(a.repo or None, force=a.force)
+    print(f"fatos coletados de {st['updated']} repo(s) (de {st['repos']}); sem LLM e sem custo.")
+
+
+async def _cmd_enrich_next(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        task = await svc.enrich_next(agent=a.agent or "", repo=a.repo, kind=a.kind, scope=a.escopo)
+    if task is None:
+        print("nenhuma tarefa pendente.")
+        return
+    if a.json:
+        print(json.dumps({k: v for k, v in task.items() if k != "text"}, indent=2, ensure_ascii=False))
+        return
+    print(task["text"])
+
+
+async def _cmd_enrich_submit(a: argparse.Namespace, settings: Settings) -> None:
+    if a.file:
+        with open(a.file, encoding="utf-8") as fh:
+            payload = fh.read()
+    else:
+        payload = sys.stdin.read()
+    async with open_service(settings) as svc:
+        res = await svc.enrich_submit(a.id, payload, agent=a.agent or "")
+    if res["kind"] == "doc_links":
+        print(f"{res['pages']} página(s) analisada(s), {res['suggested']} sugestão(ões) para revisar "
+              f"({res['removals']} remoção(ões) de vínculo automático; code-index docs sugestoes). "
+              f"Páginas na fila: {res['remaining']}.")
+        if res["remaining"]:
+            print("próxima: uv run code-index enrich next --kind doc_links")
+        return
+    print(f"cartão de {res['repo']} gravado. Pendentes: {res['remaining']}.")
+    if res["remaining"]:
+        print("próxima: uv run code-index enrich next")
+
+
+async def _cmd_enrich_release(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        ok = await svc.enrich_release(a.id)
+    print("tarefa devolvida à fila." if ok else "tarefa não está reservada (já entregue, expirada ou inexistente).")
+
+
+async def _cmd_enrich_status(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        st = await svc.enrich_status()
+    if a.json:
+        print(json.dumps(st, indent=2, ensure_ascii=False, default=str))
+        return
+    print(f"repos indexados: {st['repos']} | com fatos: {st['with_facts']} (com SDL: {st['with_sdl']})")
+    print(f"cartões: {st['cards_ok']} em dia | {st['cards_stale']} desatualizados | {st['cards_missing']} sem cartão")
+    print(f"pendentes (sem reserva): {st['pending']} | tarefas: "
+          + (", ".join(f"{k} {v}" for k, v in sorted(st["tasks"].items())) or "nenhuma")
+          + f" | entregas recusadas: {st['rejections']}")
+    d = st.get("docs")
+    if d:
+        print(f"wiki → repos: {d['pending_pages']} página(s) a analisar ({d['pending_unlinked']} sem vínculo, "
+              f"{d['pending_multi']} com vários repos) | analisadas {d['reviewed']}")
+        print(f"  sugestões pendentes: {d['suggested_add']} adicionar, {d['suggested_remove']} remover | aprovadas: "
+              f"{d['approved_add']} adicionadas, {d['approved_remove']} removidas | rejeitadas {d['rejected']}")
+    imp = st.get("impls")
+    if imp:
+        print(f"handlers de API (SDL, por nome): {imp['matched']} de {imp['operations']} operações")
+    for t in st["leased"]:
+        print(f"  reservada {t['id']}  {t['repo']}{(' ' + t['subject']) if t.get('subject') else ''}"
+              f"  agent={t['agent'] or '-'}  até {t['lease_until']}")
+
+
+async def _cmd_enrich_show(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        info = await svc.repo_card(a.repo)
+    if info is None:
+        print("sem fatos para este repo ainda (rode `code-index enrich facts`).")
+        return
+    print(json.dumps(info, indent=2, ensure_ascii=False))
+
+
+# ---------------------------------------------------------------- relations
+
+async def _cmd_relations_rebuild(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        res = await svc.rebuild_relations()
+    docs = ", ".join(f"{k} {v}" for k, v in res["documents"].items()) or "nenhuma fonte"
+    print(f"documentos: {docs}")
+    print("linkers: " + ", ".join(f"{k} {v}" for k, v in res["linkers"].items()))
+    print(f"{res['relations']} relações derivadas em {res['seconds']}s (sem LLM e sem custo).")
+
+
+async def _cmd_relations_stats(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        st = await svc.relation_stats()
+    if a.json:
+        print(json.dumps(st, indent=2, ensure_ascii=False, default=str))
+        return
+    print("efetivas: " + ", ".join(f"{k} {v}" for k, v in sorted(st["effective"].items())))
+    for r in st["rows"]:
+        extra = "" if (r["status"], r["action"]) == ("active", "add") else f" [{r['status']}/{r['action']}]"
+        print(f"  {r['type']:<15} {r['origin']:<10} {r['n']:>6}{extra}")
+
+
+async def _cmd_relations_show(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        res = await svc.related(a.entity, type_=a.type, limit=a.limit)
+    if a.json:
+        print(json.dumps(res, indent=2, ensure_ascii=False))
+        return
+    print(f"\033[1m{res['entity']}\033[0m")
+    if not res["relations"]:
+        print("  nenhuma relação.")
+    for r in res["relations"]:
+        arrow = "→" if r["direction"] == "out" else "←"
+        print(f"  {arrow} {r['type']:<15} {r['entity']}  ({', '.join(r['origins'])})")
 
 
 async def _cmd_serve(a: argparse.Namespace, settings: Settings) -> None:
@@ -546,8 +728,14 @@ def main() -> None:
     r.add_argument("filter", nargs="?", help="trecho do nome")
     r.add_argument("-s", "--status", choices=["pending", "indexed", "error", "ignored"])
     r.add_argument("-o", "--org")
+    r.add_argument("-c", "--cards", action="store_true", help="mostra o resumo e as tags do cartão")
     r.add_argument("--json", action="store_true")
     r.set_defaults(fn=_cmd_repo_list)
+    r = repo.add_parser("find", help="qual repo cuida de um assunto (pelo cartão; sem custo)")
+    r.add_argument("query", nargs="+")
+    r.add_argument("-n", "--limit", type=int, default=10)
+    r.add_argument("--json", action="store_true")
+    r.set_defaults(fn=_cmd_repo_find)
 
     # sync / index
     s = sub.add_parser("sync", aliases=["index"],
@@ -607,6 +795,13 @@ def main() -> None:
     ap = api_cmd.add_parser("services", help="lista serviços sem indexar")
     ap.add_argument("--domain", required=True)
     ap.set_defaults(fn=_cmd_api)
+    ap = api_cmd.add_parser("impl", help="onde uma operação da API é implementada (handler do .sdl; sem custo)")
+    ap.add_argument("operation", nargs="+", help="op, servico.op ou 'POST /servico/queries/op'")
+    ap.add_argument("-s", "--service")
+    ap.add_argument("-d", "--domain")
+    ap.add_argument("-n", "--limit", type=int, default=20)
+    ap.add_argument("--json", action="store_true")
+    ap.set_defaults(fn=_cmd_api_impl)
     ap = api_cmd.add_parser("index", help="indexa domínio ou serviços selecionados")
     ap.add_argument("--domain", required=True)
     ap.add_argument("--service", action="append", help="serviço exato; pode repetir")
@@ -660,6 +855,27 @@ def main() -> None:
     d.add_argument("--limit", type=int, default=100)
     d.add_argument("--json", action="store_true")
     d.set_defaults(fn=_cmd_docs_links)
+    d = dc.add_parser("sugestoes", help="vínculos página → repo sugeridos por LLM, para revisar")
+    d.add_argument("--status", choices=["suggested", "active", "rejected"], default="suggested")
+    d.add_argument("--source", help="fonte (ex.: wiki ou docs__wiki)")
+    d.add_argument("--confianca", choices=["alta", "media", "baixa"])
+    d.add_argument("--acao", choices=["add", "remove"], help="add = novos vínculos; remove = remoções")
+    d.add_argument("-n", "--limit", type=int, default=200)
+    d.add_argument("--json", action="store_true")
+    d.set_defaults(fn=_cmd_docs_suggestions)
+    for name, help_ in (("aprovar", "aprova sugestão (o vínculo passa a valer)"),
+                        ("rejeitar", "rejeita sugestão (não volta a ser sugerida)")):
+        d = dc.add_parser(name, help=help_)
+        d.add_argument("doc_repo", nargs="?")
+        d.add_argument("doc_path", nargs="?")
+        d.add_argument("repo", nargs="?")
+        if name == "aprovar":
+            d.add_argument("--confianca", choices=["alta", "media", "baixa"], help="aprova todas desta confiança")
+            d.add_argument("--acao", choices=["add", "remove"], help="com --confianca: só esta ação")
+            d.add_argument("--source")
+        else:
+            d.set_defaults(confianca=None, source=None, acao=None)
+        d.set_defaults(fn=_cmd_docs_review, docs_review=name)
     d = dc.add_parser("remove", help="remove uma fonte")
     d.add_argument("name")
     d.add_argument("--keep-files", action="store_true", help="mantém as páginas baixadas")
@@ -692,6 +908,50 @@ def main() -> None:
     v = sub.add_parser("show", help="mostra arquivo: repo/caminho[:inicio-fim]")
     v.add_argument("target")
     v.set_defaults(fn=_cmd_show)
+
+    en = sub.add_parser("enrich", help="enriquecimento offline: cartão do repo feito por agents (next/submit)") \
+        .add_subparsers(required=True)
+    e = en.add_parser("facts", help="coleta fatos (catalog-info, manifestos, SDL, pastas) sem LLM e sem custo")
+    e.add_argument("repo", nargs="*", help="repos (padrão: todos os indexados cuja revisão mudou)")
+    e.add_argument("--force", action="store_true", help="recoleta mesmo sem mudança")
+    e.set_defaults(fn=_cmd_enrich_facts)
+    e = en.add_parser("next", help="reserva a próxima tarefa e imprime instruções + dados para o agent")
+    e.add_argument("--kind", choices=["card", "doc_links"], default="card",
+                   help="card: cartão do repo (padrão); doc_links: páginas da wiki sem vínculo → repos")
+    e.add_argument("--escopo", choices=["todas", "sem-vinculo", "varios"], default="todas",
+                   help="doc_links: todas as páginas (padrão), só as sem vínculo, ou as ligadas a vários repos")
+    e.add_argument("--agent", help="nome do agent/ferramenta (registro)")
+    e.add_argument("--repo", help="card: repo específico; doc_links: fonte de docs (ex.: docs__wiki)")
+    e.add_argument("--json", action="store_true", help="saída estruturada em vez do texto da tarefa")
+    e.set_defaults(fn=_cmd_enrich_next)
+    e = en.add_parser("submit", help="entrega o cartão (JSON por --file ou entrada padrão)")
+    e.add_argument("id")
+    e.add_argument("-f", "--file")
+    e.add_argument("--agent")
+    e.set_defaults(fn=_cmd_enrich_submit)
+    e = en.add_parser("release", help="devolve uma tarefa reservada à fila")
+    e.add_argument("id")
+    e.set_defaults(fn=_cmd_enrich_release)
+    e = en.add_parser("status", help="progresso: fatos, cartões, tarefas reservadas")
+    e.add_argument("--json", action="store_true")
+    e.set_defaults(fn=_cmd_enrich_status)
+    e = en.add_parser("show", help="fatos e cartão de um repo")
+    e.add_argument("repo")
+    e.set_defaults(fn=_cmd_enrich_show)
+
+    rl = sub.add_parser("relations", help="relações entre repos, documentos, operações de API e código") \
+        .add_subparsers(required=True)
+    rl.add_parser("rebuild", help="recalcula documentos e relações derivadas (sem custo; o sync já faz)") \
+        .set_defaults(fn=_cmd_relations_rebuild)
+    r_ = rl.add_parser("stats", help="quantas relações por tipo e origem")
+    r_.add_argument("--json", action="store_true")
+    r_.set_defaults(fn=_cmd_relations_stats)
+    r_ = rl.add_parser("show", help="tudo ligado a uma entidade (repo, doc:..., op:..., code:...)")
+    r_.add_argument("entity", help="nome do repo ou chave, ex.: op:platform/email/sendEmail")
+    r_.add_argument("-t", "--type", choices=["documents", "describes", "implemented_by", "related_to"])
+    r_.add_argument("-n", "--limit", type=int, default=200)
+    r_.add_argument("--json", action="store_true")
+    r_.set_defaults(fn=_cmd_relations_show)
 
     # servidor HTTP (API + MCP)
     sv = sub.add_parser("serve", help="sobe a API HTTP e o MCP (/mcp)")

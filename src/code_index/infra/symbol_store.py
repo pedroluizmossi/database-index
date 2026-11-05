@@ -125,3 +125,31 @@ class SymbolStore:
         for r in rows:
             out.setdefault((r["repo"], r["path"]), []).append((r["line"], r["kind"], r["name"]))
         return out
+
+    async def repo_overview(self, repo: str) -> list[tuple[str, str, int, str]]:
+        """Declarações principais de um repo: (path, nome, nº de membros do arquivo, kind).
+        Classes/tipos (container) e funções de nível superior (member sem container, comuns em Go/JS).
+        Usado no pacote do cartão do repo. Sem tabela de símbolos → []."""
+        try:
+            rows = await self._pool.fetch(
+                f"""SELECT path, name, kind,
+                           (SELECT count(*) FROM {self._table} m
+                            WHERE m.repo = s.repo AND m.path = s.path AND m.kind = 'member') AS members
+                    FROM {self._table} s
+                    WHERE s.repo = $1 AND (s.kind = 'container' OR (s.kind = 'member' AND s.container = ''))
+                    ORDER BY s.path, s.line""",
+                repo,
+            )
+        except asyncpg.UndefinedTableError:
+            return []
+        return [(r["path"], r["name"], int(r["members"]), r["kind"]) for r in rows]
+
+    async def classes(self, repo: str) -> list[tuple[str, str, int]]:
+        """(nome, path, linha) das classes/tipos de um repo. Sem tabela de símbolos → []."""
+        try:
+            rows = await self._pool.fetch(
+                f"SELECT name, path, line FROM {self._table} WHERE repo = $1 AND kind = 'container'", repo,
+            )
+        except asyncpg.UndefinedTableError:
+            return []
+        return [(r["name"], r["path"], int(r["line"])) for r in rows]

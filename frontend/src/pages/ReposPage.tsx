@@ -8,6 +8,7 @@ import {
   Clock,
   Database,
   GitBranch,
+  IdCard,
   Layers,
   Search,
   ServerCrash,
@@ -31,6 +32,7 @@ import { canWrite, hasScope } from "../lib/capabilities";
 import { useToast } from "../components/Toaster";
 import { Dialog } from "../components/Dialog";
 import { RepoDocsDialog } from "../components/RepoDocsDialog";
+import { RepoCardDialog } from "../components/RepoCardDialog";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { SyncDialog } from "../components/SyncDialog";
 import { JobDialog, JobsPanel, RunningJobBanner, useJobs } from "../components/JobsPanel";
@@ -131,7 +133,14 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
     const needle = term.trim().toLowerCase();
     return (repos ?? [])
       .filter((r) => status === "all" || r.status === status)
-      .filter((r) => !needle || r.name.toLowerCase().includes(needle) || (r.language ?? "").toLowerCase().includes(needle))
+      .filter(
+        (r) =>
+          !needle ||
+          r.name.toLowerCase().includes(needle) ||
+          (r.language ?? "").toLowerCase().includes(needle) ||
+          (r.summary ?? "").toLowerCase().includes(needle) ||
+          r.tags.some((t) => t.toLowerCase().includes(needle)),
+      )
       .sort((a, b) => compare(a, b, sort.key) * sort.dir);
   }, [repos, status, term, sort]);
 
@@ -260,7 +269,7 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
             <input
               value={term}
               onChange={(e) => setTerm(e.target.value)}
-              placeholder="Buscar por nome ou linguagem"
+              placeholder="Buscar por nome, linguagem, resumo ou tag"
               aria-label="Buscar repositórios"
               className={cx(inputClass, "pl-9")}
             />
@@ -722,7 +731,7 @@ function RepoRow({ repo: r, actions, selection, onXray }: { repo: Repo; actions:
           />
         </td>
       )}
-      <td className="max-w-[18rem] px-4 py-3">
+      <td className="max-w-[26rem] px-4 py-3">
         <div className="flex items-center gap-3">
           <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-zinc-900/5 text-zinc-500 dark:bg-white/5 dark:text-zinc-400">
             <GitBranch className="size-4" aria-hidden="true" />
@@ -732,7 +741,9 @@ function RepoRow({ repo: r, actions, selection, onXray }: { repo: Repo; actions:
               {repoShortName(r.name, r.org)}
             </p>
             <p className="truncate text-xs text-zinc-500 dark:text-zinc-400">{r.org ?? "repositório avulso"}</p>
+            <RepoSummary repo={r} />
             <RepoDocsButton repo={r} />
+            <RepoCardButton repo={r} />
             {r.kind === "code" && <button type="button" aria-label={`Raio X de ${r.name}`} onClick={() => onXray({ kind: "repo", id: r.name })} className="ml-3 inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"><Network className="size-3.5" aria-hidden="true" /> Raio X</button>}
             {r.skipped > 0 && (
               <p
@@ -797,7 +808,9 @@ function RepoCard({ repo: r, actions, selection, onXray }: { repo: Repo; actions
             {repoShortName(r.name, r.org)}
           </p>
           <p className="truncate text-xs text-zinc-500 dark:text-zinc-400">{r.org ?? "repositório avulso"}</p>
+            <RepoSummary repo={r} />
           <RepoDocsButton repo={r} />
+            <RepoCardButton repo={r} />
           {r.kind === "code" && <button type="button" aria-label={`Raio X de ${r.name}`} onClick={() => onXray({ kind: "repo", id: r.name })} className="ml-3 inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"><Network className="size-3.5" aria-hidden="true" /> Raio X</button>}
           {r.skipped > 0 && (
             <p
@@ -833,6 +846,36 @@ function RepoCard({ repo: r, actions, selection, onXray }: { repo: Repo; actions
       </p>
       {actions && <RepoActions repo={r} actions={actions} compact={false} />}
     </li>
+  );
+}
+
+/** Resumo do cartão do repo (uma linha; o texto inteiro no title). */
+function RepoSummary({ repo }: { repo: Repo }) {
+  if (!repo.summary) return null;
+  return (
+    <p className="mt-0.5 line-clamp-2 max-w-md text-xs text-zinc-600 dark:text-zinc-300" title={repo.summary}>
+      {repo.summary}
+    </p>
+  );
+}
+
+/** Abre o cartão do repo (resumo, capacidades, relacionados, fatos do SDL). */
+function RepoCardButton({ repo }: { repo: Repo }) {
+  const [open, setOpen] = useState(false);
+  if (repo.kind === "docs") return null;
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="mt-1 ml-3 inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+      >
+        <IdCard className="size-3.5" aria-hidden="true" />
+        Cartão
+        {repo.card_stale && <span className="text-amber-600 dark:text-amber-400" title="O repo mudou desde que o cartão foi escrito">•</span>}
+      </button>
+      <RepoCardDialog repo={repo.name} open={open} onClose={() => setOpen(false)} />
+    </>
   );
 }
 

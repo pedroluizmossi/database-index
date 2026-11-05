@@ -143,6 +143,26 @@ def test_openapi_scopes_e_previa(server: Server, monkeypatch: pytest.MonkeyPatch
     assert client(server, "indexador").post("/api/v1/openapi/index", json=selection).status_code == 403
 
 
+def test_cartao_do_repo_pela_api(server: Server) -> None:
+    leitor = client(server, "leitor")
+    assert leitor.get("/api/v1/repos/find", params={"q": "envio de e-mail"}).json() == []
+    assert leitor.get("/api/v1/repos/find").status_code == 422
+    assert leitor.get("/api/v1/repos/nao-existe/card").status_code == 404
+    assert leitor.get("/api/v1/api-impls", params={"operation": "email.sendEmail"}).json() == []
+    assert leitor.get("/api/v1/docs/suggestions").json() == []
+    origins = leitor.get("/api/v1/relations/origins").json()
+    assert [o["name"] for o in origins][:3] == ["manual", "agent", "llm"]
+    assert {o["name"] for o in origins if o["contestable"]} == {"tag", "url", "mention"}
+    assert leitor.get("/api/v1/relations", params={"entity": "op:platform/email/x"}).json() == {
+        "entity": "op:platform/email/x", "relations": []}
+    assert leitor.post("/api/v1/relations/rebuild").status_code == 403
+    assert client(server, "admin-bot").post("/api/v1/relations/rebuild").status_code == 200
+    body = {"doc_repo": "docs__wiki", "doc_path": "pt-br/x.md", "repo": "meu-repo", "approve": True}
+    assert leitor.post("/api/v1/docs/suggestions/review", json=body).status_code == 403
+    assert client(server, "admin-bot").post("/api/v1/docs/suggestions/review", json=body).status_code == 404
+    assert client(server).get("/api/v1/repos/find", params={"q": "x"}).status_code == 401
+
+
 def test_index_write_nao_registra_repo_desconhecido(server: Server) -> None:
     r = client(server, "indexador").post(
         "/api/v1/sync", json={"repos": ["evil/repo"], "dry_run": True, "discover": False})
@@ -221,6 +241,10 @@ async def _mcp(server: Server, token: str) -> tuple[list[str], Any, Any]:
             search = await s.call_tool("search_code", {"query": "ola", "mode": "keyword"})
             symbol = await s.call_tool("find_symbol", {"name": "Qualquer"})
             grep = await s.call_tool("grep_code", {"pattern": "ola"})
+            find = await s.call_tool("find_repos", {"query": "envio de e-mail"})
+            assert not find.is_error and (find.structured_content or {}).get("result") == []
+            card = await s.call_tool("repo_card", {"repo": "nao-existe"})
+            assert card.is_error
             return tools, search, symbol, grep
 
 
@@ -234,7 +258,8 @@ def test_mcp_exige_token(server: Server) -> None:
 
 def test_mcp_so_expoe_leitura(server: Server) -> None:
     tools, search, symbol, grep = asyncio.run(_mcp(server, "leitor"))
-    assert tools == ["search_code", "read_file_lines", "list_repos", "find_symbol", "grep_code"]
+    assert tools == ["search_code", "read_file_lines", "list_repos", "find_repos", "find_api_impl", "related",
+                     "repo_card", "find_symbol", "grep_code"]
     assert not search.is_error and not symbol.is_error and not grep.is_error
     assert json.loads(grep.content[0].text) == {"matches": [], "truncated": False}
 
@@ -257,7 +282,8 @@ def test_mcp_serve_guia_de_uso(server: Server) -> None:
     assert "find_symbol" in instructions and "guia_de_uso" in instructions
     assert prompts == ["guia_de_uso", "investigar"]
     assert guia.startswith("# Guia de uso do code-index") and guia == recurso
-    for tool in ("search_code", "find_symbol", "grep_code", "read_file_lines", "list_repos"):
+    for tool in ("search_code", "find_symbol", "grep_code", "read_file_lines", "list_repos", "find_repos", "repo_card",
+                 "find_api_impl", "related"):
         assert tool in guia
     assert investigar.endswith("Pergunta: onde validamos o captcha?")
 

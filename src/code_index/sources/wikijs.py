@@ -23,12 +23,15 @@ import httpx
 from markdownify import markdownify
 
 from ..domain.doc_content import strip_embedded_blobs
+from ..domain.doc_links import parse_front_matter
+from ..domain.documents import WIKI_PAGE, DocumentMeta
 from ..domain.models import DocSource
+from ..settings import Settings
+from .base import OWNER_MARKER, Linker  # noqa: F401  (OWNER_MARKER: compatibilidade de import)
 
 log = logging.getLogger(__name__)
 
 MANIFEST = ".manifest.json"   # começa com ponto: fica fora da indexação (padrão **/.*)
-OWNER_MARKER = ".code-index-docs"
 _CONCURRENCY = 4
 
 _LIST_QUERY = """query ($locale: String) {
@@ -120,6 +123,12 @@ class WikiJsClient:
 
 def page_matches(path: str, globs: tuple[str, ...]) -> bool:
     return any(fnmatch.fnmatch(path, g.replace("**/", "*")) or fnmatch.fnmatch(path, g) for g in globs)
+
+
+def selected_pages(source: DocSource, pages: list[PageMeta]) -> list[PageMeta]:
+    """Páginas que passam nos filtros include/exclude da fonte (glob sobre o caminho da página)."""
+    return [p for p in pages if (not source.include or page_matches(p.path, source.include))
+            and not page_matches(p.path, source.exclude)]
 
 
 def _safe_relpath(locale: str, path: str) -> str | None:
@@ -221,3 +230,69 @@ async def sync_docs(
     _write_atomic(dest / MANIFEST, json.dumps({"pages": manifest}, ensure_ascii=False, indent=1))
     digest = hashlib.sha256(json.dumps(sorted(manifest.items())).encode()).hexdigest()[:16]
     return DocSyncResult(total=len(scope), changed=len(to_fetch), deleted=deleted, revision=f"docs:{digest}")
+
+
+# ------------------------------------------------------------------ plugin
+
+
+def _read_front_matter(path: Path) -> dict[str, Any]:
+    """Só o cabeçalho `---` ... `---` (sem ler a página inteira)."""
+    try:
+        with path.open(encoding="utf-8", errors="replace") as fh:
+            head = fh.read(8192)
+    except OSError:
+        return {}
+    return parse_front_matter(head)[0]
+
+
+class WikiJsPlugin:
+    """Wiki.js 2.x via GraphQL: páginas publicadas → `<locale>/<caminho>.md` com front-matter."""
+
+    type = "wikijs"
+    label = "Wiki.js"
+
+    async def fetch(self, source: DocSource, dest: Path, settings: Settings, *,
+                    only: frozenset[str] | None = None) -> str:
+        token = settings.wikijs_token.get_secret_value() if settings.wikijs_token else None
+        log.info("sync de documentação %s (%s)", source.repo_name, source.url)
+        result = await sync_docs(source, WikiJsClient(source.url, token), dest, only=only)
+        log.info("%s: %d páginas, %d baixadas, %d removidas", source.repo_name, result.total, result.changed,
+                 result.deleted)
+        return result.revision
+
+    async def preview(self, source: DocSource, settings: Settings, *, limit: int) -> dict[str, Any]:
+        """Páginas que entrariam, agrupadas pela raiz (lista a wiki; não baixa conteúdo)."""
+        token = settings.wikijs_token.get_secret_value() if settings.wikijs_token else None
+        pages = await WikiJsClient(source.url, token).list_pages(source.locale)
+        selected = sorted(selected_pages(source, pages), key=lambda p: p.path.lower())
+        roots: dict[str, int] = {}
+        for p in selected:
+            root = p.path.split("/", 1)[0]
+            roots[root] = roots.get(root, 0) + 1
+        cap = max(1, min(limit, 1000))
+        return {
+            "name": source.repo_name, "url": source.url, "locale": source.locale, "total": len(selected),
+            "pages_in_locale": len(pages),
+            "roots": [{"root": r, "pages": n} for r, n in sorted(roots.items(), key=lambda kv: kv[0].lower())],
+            "pages": [{"path": p.path, "title": p.title, "url": source.page_url(p.locale, p.path),
+                       "tags": list(p.tags), "updated_at": p.updated_at} for p in selected[:cap]],
+            "truncated": len(selected) > cap,
+        }
+
+    def documents(self, source: DocSource, dest: Path) -> list[DocumentMeta]:
+        out: list[DocumentMeta] = []
+        for entry in _load_manifest(dest).values():
+            rel = entry.get("file", "")
+            if not rel or not (dest / rel).is_file():
+                continue
+            meta = _read_front_matter(dest / rel)
+            folder = rel.rsplit("/", 1)[0] if "/" in rel else ""
+            out.append(DocumentMeta(
+                path=rel, type=WIKI_PAGE, title=str(meta.get("title") or rel), url=str(meta.get("url") or ""),
+                tags=tuple(str(t) for t in meta.get("tags") or []), updated_at=str(meta.get("updated_at") or ""),
+                attrs={"page_id": meta.get("page_id"), "folder": folder},
+            ))
+        return out
+
+    def linkers(self) -> list[Linker]:
+        return []  # menções, tags e regras valem para qualquer fonte de texto (linkers do núcleo)

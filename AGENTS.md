@@ -101,9 +101,6 @@ Testes: `tests/unit/` (rápidos) e `tests/integration/` (marcados `integration`)
 - `.env` (segredos), `repos.toml` (config local, fora do git), `.repos/` (clones), `.cocoindex/`
   (estado LMDB do CocoIndex; apagar força reprocessar tudo), schema `code_index` do banco real.
 - `~/.kiro/settings/mcp.json` e outras configs fora do repositório.
-- Git: commits só quando pedidos, sempre locais. **Não faça push.** O git do usuário tenta assinar
-  com GPG sem chave disponível; se o commit falhar por isso, pergunte antes de usar
-  `-c commit.gpgsign=false`.
 
 ## Validação: proporcional à mudança, não obrigatória a cada passo
 

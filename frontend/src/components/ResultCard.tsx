@@ -9,9 +9,11 @@ interface ResultCardProps {
   /** Maior score da lista, para desenhar o medidor de relevância de forma relativa. */
   maxScore: number;
   onOpen: () => void;
+  /** Abre o handler de uma operação da API (repo, caminho, linha). */
+  onOpenImpl?: (repo: string, path: string, line: number) => void;
 }
 
-export function ResultCard({ hit, maxScore, onOpen }: ResultCardProps) {
+export function ResultCard({ hit, maxScore, onOpen, onOpenImpl }: ResultCardProps) {
   const lines = useMemo<CodeLine[]>(
     () => hit.code.split("\n").map((text, i) => ({ n: hit.start_line + i, text })),
     [hit],
@@ -59,7 +61,7 @@ export function ResultCard({ hit, maxScore, onOpen }: ResultCardProps) {
         </div>
       </header>
 
-      {(hit.url || hit.linked_repos.length > 0) && (
+      {(hit.url || hit.linked_repos.length > 0 || (hit.implemented_in?.length ?? 0) > 0) && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 pb-3 text-xs text-zinc-500 dark:text-zinc-400">
           {hit.url && (
             <a
@@ -80,6 +82,20 @@ export function ResultCard({ hit, maxScore, onOpen }: ResultCardProps) {
               ))}
             </span>
           )}
+          {(hit.implemented_in ?? []).map((ref) => {
+            const impl = parseImpl(ref);
+            return (
+              <button
+                key={ref}
+                type="button"
+                title={ref}
+                onClick={() => impl && onOpenImpl?.(impl.repo, impl.path, impl.line)}
+                className="inline-flex min-w-0 items-center gap-1 font-medium text-emerald-700 hover:underline dark:text-emerald-400"
+              >
+                implementado em <span className="truncate font-mono">{impl ? `${impl.path.split("/").pop()}:${impl.line}` : ref}</span>
+              </button>
+            );
+          })}
         </div>
       )}
 
@@ -112,4 +128,10 @@ function ScoreMeter({ percent, score }: { percent: number; score: number }) {
       <span className="font-mono text-[11px] text-zinc-500 tabular-nums">{score.toFixed(2)}</span>
     </span>
   );
+}
+
+/** "repo/caminho/arquivo.java:42" → partes. */
+function parseImpl(ref: string): { repo: string; path: string; line: number } | null {
+  const m = /^([^/]+)\/(.+):(\d+)$/.exec(ref);
+  return m ? { repo: m[1], path: m[2], line: Number(m[3]) } : null;
 }

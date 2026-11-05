@@ -36,7 +36,8 @@ from ..infra.github import GitHubClient
 from ..infra.repo_store import RepoStore
 from ..settings import Settings
 from ..sources.github_org import GitHubOrgSource
-from ..sources.wikijs import MANIFEST, OWNER_MARKER, WikiJsClient, sync_docs
+from ..sources.registry import doc_plugin
+from ..sources.base import OWNER_MARKER, is_docs_folder
 
 log = logging.getLogger(__name__)
 
@@ -239,27 +240,19 @@ class Indexer:
     async def _fetch_docs(self, repo: Repo, row: RepoState, pull: bool, *, only: frozenset[str] | None = None) -> str:
         """Baixa só as páginas novas/alteradas da fonte de documentação. Revisão = hash do manifesto."""
         dest = repo.local_path(self._settings.repos_dir)
-        if dest.exists():
-            if ((dest / ".git").exists() or
-                    not ((dest / OWNER_MARKER).is_file() or (dest / MANIFEST).is_file())):
+        existed = dest.exists()
+        if existed:
+            if not is_docs_folder(dest):
                 raise RuntimeError(f"pasta de {repo.name} não identificada como documentação")
         else:
             dest.mkdir(parents=True)
             (dest / OWNER_MARKER).write_text("code-index docs\n", encoding="utf-8")
-        if not pull and only is None and (dest / MANIFEST).is_file() and row.revision:
+        if not pull and only is None and existed and row.revision:  # sem pull: reaproveita o que já foi baixado
             return row.revision.split("#", 1)[0]
         source = repo.doc_source
         if source is None:
             raise RuntimeError(f"fonte de documentação {repo.name} não está mais no repos.toml")
-        if source.type == "openapi_s3":
-            from ..sources.openapi_s3 import sync_source
-
-            return await sync_source(source, dest, self._settings, only=only)
-        token = self._settings.wikijs_token.get_secret_value() if self._settings.wikijs_token else None
-        log.info("sync de documentação %s (%s)", repo.name, source.url)
-        result = await sync_docs(source, WikiJsClient(source.url, token), dest, only=only)
-        log.info("%s: %d páginas, %d baixadas, %d removidas", repo.name, result.total, result.changed, result.deleted)
-        return result.revision
+        return await doc_plugin(source.type).fetch(source, dest, self._settings, only=only)
 
     def _plan(
         self,

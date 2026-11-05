@@ -2,11 +2,12 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Search, SearchX, Sparkles } from "lucide-react";
 import { ApiError, describeError } from "../api/client";
 import { api } from "../api/endpoints";
-import type { Hit, HitKind, SearchMode } from "../api/types";
+import type { Hit, HitKind, RepoMatch, SearchMode } from "../api/types";
+import { RepoCardDialog } from "../components/RepoCardDialog";
 import { useToast } from "../components/Toaster";
 import { ResultCard } from "../components/ResultCard";
 import { FileDrawer, type FileTarget } from "../components/FileDrawer";
-import { Button, EmptyState, Field, Kbd, Panel, Segmented, Select, Skeleton, Switch, inputClass } from "../components/ui";
+import { Badge, Button, EmptyState, Field, Kbd, Panel, Segmented, Select, Skeleton, Switch, inputClass } from "../components/ui";
 import { useIndex } from "../data/IndexProvider";
 
 const MODES: { value: SearchMode; label: string; help: string }[] = [
@@ -26,6 +27,8 @@ const KINDS: { value: "" | HitKind; label: string }[] = [
 interface Results {
   query: string;
   hits: Hit[];
+  /** Repos cujo cartão casa com a consulta (full-text; sem custo). */
+  repos: RepoMatch[];
 }
 
 export function SearchPage() {
@@ -77,7 +80,9 @@ export function SearchPage() {
         kind: kind || null,
         include_linked_docs: true,
       });
-      setResults({ query: text, hits });
+      // Repos pelo cartão: só sem filtro de repo, e sem travar a busca se falhar.
+      const repos = repo ? [] : await api.findRepos(text, 4).catch(() => [] as RepoMatch[]);
+      setResults({ query: text, hits, repos });
     } catch (err) {
       if (!(err instanceof ApiError && err.status === 401)) {
         push({ tone: "error", title: "A busca falhou", description: describeError(err) });
@@ -198,6 +203,16 @@ export function SearchPage() {
               {results.hits.length > 0 && <p className="text-xs">ordenados por relevância</p>}
             </div>
 
+            {results.repos.length > 0 && (
+              <RepoMatches
+                matches={results.repos}
+                onFilter={(name) => {
+                  setRepo(name);
+                  window.scrollTo({ top: 0, behavior: "smooth" });
+                }}
+              />
+            )}
+
             {results.hits.length === 0 ? (
               <Panel>
                 <EmptyState
@@ -213,6 +228,9 @@ export function SearchPage() {
                     key={`${i}-${hit.repo}-${hit.path}-${hit.start_line}`}
                     hit={hit}
                     maxScore={maxScore}
+                    onOpenImpl={(implRepo, path, line) =>
+                      setTarget({ repo: implRepo, path, highlight: { start: line, end: line } })
+                    }
                     onOpen={() =>
                       setTarget({
                         repo: hit.repo,
@@ -240,6 +258,38 @@ export function SearchPage() {
 
       <FileDrawer target={target} onClose={() => setTarget(null)} />
     </div>
+  );
+}
+
+/** Repos cujo cartão casa com a consulta: ajuda a escolher o filtro de repo. */
+function RepoMatches({ matches, onFilter }: { matches: RepoMatch[]; onFilter: (repo: string) => void }) {
+  const [card, setCard] = useState<string | null>(null);
+  return (
+    <Panel className="mb-4 p-4">
+      <p className="mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase dark:text-zinc-400">
+        Repos que tratam do assunto
+      </p>
+      <ul className="space-y-2.5">
+        {matches.map((m) => (
+          <li key={m.repo} className="text-sm">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <span className="font-medium" title={m.repo}>
+                {m.repo.split("__").pop()}
+              </span>
+              {m.kind && <Badge>{m.kind}</Badge>}
+              <button type="button" onClick={() => onFilter(m.repo)} className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400">
+                Filtrar a busca
+              </button>
+              <button type="button" onClick={() => setCard(m.repo)} className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400">
+                Cartão
+              </button>
+            </div>
+            {m.summary && <p className="mt-0.5 line-clamp-2 text-xs text-zinc-600 dark:text-zinc-300">{m.summary}</p>}
+          </li>
+        ))}
+      </ul>
+      {card && <RepoCardDialog repo={card} open onClose={() => setCard(null)} />}
+    </Panel>
   );
 }
 

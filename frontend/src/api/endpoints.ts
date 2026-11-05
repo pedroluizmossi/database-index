@@ -9,6 +9,10 @@ import type {
   OrgSummary,
   RepoInput,
   Repo,
+  RepoCardInfo,
+  RelationOrigin,
+  DocSuggestion,
+  RepoMatch,
   SearchRequest,
   SyncJob,
   DocPageRow,
@@ -48,6 +52,12 @@ export const api = {
   // com repos escolhidos pelo nome, a seleção não depende dela.
   docsPreview: (name: string) => getJson<DocsPreview>(`/api/v1/docs/${encodeURIComponent(name)}/preview`),
   docsOverview: (offset = 0) => getJson<DocPageRow[]>("/api/v1/docs/overview", { query: { limit: 2000, offset, docs_only: true } }),
+  relationOrigins: () => getJson<RelationOrigin[]>("/api/v1/relations/origins"),
+  docSuggestions: () => getJson<DocSuggestion[]>("/api/v1/docs/suggestions"),
+  reviewDocSuggestion: (body: { doc_repo: string; doc_path: string; repo: string; approve: boolean }) =>
+    postJson<{ ok: boolean }>("/api/v1/docs/suggestions/review", body),
+  repoCard: (name: string) => getJson<RepoCardInfo>(`/api/v1/repos/${seg(name)}/card`),
+  findRepos: (q: string, limit = 5) => getJson<RepoMatch[]>("/api/v1/repos/find", { query: { q, limit } }),
   repoDocs: (name: string) => getJson<RepoDocLink[]>(`/api/v1/repos/${seg(name)}/docs`),
   addDocLink: (body: { doc_repo: string; doc_path: string; repo: string; reason: string }) =>
     postJson<unknown>("/api/v1/docs/links", body),

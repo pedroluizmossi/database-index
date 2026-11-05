@@ -66,6 +66,9 @@ class Settings(BaseSettings):
     # Página que cita mais repos que isto (índice, lista de times...) não liga por simples menção
     doc_mention_max_repos: int = Field(15, validation_alias="DOC_MENTION_MAX_REPOS")
 
+    # Enriquecimento offline (`code-index enrich`): minutos de reserva de uma tarefa por um agent
+    enrich_lease_minutes: int = Field(20, ge=1, le=24 * 60, validation_alias="ENRICH_LEASE_MINUTES")
+
     # Arquivos locais (relativos a `base_dir`)
     repos_file: Path = Field(Path("repos.toml"), validation_alias="CODE_INDEX_REPOS")
     repos_dir: Path = Field(Path(".repos"), validation_alias="CODE_INDEX_REPOS_DIR")

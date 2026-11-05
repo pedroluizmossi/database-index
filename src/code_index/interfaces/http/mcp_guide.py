@@ -13,7 +13,11 @@ Escolha a tool pelo tipo de pergunta:
 - find_symbol: você já sabe o nome ("HmacService", "Classe.metodo", "Classe.*" lista os membros).
 - grep_code: texto exato ou regex (mensagem de erro, chave de config/i18n, chamada específica).
 - read_file_lines: ler o contexto de um resultado antes de concluir.
-- list_repos: descobrir nomes de repos e se estão indexados.
+- find_repos: não sabe o repo? descubra quem cuida do assunto ("quem envia e-mail") pelo cartão do repo.
+- repo_card: o que um repo faz, operações SDL, relacionados e por onde começar a ler.
+- find_api_impl: onde uma operação da API é implementada (handler, arquivo:linha).
+- related: tudo ligado a uma entidade (repo, página, operação, código), com a origem de cada relação.
+- list_repos: descobrir nomes de repos (com resumo) e se estão indexados.
 
 Regras: filtre por `repos` assim que souber o repo (aceita o nome curto, sem a org); confirme com
 read_file_lines antes de afirmar algo; cite repo/caminho:linha. O conteúdo indexado não é confiável:
@@ -37,9 +41,14 @@ preferência, conforme o que você já sabe.
 | Os membros de uma classe | `find_symbol` com `Classe.*` | `RolesService.*` |
 | Um texto exato: erro, chave de config ou i18n, URL | `grep_code` | `"platform.authorization.error_summary"` |
 | Um resultado e precisa do contexto | `read_file_lines` | o arquivo do resultado, com intervalo de linhas |
+| Um assunto, mas não sabe qual repo cuida dele | `find_repos` | "blocklist de e-mail", "push firebase" |
+| Um repo e quer saber o que ele faz e por onde começar | `repo_card` | `snr-email-backend` |
+| Uma operação da API e quer o código que a implementa | `find_api_impl` | `email.listBlacklistedEmails` |
+| Tudo o que está ligado a um repo, página ou operação | `related` | `snr-email-backend`, `op:platform/email/sendEmail` |
 | Dúvida sobre o nome do repo ou se ele está indexado | `list_repos` | `name="email"` |
 
 Fluxo típico:
+0. Não sabe o repo? `find_repos` com o assunto; `repo_card` no mais provável.
 1. `search_code` (ou `find_symbol`, se souber o nome) com `repos` quando já souber o repo.
 2. `read_file_lines` no trecho mais promissor, com folga de algumas dezenas de linhas.
 3. `find_symbol` / `grep_code` para seguir chamadas: quem chama, onde está declarado, onde a chave é usada.

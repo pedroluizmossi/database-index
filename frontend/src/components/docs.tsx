@@ -1,25 +1,47 @@
-import type { OriginKind } from "../api/types";
+import { useEffect, useState } from "react";
+import { api } from "../api/endpoints";
+import type { OriginKind, RelationOrigin } from "../api/types";
 import { Badge } from "./ui";
 
-const ORIGIN_LABEL: Record<OriginKind, string> = {
-  manual: "manual",
-  agent: "agent",
-  explicit: "regra",
-  service: "nome do serviço",
-  tag: "tag",
-  url: "link",
-  mention: "menção",
-};
+// Origens vêm da API (domain/relations.py); carregadas uma vez e compartilhadas pelos componentes.
+let cache: Map<string, RelationOrigin> | null = null;
+let pending: Promise<Map<string, RelationOrigin>> | null = null;
 
-/** Origens de um vínculo: gravadas (manual/agent) em destaque; automáticas em cinza. */
+function loadOrigins(): Promise<Map<string, RelationOrigin>> {
+  if (cache) return Promise.resolve(cache);
+  pending ??= api
+    .relationOrigins()
+    .then((list) => (cache = new Map(list.map((o) => [o.name, o]))))
+    .catch(() => new Map<string, RelationOrigin>());
+  return pending;
+}
+
+export function useOrigins(): Map<string, RelationOrigin> {
+  const [origins, setOrigins] = useState(cache ?? new Map<string, RelationOrigin>());
+  useEffect(() => {
+    let active = true;
+    void loadOrigins().then((m) => active && setOrigins(m));
+    return () => {
+      active = false;
+    };
+  }, []);
+  return origins;
+}
+
+/** Origens de um vínculo: gravadas (manual/agent/LLM aprovado) em destaque; automáticas em cinza. */
 export function OriginBadges({ origins }: { origins: OriginKind[] }) {
+  const meta = useOrigins();
+  const sorted = [...origins].sort((a, b) => (meta.get(a)?.order ?? 99) - (meta.get(b)?.order ?? 99));
   return (
     <>
-      {origins.map((origin) => (
-        <Badge key={origin} tone={origin === "manual" || origin === "agent" ? "accent" : "neutral"}>
-          {ORIGIN_LABEL[origin]}
-        </Badge>
-      ))}
+      {sorted.map((origin) => {
+        const o = meta.get(origin);
+        return (
+          <Badge key={origin} tone={o?.stored ? "accent" : "neutral"}>
+            <span title={o?.description}>{o?.label ?? origin}</span>
+          </Badge>
+        );
+      })}
     </>
   );
 }

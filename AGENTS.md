@@ -20,7 +20,7 @@ e textos ao usuário em **português**.
 uv sync                                   # dependências
 docker compose up -d                      # Postgres + pgvector (localhost:5432)
 uv run code-index serve                   # API + MCP em 127.0.0.1:8765 (docs em /docs)
-uv run code-index --help                  # CLI: org, repo, sync|index, watch, search, show, token, serve
+uv run code-index --help                  # CLI: org, repo, sync|index, watch, search, show, enrich, token, serve
 uv run pytest -q -m "not integration"     # testes unitários (~2s, sem rede e sem banco)
 uv run pytest -q tests/unit/test_X.py     # só o que você mexeu
 uv run pytest -q -m integration           # integração (Postgres; schema isolado; LLM falso)
@@ -35,12 +35,12 @@ O executável `code-index` só existe no ambiente do projeto: use `uv run`.
 | Pasta/arquivo | Responsabilidade |
 |---|---|
 | `settings.py` | `Settings` (env/.env). `get_settings()`, `use_settings()` (testes), `bootstrap()` (efeitos de runtime) |
-| `domain/` | **Puro, sem I/O**: `models`, `file_patterns` (o que indexar/excluir), `policies` (lote, nomes), `auth` (scopes), `search_text` (tokenização de código para busca, pesos da fusão), `doc_links` (apelidos de repos via manifestos, menções das páginas) |
-| `infra/` | Mundo externo: `db` (pool, migrations, extensões), `repo_store`, `chunk_store` (busca: motor bm25/fts/fts-legacy detectado no banco), `symbol_store`, `doc_link_store` (vínculos página → repo, calculados na consulta), `job_store`, `auth_store`, `config_file` (repos.toml), `git`, `github`, `grep` (ripgrep), `google_oidc`, `llm` |
-| `sources/` | De onde vêm os repos (`RepoSource`): `github_org`; `wikijs` (Wiki.js via GraphQL → `.md` com front-matter, incremental pelo `updatedAt`). Ponto de extensão para novas fontes |
-| `indexing/` | `content` (máscara de segredos/skip/binários), `context` (linhas inteiras + cabeçalho do embedding), `code_flow` (app CocoIndex), `orchestrator` (sync em etapas) |
+| `domain/` | **Puro, sem I/O**: `models`, `file_patterns` (o que indexar/excluir), `policies` (lote, nomes), `auth` (scopes), `search_text` (tokenização de código para busca, pesos da fusão), `doc_links` (apelidos de repos via manifestos, menções das páginas), `repo_card` (fatos: SDL/PDL/catalog-info; schema, validação e texto da tarefa do cartão), `api_impl` (operação SDL → `<op>Handler`), `doc_task` (tarefa páginas da wiki → repos), `relations` (chaves de entidade, tipos de relação, **registro único de origens**), `documents` (tipos de documento) |
+| `infra/` | Mundo externo: `db` (pool, migrations, extensões), `repo_store`, `chunk_store` (busca: motor bm25/fts/fts-legacy detectado no banco), `symbol_store`, `relation_store` (**único** ponto que lê/grava relações; view `effective_relations`), `document_store` (catálogo `documents`: tipo, atributos, páginas ignoradas), `job_store`, `enrich_store` (cartões e fila de tarefas `next`/`submit`), `auth_store`, `config_file` (repos.toml), `git`, `github`, `grep` (ripgrep), `google_oidc`, `llm` |
+| `sources/` | Contratos em `base.py`: `RepoSource` (descoberta de repos: `github_org`), `DocSourcePlugin` (fonte de documentação: `fetch`, `documents`, `preview`, `linkers`) e `Linker`. Plugins: `wikijs`, `openapi_s3`; registro em `registry.py` |
+| `indexing/` | `content` (máscara de segredos/skip/binários), `context` (linhas inteiras + cabeçalho do embedding), `code_flow` (app CocoIndex), `orchestrator` (sync em etapas), `enrich` (coleta do material do cartão, sem LLM), `linkers` (linkers do núcleo + `rebuild_relations`) |
 | `retrieval/` | `search` (híbrida + rerank), `files` (leitura com máscara) |
-| `services.py` | Casos de uso: **único** ponto usado pelas interfaces |
+| `services/` | Casos de uso: **único** ponto usado pelas interfaces (`CodeIndexService`, `open_service`). Um módulo por área: `repos`, `apis` (OpenAPI), `wiki`, `docs`, `search`, `sync`, `enrich`, `auth`; `base` tem as dependências e utilitários comuns |
 | `interfaces/` | `cli.py` e `http/` (`app.py` FastAPI, `mcp.py`, `security.py`): só parsing e formatação |
 
 Testes: `tests/unit/` (rápidos) e `tests/integration/` (marcados `integration`).
@@ -49,7 +49,7 @@ Testes: `tests/unit/` (rápidos) e `tests/integration/` (marcados `integration`)
 
 - Dependências só nesta direção: `interfaces → services → indexing/retrieval/sources → infra → domain/settings`.
   O `domain` não importa nada do projeto.
-- Regra de negócio fica em `services.py` (ou abaixo dele), nunca em `cli.py`/`http/`. CLI e API devem
+- Regra de negócio fica em `services/` (ou abaixo dele), nunca em `cli.py`/`http/`. CLI e API devem
   se comportar igual.
 - Configuração sempre via `Settings` injetado. Nada de `os.environ` ou constantes globais. Única
   exceção: o lifespan do CocoIndex em `code_flow.py`, que usa `get_settings()`.
@@ -58,8 +58,15 @@ Testes: `tests/unit/` (rápidos) e `tests/integration/` (marcados `integration`)
 - Schema da tabela `repos` e das tabelas de auth: cada mudança é uma **nova** migration em
   `infra/sql/NNN_descricao.sql` (placeholder `{schema}`, idempotente). Não edite migrations já aplicadas.
   A tabela `code_chunks` é do CocoIndex: não crie migration para ela.
-- Nova fonte de dados (ex.: specs OpenAPI): um `RepoSource`/fluxo próprio em `sources/` e `indexing/`,
-  exposto pelo `services.py`.
+- **Nova fonte de documentação = um plugin** (`DocSourcePlugin` em `sources/`, registrado em
+  `sources/registry.py`). Ele materializa `.md` e descreve os documentos (`type`/`attrs`); busca, X-Ray, MCP
+  e UI funcionam sem mudança. Nada de `if source.type == ...` nem de deduzir tipo pelo nome do repo.
+- **Vínculos são relações** (tabela `relations`, chaves `repo:`/`doc:`/`op:`/`code:`). Ligação nova = um
+  `Linker` (núcleo em `indexing/linkers.py`, ou da fonte no plugin) que devolve `Relation`s; ele é dono das
+  suas origens e é recalculado no fim de cada sync (`rebuild_relations`, sem custo). Origem nova entra em
+  `domain/relations.ORIGINS` (rótulo, se é contestável): a API e a UI leem de lá.
+- Leitura de vínculo só pela view `effective_relations` (via `RelationStore`): ela aplica status, remoções
+  aprovadas e repos/páginas que saíram.
 
 ## Custo (Voyage): não gaste tokens sem pedir
 
@@ -136,7 +143,10 @@ Podem rodar sem medo; só precisam do Postgres no ar (sem ele, são pulados).
 - **Pyright no editor** acusa imports "não resolvidos" porque não usa o `.venv`: é ruído. Vale o `mypy`.
 - **Busca sem nada indexado:** a tabela `code_chunks` só nasce no primeiro sync. O `chunk_store` trata
   `UndefinedTableError`.
-- **Tabelas de documentação** (`doc_pages`, `repo_aliases`, `doc_mentions`) são do CocoIndex, como
-  `code_chunks`, e só nascem no primeiro sync com essa versão. `DocLinkStore.available()` verifica antes de
-  usar. Vínculos não são gravados: saem do cruzamento menções × apelidos na consulta (`links_sql`).
+- **Tabelas de documentação do CocoIndex** (`doc_pages`, `repo_aliases`, `doc_mentions`) só nascem no
+  primeiro sync com docs; os linkers verificam (`to_regclass`) antes de usar. `documents`, `relations` e
+  `enrich_reviews` são nossas (migrations). Relações derivadas são **gravadas** no fim de cada sync: se mudar
+  algo fora do sync (ex.: editar `repo_cards` à mão), rode `code-index relations rebuild`.
+- **Vínculos gravados** (manual/agent/LLM) sobrevivem à saída da página ou do repo: a view só deixa de
+  mostrá-los. Uma remoção aprovada (`action = remove`) anula só origens contestáveis (menção, tag, link).
 - **`pkill -f "code-index serve"`** pode casar com o próprio shell. Prefira `pkill -f "bin/code-index serve$"`.

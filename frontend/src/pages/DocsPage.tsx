@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { BookOpen, ExternalLink, Plus, Search, X } from "lucide-react";
+import { BookOpen, ExternalLink, Network, Plus, Search, X } from "lucide-react";
+import { pageId, type XrayTarget } from "../lib/xray";
 import { api } from "../api/endpoints";
 import { describeError } from "../api/client";
 import type { DocPageRow } from "../api/types";
@@ -11,9 +12,11 @@ import { Alert, Button, EmptyState, IconButton, Panel, Select, Skeleton, Switch,
 import { hasScope } from "../lib/capabilities";
 
 const numberFormat = new Intl.NumberFormat("pt-BR");
+const PAGE_SIZE = 15;
+const FETCH_SIZE = 2000;
 
 /** Páginas da documentação indexada e os repos ligados a cada uma. Gravar e remover vínculos: só admin. */
-export function DocsPage() {
+export function DocsPage({ onXray }: { onXray: (target: XrayTarget) => void }) {
   const { session } = useAuth();
   const { push } = useToast();
   const admin = session ? hasScope(session.me, "admin") : false;
@@ -22,11 +25,21 @@ export function DocsPage() {
   const [q, setQ] = useState("");
   const [root, setRoot] = useState("");
   const [onlyUnlinked, setOnlyUnlinked] = useState(false);
+  const [page, setPage] = useState(0);
   const [adding, setAdding] = useState<DocPageRow | null>(null);
 
   const load = useCallback(async () => {
     try {
-      setRows(await api.docsOverview());
+      const pages: DocPageRow[] = [];
+      let batch: DocPageRow[];
+      do {
+        batch = await api.docsOverview(pages.length);
+        if (pages.length > 0 && batch.length > 0 && batch[0].doc_repo === pages[0].doc_repo && batch[0].doc_path === pages[0].doc_path) {
+          throw new Error("Reinicie o servidor para carregar todas as páginas de documentação.");
+        }
+        pages.push(...batch);
+      } while (batch.length === FETCH_SIZE);
+      setRows(pages.filter((row) => !row.doc_repo.startsWith("docs__openapi-")));
       setError(null);
     } catch (err) {
       setError(describeError(err));
@@ -51,6 +64,11 @@ export function DocsPage() {
         (!needle || (r.title ?? "").toLowerCase().includes(needle) || r.page.toLowerCase().includes(needle)),
     );
   }, [rows, q, root, onlyUnlinked]);
+  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const currentPage = Math.min(page, pageCount - 1);
+  const visible = filtered.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
+
+  useEffect(() => { setPage(0); }, [q, root, onlyUnlinked]);
 
   async function unlink(row: DocPageRow, repo: string) {
     try {
@@ -124,7 +142,7 @@ export function DocsPage() {
       )}
 
       <ul className="space-y-3">
-        {filtered.map((row) => (
+        {visible.map((row) => (
           <li
             key={`${row.doc_repo}|${row.doc_path}`}
             className="space-y-3 rounded-2xl border border-zinc-200/80 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900"
@@ -148,12 +166,15 @@ export function DocsPage() {
                   {row.root} · {row.page}
                 </p>
               </div>
+              <div className="flex items-center gap-2">
+              <Button variant="secondary" size="sm" aria-label={`Raio X de ${row.title ?? row.page}`} onClick={() => onXray({kind: "doc", id: pageId(row.doc_repo, row.doc_path)})}><Network className="size-3.5" aria-hidden="true" /> Raio X</Button>
               {admin && (
                 <Button variant="secondary" size="sm" onClick={() => setAdding(row)}>
                   <Plus className="size-3.5" aria-hidden="true" />
                   Vincular repo
                 </Button>
               )}
+              </div>
             </div>
 
             {row.links.length === 0 ? (
@@ -184,6 +205,17 @@ export function DocsPage() {
           </li>
         ))}
       </ul>
+
+      {filtered.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-zinc-500 dark:text-zinc-400">
+          <span>{numberFormat.format(currentPage * PAGE_SIZE + 1)}–{numberFormat.format(Math.min((currentPage + 1) * PAGE_SIZE, filtered.length))} de {numberFormat.format(filtered.length)} páginas</span>
+          <nav aria-label="Paginação da documentação" className="flex items-center gap-2">
+            <Button variant="secondary" size="sm" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>Anterior</Button>
+            <span>Página {currentPage + 1} de {pageCount}</span>
+            <Button variant="secondary" size="sm" disabled={currentPage + 1 >= pageCount} onClick={() => setPage(currentPage + 1)}>Próxima</Button>
+          </nav>
+        </div>
+      )}
 
       <AddDocLinkDialog
         page={adding}

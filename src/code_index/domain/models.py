@@ -44,8 +44,8 @@ class DocSource:
 
     def __post_init__(self) -> None:
         validate_name(self.name)
-        if self.type != "wikijs":
-            raise ValueError(f"fonte {self.name!r}: tipo não suportado {self.type!r} (use wikijs)")
+        if self.type not in ("wikijs", "openapi_s3"):
+            raise ValueError(f"fonte {self.name!r}: tipo não suportado {self.type!r}")
 
     @property
     def repo_name(self) -> str:

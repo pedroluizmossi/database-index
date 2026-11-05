@@ -5,6 +5,7 @@ const ORIGIN_LABEL: Record<OriginKind, string> = {
   manual: "manual",
   agent: "agent",
   explicit: "regra",
+  service: "nome do serviço",
   tag: "tag",
   url: "link",
   mention: "menção",

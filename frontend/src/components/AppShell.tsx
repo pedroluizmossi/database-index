@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { BookOpen, Database, KeyRound, LogOut, Moon, ScrollText, Search, SearchCode, Sun, type LucideIcon } from "lucide-react";
+import { BookOpen, Database, KeyRound, LogOut, Moon, Network, ScrollText, Search, SearchCode, Sun, type LucideIcon } from "lucide-react";
 import { useAuth } from "../auth/AuthProvider";
 import { canWrite, hasScope } from "../lib/capabilities";
 import type { Session } from "../auth/AuthProvider";
@@ -7,7 +7,7 @@ import { applyTheme, readTheme, saveTheme, systemPrefersDark, watchSystemTheme, 
 import { cx } from "../lib/utils";
 import { Backdrop, Badge, IconButton } from "./ui";
 
-export type Tab = "search" | "repos" | "docs" | "tokens" | "audit";
+export type Tab = "search" | "repos" | "docs" | "apis" | "xray" | "tokens" | "audit";
 
 interface TabDef {
   id: Tab;
@@ -21,6 +21,8 @@ export function tabsFor(session: Session | null): TabDef[] {
     { id: "search", label: "Busca", icon: Search },
     { id: "repos", label: "Repositórios", icon: Database },
     { id: "docs", label: "Documentação", icon: BookOpen },
+    { id: "apis", label: "APIs", icon: Database },
+    { id: "xray", label: "Raio X", icon: Network },
   ];
   if (session && canWrite(session)) tabs.push({ id: "tokens", label: "Tokens", icon: KeyRound });
   if (session && hasScope(session.me, "admin")) tabs.push({ id: "audit", label: "Auditoria", icon: ScrollText });
@@ -42,9 +44,9 @@ export function AppShell({
     <div className="min-h-dvh">
       <Backdrop />
       <header className="sticky top-0 z-40 border-b border-zinc-200/70 bg-white/70 backdrop-blur-xl dark:border-zinc-800/70 dark:bg-zinc-950/70">
-        <div className="mx-auto flex h-16 max-w-6xl items-center gap-4 px-4 sm:px-6">
+        <div className="mx-auto flex w-full flex-wrap items-center gap-x-3 px-4 sm:px-6 lg:h-16 lg:flex-nowrap lg:gap-4">
           <Brand />
-          <nav aria-label="Principal" className="flex items-center gap-1 rounded-xl bg-zinc-900/5 p-1 dark:bg-white/5">
+          <nav aria-label="Principal" className="order-3 mb-2 flex w-full items-center gap-1 rounded-xl bg-zinc-900/5 p-1 dark:bg-white/5 lg:order-2 lg:mb-0 lg:w-auto lg:flex-none">
             {tabs.map(({ id, label, icon: Icon }) => {
               const active = id === tab;
               return (
@@ -55,19 +57,19 @@ export function AppShell({
                   aria-current={active ? "page" : undefined}
                   onClick={() => onTab(id)}
                   className={cx(
-                    "inline-flex h-8 items-center gap-2 rounded-lg px-3 text-sm font-medium transition",
+                    "inline-flex h-8 min-w-0 flex-1 items-center justify-center gap-2 rounded-lg px-1 text-sm font-medium transition sm:px-3 lg:flex-none lg:px-2",
                     active
                       ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-800 dark:text-white"
                       : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200",
                   )}
                 >
-                  <Icon className="size-4" aria-hidden="true" />
-                  <span className="hidden lg:inline">{label}</span>
+                  <Icon className="size-4 shrink-0" aria-hidden="true" />
+                  <span className="hidden xl:inline">{label}</span>
                 </button>
               );
             })}
           </nav>
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex h-14 shrink-0 items-center gap-2 lg:order-3 lg:h-auto">
             <ThemeToggle />
             <UserMenu />
           </div>
@@ -125,16 +127,16 @@ function UserMenu() {
 
   return (
     <div className="flex items-center gap-3 border-l border-zinc-200 pl-3 dark:border-zinc-800">
-      <div className="hidden items-center gap-1.5 xl:flex">
+      <div className="hidden items-center gap-1.5 2xl:flex">
         {me.scopes.map((scope) => (
           <Badge key={scope} tone="accent">
             {scope}
           </Badge>
         ))}
       </div>
-      <div className="hidden text-right lg:block">
-        <p className="text-sm leading-tight font-medium">{name}</p>
-        <p className="text-xs leading-tight text-zinc-500 dark:text-zinc-400">{me.subject}</p>
+      <div className="hidden max-w-44 text-right xl:block">
+        <p className="truncate text-sm leading-tight font-medium">{name}</p>
+        <p className="truncate text-xs leading-tight text-zinc-500 dark:text-zinc-400">{me.subject}</p>
       </div>
       <span
         aria-hidden="true"

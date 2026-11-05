@@ -60,6 +60,9 @@ class Settings(BaseSettings):
 
     # Wiki.js (fontes [[docs]]): API key de leitura, criada em Administração → API Access
     wikijs_token: SecretStr | None = Field(None, validation_alias="WIKIJS_TOKEN")
+    openapi_bucket_url: str = Field("https://s3.amazonaws.com/br-com-senior-ecossistema-api", validation_alias="OPENAPI_BUCKET_URL")
+    openapi_ref_max_documents: int = Field(32, ge=0, le=256, validation_alias="OPENAPI_REF_MAX_DOCUMENTS")
+    openapi_ref_max_bytes: int = Field(4 * 1024 * 1024, ge=1024, validation_alias="OPENAPI_REF_MAX_BYTES")
     # Página que cita mais repos que isto (índice, lista de times...) não liga por simples menção
     doc_mention_max_repos: int = Field(15, validation_alias="DOC_MENTION_MAX_REPOS")
 

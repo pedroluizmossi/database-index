@@ -251,6 +251,10 @@ class Indexer:
         source = repo.doc_source
         if source is None:
             raise RuntimeError(f"fonte de documentação {repo.name} não está mais no repos.toml")
+        if source.type == "openapi_s3":
+            from ..sources.openapi_s3 import sync_source
+
+            return await sync_source(source, dest, self._settings, only=only)
         token = self._settings.wikijs_token.get_secret_value() if self._settings.wikijs_token else None
         log.info("sync de documentação %s (%s)", repo.name, source.url)
         result = await sync_docs(source, WikiJsClient(source.url, token), dest, only=only)

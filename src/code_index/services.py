@@ -88,6 +88,66 @@ class CodeIndexService:
 
     # ------------------------------------------------------------ repos
 
+    async def openapi_catalog(self) -> list[dict[str, Any]]:
+        """Lista o catálogo público sem baixar especificações nem gerar embeddings."""
+        import httpx
+        from .sources.openapi_s3 import list_objects
+
+        async with httpx.AsyncClient(timeout=60) as client:
+            items = await list_objects(client, self.settings.openapi_bucket_url)
+        return [{"domain": x.domain, "service": x.service, "key": x.key, "url": x.url,
+                 "size": x.size, "modified": x.modified} for x in items]
+
+    async def openapi_preview(self, domain: str, services: list[str] | None) -> dict[str, Any]:
+        from .sources.openapi_s3 import SwaggerObject, select_objects
+
+        catalog = await self.openapi_catalog()
+        items = [SwaggerObject(x["key"], x["domain"], x["service"], "", x["modified"], x["size"])
+                 for x in catalog]
+        selected = select_objects(items, domain, services)
+        return {"domain": domain, "services": [x.service for x in selected],
+                "bytes": sum(x.size for x in selected)}
+
+    async def openapi_status(self) -> list[dict[str, Any]]:
+        """Seleções persistidas e operações existentes no índice, sem consultar o S3."""
+        sources = [d for d in self._config.load_docs() if d.type == "openapi_s3"]
+        states = await self._repos.all_rows()
+        counts = await self._chunks.links.openapi_counts([d.repo_name for d in sources])
+        return [{"domain": d.locale, "repo": d.repo_name, "all_services": not bool(d.include),
+                 "selected_services": list(d.include),
+                 "status": states[d.repo_name].status if d.repo_name in states else "pending",
+                 "indexed_at": _iso_local(states[d.repo_name].indexed_at) if d.repo_name in states and states[d.repo_name].indexed_at else None,
+                 "error": states[d.repo_name].error if d.repo_name in states else None,
+                 "services": [{"service": x["service"], "operations": x["operations"]} for x in counts
+                              if x["repo"] == d.repo_name and x["domain"] == d.locale]}
+                for d in sources]
+
+    async def register_openapi(self, domain: str, services: list[str] | None) -> str:
+        """Acrescenta a seleção à fonte do domínio; vazio inclui serviços futuros."""
+        await self.openapi_preview(domain, services)
+        validate_name(domain)
+        name = f"openapi-{domain}"
+        docs = self._config.load_docs()
+        existing = next((d for d in docs if d.name == name), None)
+        if existing and (existing.type != "openapi_s3" or existing.locale != domain):
+            raise ValueError(f"nome de fonte já em uso: {name}")
+        if any(r.name == f"docs__{name}" for r in self._config.load_repos()):
+            raise ValueError(f"nome de repositório já em uso: docs__{name}")
+        if existing is None:
+            if f"docs__{name}" in await self._repos.all_rows():
+                raise ValueError(f"nome de repositório já em uso: docs__{name}")
+            if (self.settings.repos_dir / f"docs__{name}").exists():
+                raise ValueError(f"pasta da fonte já existe: docs__{name}")
+        selected = tuple(sorted(set(services or ())))
+        if existing and existing.include and selected:
+            selected = tuple(sorted(set(existing.include) | set(selected)))
+        elif existing and not existing.include:
+            selected = ()
+        source = DocSource(name=name, url=self.settings.openapi_bucket_url, type="openapi_s3",
+                           locale=domain, include=selected)
+        self._config.save(docs=[d for d in docs if d.name != name] + [source])
+        return source.repo_name
+
     async def add_repo(
         self,
         source: str,
@@ -274,6 +334,16 @@ class CodeIndexService:
         source = next((d for d in docs if d.name == name or d.repo_name == name), None)
         if source is None:
             raise ValueError(f"fonte de documentação não encontrada: {name}")
+        if source.type == "openapi_s3":
+            catalog = [x for x in await self.openapi_catalog() if x["domain"] == source.locale]
+            selected_api = [x for x in catalog if not source.include or x["service"] in source.include]
+            cap = max(1, min(limit, 1000))
+            return {"name": source.repo_name, "url": source.url, "locale": source.locale,
+                    "total": len(selected_api), "pages_in_locale": len(catalog),
+                    "roots": [{"root": source.locale, "pages": len(selected_api)}],
+                    "pages": [{"path": x["key"], "title": x["service"], "url": source.url.rstrip("/") + "/" + x["key"],
+                               "tags": [source.locale, x["service"]], "updated_at": x["modified"]}
+                              for x in selected_api[:cap]], "truncated": len(selected_api) > cap}
         token = self.settings.wikijs_token.get_secret_value() if self.settings.wikijs_token else None
         pages = await WikiJsClient(source.url, token).list_pages(source.locale)
         selected = sorted(_select_pages(source, pages), key=lambda p: p.path.lower())
@@ -365,18 +435,22 @@ class CodeIndexService:
         (resolved,) = await self._resolve_repos([repo]) or (repo,)
         return await self._chunks.links.remove_link(doc.repo_name, doc_path, resolved)
 
-    async def docs_overview(self, *, limit: int = 500) -> list[dict]:
+    async def docs_overview(self, *, limit: int = 500, offset: int = 0, docs_only: bool = False) -> list[dict]:
         """Páginas indexadas, com a raiz e os repos ligados (ver DocLinkStore.overview)."""
         from .domain.doc_links import page_path
 
         out = []
-        for r in await self._chunks.links.overview(limit=limit):
+        for r in await self._chunks.links.overview(limit=limit, offset=offset, docs_only=docs_only):
             page = page_path(r["path"])
             out.append({
                 "doc_repo": r["repo"], "doc_path": r["path"], "page": page, "root": page.split("/", 1)[0],
                 "title": r["title"], "url": r["url"], "links": r["links"],
             })
         return out
+
+    async def xray(self) -> dict:
+        """Páginas e vínculos reais usados para explorar as relações no Raio X."""
+        return await self._chunks.links.xray()
 
     async def doc_links(self, *, source: str | None = None, repo: str | None = None) -> list[dict]:
         """Vínculos gravados (manual/agent), com a página e o repo de cada um."""
@@ -508,6 +582,7 @@ class CodeIndexService:
         progress: bool = True,
         dry_run: bool = False,
         allow_register: bool = True,
+        doc_pages: frozenset[str] | None = None,
     ) -> SyncResult:
         """Indexa os nomes informados, ou um lote automático.
 
@@ -524,6 +599,7 @@ class CodeIndexService:
             progress=progress,
             dry_run=dry_run,
             allow_register=allow_register,
+            doc_pages=doc_pages,
         )
         if not dry_run:
             await self._ensure_search_indexes()
@@ -738,19 +814,29 @@ class CodeIndexService:
         batch: int,
         do_discover: bool = True,
         pull: bool = True,
+        openapi_domain: str | None = None,
+        openapi_services: list[str] | None = None,
     ) -> JobRecord:
         """Inicia uma indexação em segundo plano e devolve o job (já com id). Um por vez.
 
         Levanta RuntimeError se já houver um job rodando.
         """
         actor = principal.actor if principal else "operador local"
-        params = {"repos": names, "batch": batch, "discover": do_discover, "pull": pull}
+        params: dict[str, Any] = {"repos": names, "batch": batch, "discover": do_discover, "pull": pull}
         async with self._job_lock:
             running = await self._jobs.running()
             if running is not None:
                 raise RuntimeError(f"já existe um sync em andamento: job {running.id}")
+            if openapi_domain is not None:
+                if principal is not None and not principal.has(ADMIN):
+                    raise PermissionError("só administradores registram fontes")
+                names = [await self.register_openapi(openapi_domain, openapi_services)]
+                params["repos"] = names
+                params["openapi_domain"] = openapi_domain
+                params["openapi_services"] = openapi_services
             job_id = await self._jobs.create(actor, params)
-            task = asyncio.create_task(self._run_job(job_id, principal, names, batch, do_discover, pull))
+            only = frozenset(openapi_services) if openapi_services is not None else None
+            task = asyncio.create_task(self._run_job(job_id, principal, names, batch, do_discover, pull, only))
             self._job_tasks.add(task)
             task.add_done_callback(self._job_tasks.discard)
         job = await self._jobs.get(job_id)
@@ -765,12 +851,14 @@ class CodeIndexService:
         batch: int,
         do_discover: bool,
         pull: bool,
+        doc_pages: frozenset[str] | None = None,
     ) -> None:
         status, result, error = "failed", None, None
         try:
             res = await self.sync(
                 names, batch=batch, do_discover=do_discover, pull=pull, progress=False,
                 allow_register=principal is None or principal.has(ADMIN),
+                doc_pages=doc_pages,
             )
             status, result = "done", res.to_dict()
             if res.selected and not res.indexed and res.errors:

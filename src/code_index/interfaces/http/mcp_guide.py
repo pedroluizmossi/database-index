@@ -9,7 +9,7 @@ INSTRUCTIONS = """\
 Índice de código e documentação (wiki) de vários repositórios. Só leitura.
 
 Escolha a tool pelo tipo de pergunta:
-- search_code: por significado ("onde validamos o token", "como o refresh token é gerado").
+- search_code: investigue comportamentos com busca híbrida e rerank por padrão; descreva a pergunta.
 - find_symbol: você já sabe o nome ("HmacService", "Classe.metodo", "Classe.*" lista os membros).
 - grep_code: texto exato ou regex (mensagem de erro, chave de config/i18n, chamada específica).
 - read_file_lines: ler o contexto de um resultado antes de concluir.
@@ -45,7 +45,7 @@ Fluxo típico:
 3. `find_symbol` / `grep_code` para seguir chamadas: quem chama, onde está declarado, onde a chave é usada.
 4. Responda citando `repo/caminho:linha`.
 
-## 2. search_code (busca por significado)
+## 2. search_code (busca de código e documentação)
 
 - Escreva a consulta como uma pergunta ou a descrição do comportamento, em português ou inglês. Frases
   funcionam melhor que listas de palavras-chave.
@@ -54,11 +54,13 @@ Fluxo típico:
   com no máximo `max_docs` páginas (padrão: um quarto do top_k, mínimo 2).
 - `include_linked_docs` (padrão: sim): com `repos`, traz também as páginas da wiki ligadas a eles.
 - `top_k`: comece com 5 a 8. Aumente só se os resultados forem próximos mas não exatos.
-- `mode`: deixe `"hybrid"` (padrão). `"keyword"` só para identificadores exatos; com frases em português
-  ele casa arquivos de tradução e a wiki, não o código. `"semantic"` raramente ajuda mais que o híbrido.
-- `rerank` (padrão: sim): reordena os candidatos dando preferência ao código que implementa o pedido.
-  Para perguntas conceituais ("o que é", "para que serve"), use `kind="doc"`. Consultas que são um nome
-  exato (`HmacServiceImpl`) não passam pelo rerank: para elas, `find_symbol` costuma ser ainda melhor.
+- `mode`: `"hybrid"` (padrão) combina significado e termos; prefira para investigar comportamentos.
+  `"semantic"` busca por significado, útil para explorar conceitos expressos com palavras diferentes.
+  `"keyword"` busca termos e identificadores conhecidos; pode perder trechos que usam outros nomes.
+  Para texto exato, use `grep_code`; para declarações conhecidas, prefira `find_symbol`.
+- `rerank` (padrão: sim): reordena os candidatos conforme a relevância para a consulta. É independente
+  do modo; mantenha ativado para investigar, salvo necessidade específica. Sua aplicação depende da
+  configuração do servidor. Para perguntas conceituais, use `kind="doc"` quando quiser documentação.
 - `language` e `path_glob` filtram; `exclude_repos` e `exclude_path_glob` removem.
 
 O que vem no resultado:
@@ -78,7 +80,7 @@ O que vem no resultado:
   Terraform, seção de Markdown, objeto Kubernetes, objeto SQL).
 - Devolve a linha da declaração e a assinatura. Em seguida, leia com
   `read_file_lines(start_line=linha, end_line=linha+40)`.
-- É mais preciso e mais barato que `search_code` quando o nome é conhecido.
+- É mais preciso que `search_code` para localizar declarações quando o nome é conhecido.
 
 ## 4. grep_code (texto exato)
 

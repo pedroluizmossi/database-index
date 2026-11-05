@@ -313,6 +313,29 @@ def _parse_link(raw: str) -> tuple[str, list[str]]:
     return path.strip(), [r.strip() for r in repos.split(",") if r.strip()]
 
 
+async def _cmd_api(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        if a.api_command == "domains":
+            catalog = await svc.openapi_catalog()
+            for domain in sorted({x["domain"] for x in catalog}):
+                print(domain)
+        elif a.api_command == "services":
+            catalog = await svc.openapi_catalog()
+            for row in catalog:
+                if row["domain"] == a.domain:
+                    print(row["service"])
+        else:
+            preview = await svc.openapi_preview(a.domain, a.service)
+            print(json.dumps(preview, ensure_ascii=False, indent=2))
+            if not a.dry_run:
+                name = await svc.register_openapi(a.domain, a.service)
+                result = await svc.sync([name], batch=None, do_discover=False,
+                                        doc_pages=frozenset(a.service) if a.service else None)
+                print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+                if result.errors:
+                    raise SystemExit(1)
+
+
 async def _cmd_docs_add(a: argparse.Namespace, settings: Settings) -> None:
     async with open_service(settings) as svc:
         res = await svc.add_docs(
@@ -578,6 +601,17 @@ def main() -> None:
     ev.add_argument("-v", "--verbose", action="store_true", help="mostra cada pergunta e o que veio nos erros")
     ev.add_argument("--json", action="store_true")
     ev.set_defaults(fn=_cmd_eval)
+
+    api_cmd = sub.add_parser("api", help="catálogo Swagger no S3").add_subparsers(dest="api_command", required=True)
+    api_cmd.add_parser("domains", help="lista domínios sem indexar").set_defaults(fn=_cmd_api)
+    ap = api_cmd.add_parser("services", help="lista serviços sem indexar")
+    ap.add_argument("--domain", required=True)
+    ap.set_defaults(fn=_cmd_api)
+    ap = api_cmd.add_parser("index", help="indexa domínio ou serviços selecionados")
+    ap.add_argument("--domain", required=True)
+    ap.add_argument("--service", action="append", help="serviço exato; pode repetir")
+    ap.add_argument("--dry-run", action="store_true")
+    ap.set_defaults(fn=_cmd_api)
 
     dc = sub.add_parser("docs", help="fontes de documentação externa (Wiki.js)").add_subparsers(required=True)
     d = dc.add_parser("add", help="cadastra uma wiki (valida o acesso; não indexa)")

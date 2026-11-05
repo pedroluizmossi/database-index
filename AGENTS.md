@@ -25,6 +25,7 @@ uv run pytest -q -m "not integration"     # testes unitários (~2s, sem rede e s
 uv run pytest -q tests/unit/test_X.py     # só o que você mexeu
 uv run pytest -q -m integration           # integração (Postgres; schema isolado; LLM falso)
 uv run mypy src
+uv run code-index eval -v                 # qualidade da busca (evals/queries.json); custa centavos (consultas)
 ```
 
 O executável `code-index` só existe no ambiente do projeto: use `uv run`.
@@ -74,7 +75,10 @@ Testes: `tests/unit/` (rápidos) e `tests/integration/` (marcados `integration`)
   Mantenha estáveis: o nome do app (`"CodeIndex"`), as ContextKeys, o subpath `("repo", nome)` e o
   schema da tabela. Mudar `EMBED_MODEL`/`EMBED_DIMENSIONS` reembeda tudo.
 - `content.py` é dependência de lógica (`LogicDep` pelo hash do arquivo): editá-lo invalida o memo
-  dos arquivos. Isso é esperado.
+  dos arquivos. Isso é esperado. Mudanças em `context.py`/`search_text.py` só valem para o índice depois
+  de subir a `version` do `process_file` (memo) e de um sync. Regra urgente de máscara pode entrar antes em
+  `retrieval/redaction.py`, que só age na saída e não força reprocessar.
+- Mexeu na busca (pesos, filtros, tokenização)? Compare `code-index eval` antes e depois.
 
 ## Segurança: invariantes que não podem quebrar
 

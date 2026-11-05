@@ -5,7 +5,9 @@ tabelas mantidas pelo CocoIndex na indexação:
   explicit → regra do repos.toml (padrão LIKE sobre o nome do repo, com ou sem a org)
   tag      → tag da página igual a um apelido (qualquer apelido)
   url      → link github.com/<org>/<repo> na página
-  mention  → termo do texto igual a um apelido FORTE (nomes genéricos não ligam por menção)
+  mention  → termo do texto igual a um apelido FORTE (nomes genéricos não ligam por menção).
+             Página que menciona mais de DOC_MENTION_MAX_REPOS repos (índices, listas de times)
+             não liga por menção: ligaria a quase tudo e encheria a busca filtrada por repo.
   manual/agent → linha gravada em doc_links (tabela nossa, não do CocoIndex): decisão de uma pessoa
                  ou de um agent. Só vale enquanto a página e o repo existirem.
 """
@@ -31,10 +33,14 @@ def links_sql(settings: Settings) -> str:
     a = settings.qualified(settings.aliases_table)
     pages = settings.qualified(settings.doc_pages_table)
     r = f'"{settings.pg_schema}".repos'
+    max_repos = int(settings.doc_mention_max_repos)  # inteiro de configuração, não entrada do usuário
     return f"""
         SELECT m.doc_repo, m.doc_path, a.repo, m.origin
         FROM {m} m JOIN {a} a ON a.alias = m.term AND a.repo <> m.doc_repo
-        WHERE m.origin IN ('tag', 'url') OR (m.origin = 'mention' AND a.strong)
+        WHERE m.origin IN ('tag', 'url') OR (m.origin = 'mention' AND a.strong AND (m.doc_repo, m.doc_path) NOT IN (
+            SELECT m2.doc_repo, m2.doc_path FROM {m} m2
+            JOIN {a} a2 ON a2.alias = m2.term AND a2.repo <> m2.doc_repo AND a2.strong
+            WHERE m2.origin = 'mention' GROUP BY 1, 2 HAVING count(DISTINCT a2.repo) > {max_repos}))
         UNION
         SELECT m.doc_repo, m.doc_path, r.name, 'explicit'
         FROM {m} m JOIN {r} r ON m.origin = 'explicit' AND r.kind = 'code' AND NOT r.ignored AND (r.name LIKE m.term OR r.name LIKE '%\\_\\_' || m.term)
@@ -43,6 +49,10 @@ def links_sql(settings: Settings) -> str:
         FROM {_doc_links(settings)} l
         JOIN {pages} p ON p.repo = l.doc_repo AND p.path = l.doc_path
         JOIN {r} r ON r.name = l.repo AND r.kind = 'code' AND NOT r.ignored"""
+
+
+def ignores_table(settings: Settings) -> str:
+    return f'"{settings.pg_schema}".doc_ignores'
 
 
 class DocLinkStore:
@@ -174,3 +184,16 @@ class DocLinkStore:
         out = [{"doc_repo": r["doc_repo"], "path": r["doc_path"], "url": r["url"], "title": r["title"],
                 "origins": sorted(r["origins"], key=ORIGIN_ORDER.index)} for r in rows]
         return sorted(out, key=lambda d: (rank(d["origins"]), d["title"] or d["path"]))
+
+    async def set_ignore(self, doc_repo: str, doc_path: str, reason: str) -> None:
+        await self._pool.execute(
+            f"""INSERT INTO {ignores_table(self._settings)} (doc_repo, doc_path, reason) VALUES ($1, $2, $3)
+                ON CONFLICT (doc_repo, doc_path) DO UPDATE SET reason = EXCLUDED.reason""",
+            doc_repo, doc_path, reason,
+        )
+
+    async def remove_ignore(self, doc_repo: str, doc_path: str) -> bool:
+        status = await self._pool.execute(
+            f"DELETE FROM {ignores_table(self._settings)} WHERE doc_repo = $1 AND doc_path = $2", doc_repo, doc_path,
+        )
+        return status.endswith(" 1")

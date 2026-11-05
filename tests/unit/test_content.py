@@ -128,7 +128,8 @@ def test_arquivo_de_dados_grande_e_descartado() -> None:
 
 
 def test_arquivo_de_dados_no_limite_e_mantido() -> None:
-    text = "x" * MAX_DATA_FILE_BYTES
+    line = '  "chave": "valor",\n'
+    text = (line * (MAX_DATA_FILE_BYTES // len(line) + 1))[:MAX_DATA_FILE_BYTES]
 
     assert skip_reason("dados.json", "json", text) is None
 
@@ -186,3 +187,54 @@ def test_binario_e_ignorado(text: str) -> None:
 )
 def test_texto_nao_e_tratado_como_binario(text: str) -> None:
     assert skip_reason("src/app.ts", "typescript", text) is None
+
+
+def test_minificado_e_descartado() -> None:
+    assert skip_reason("meta.json", "json", '{"a":' + '"x",' * 9000 + '"b":1}') == "minificado"
+    assert skip_reason("app.min.js", "javascript", "var a=1;" * 2000 + "\n" + "b();" * 2000) == "minificado"
+
+
+def test_linha_longa_isolada_nao_e_minificado() -> None:
+    text = "x = 1\n" * 400 + "S = '" + "a" * 3000 + "'\n"
+    assert skip_reason("app.py", "python", text) is None
+
+
+def test_mascara_token_do_npmrc_na_indexacao() -> None:
+    from code_index.indexing.content import redact
+
+    out, n = redact("//h.example.com/npm/:_authToken=12345678-aaaa-bbbb-cccc-1234567890ab\n", "")
+    assert out == "//h.example.com/npm/:_authToken=***\n" and n == 1
+    assert redact("//h/:_authToken=${NPM_TOKEN}", "")[0] == "//h/:_authToken=${NPM_TOKEN}"
+
+
+def test_linguagem_de_sdl_e_pdl() -> None:
+    from code_index.indexing.content import file_language
+
+    assert file_language("authentication.sdl") == "sdl"
+    assert file_language("authentication.pdl") == "pdl"
+    assert file_language("App.java") == "java"
+    assert file_language("LICENSE") == ""
+
+
+def test_mascara_token_npm_citado_no_meio_do_texto() -> None:
+    from code_index.indexing.content import redact
+
+    line = "- Valor atual: @x:registry=https://npm.x.com///npm.x.com/:_authToken=1EF47FDB-0249-4D08-AB1F-1DC9AE9133D2"
+    out = redact(line, "markdown")[0]
+    assert "1EF47FDB" not in out and out.endswith(":_authToken=***")
+
+
+def test_npm_auth_nao_mascara_codigo_comum() -> None:
+    from code_index.indexing.content import redact
+
+    for code in ("this._password = password;", "if (cfg._auth: true)", "self._auth = None"):
+        assert redact(code, "python")[0] == code
+
+
+def test_segredo_em_formato_uuid_e_mascarado() -> None:
+    from code_index.indexing.content import redact
+
+    uuid = "1ef47fdb-0249-4d08-ab1f-1dc9ae9133d2"
+    assert redact(f"client_secret: {uuid}", "yaml")[0] == "client_secret: ***"
+    assert redact(f'apiKey = "{uuid}"', "java")[0] == 'apiKey = "***"'
+    assert redact("label_key: platform.auth.error_summary", "yaml")[0] == "label_key: platform.auth.error_summary"

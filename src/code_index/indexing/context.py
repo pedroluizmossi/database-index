@@ -91,7 +91,8 @@ def declarations(text: str, language: str, filename: str = "") -> list[Decl]:
         for m in pattern.finditer(text):
             name = m.group(group)
             if name and name not in _KEYWORDS:
-                out.append(Decl(_line_of(text, m.start(), starts), kind, name.strip()))
+                # linha do NOME, não do início do casamento (que pode ser uma anotação acima: @Service)
+                out.append(Decl(_line_of(text, m.start(group), starts), kind, name.strip()))
 
     lang = (language or "").lower()
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else filename.lower()
@@ -198,3 +199,39 @@ def chunk_header(repo: str, path: str, language: str, decls: list[Decl], start_l
 
     first = f"# {repo}/{path}" + (f" ({language})" if language else "")
     return first if not parts else first + "\n# " + " · ".join(parts)
+
+
+MIN_CHUNK_CHARS = 120     # trecho menor que isto (ex.: "  }\n}") é fundido ao vizinho
+MAX_MERGED_CHARS = 2400   # ... desde que o resultado não passe disto
+
+
+def chunk_spans(raw: list[tuple[int, int, int]], lines: list[str]) -> list[tuple[int, int]]:
+    """Intervalos de linhas (inteiras) dos trechos, a partir de (linha inicial, linha final, coluna final)
+    do splitter.
+
+    - Trecho contido em outro já escolhido (pedaços de uma linha longa viram a mesma linha
+      inteira) é descartado: antes, um JSON de uma linha virava dezenas de trechos iguais.
+    - Trecho pequeno (só fechamento de bloco, por exemplo) é fundido ao anterior, ou ao próximo
+      se for o primeiro, quando o resultado não fica grande demais. Arquivo pequeno inteiro
+      continua sendo um trecho só.
+    """
+
+    def size(start: int, end: int) -> int:
+        return len(full_lines(lines, start, end).strip())
+
+    spans: list[tuple[int, int]] = []
+    for start, end, end_col in raw:
+        start, end = chunk_bounds(start, end, end_col)
+        if spans and spans[-1][0] <= start and end <= spans[-1][1]:
+            continue
+        spans.append((start, end))
+
+    out: list[tuple[int, int]] = []
+    for start, end in spans:
+        if out and size(start, end) < MIN_CHUNK_CHARS and size(out[-1][0], end) <= MAX_MERGED_CHARS:
+            out[-1] = (out[-1][0], max(out[-1][1], end))
+        else:
+            out.append((start, end))
+    if len(out) > 1 and size(*out[0]) < MIN_CHUNK_CHARS and size(out[0][0], out[1][1]) <= MAX_MERGED_CHARS:
+        out[0:2] = [(out[0][0], max(out[0][1], out[1][1]))]
+    return out

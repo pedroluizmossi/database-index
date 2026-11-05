@@ -5,11 +5,16 @@ Identificadores viram o termo inteiro + as partes:
     get_user_name    -> get_user_name get user name
     XMLHttpRequest   -> xmlhttprequest xml http request
 Assim a busca acha tanto o nome exato quanto pedaços dele ("Hmac" acha HmacServiceImpl).
+
+Palavras de comentários e textos perdem os acentos ("validação" -> "validacao"), para a busca
+achar o texto escrito com ou sem acento. A consulta também procura a forma acentuada (o que foi
+indexado antes desta regra) e o singular de palavras no plural ("tokens" acha "token").
 """
 
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Literal
 
 _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -25,6 +30,26 @@ the an and or of to in on for with from by is are be was how where what which wh
 """.split())
 
 QueryKind = Literal["identifier", "natural"]
+
+
+def fold(word: str) -> str:
+    """Sem acentos: 'validação' -> 'validacao'."""
+    return "".join(c for c in unicodedata.normalize("NFKD", word) if not unicodedata.combining(c))
+
+
+_STOP_FOLDED = frozenset(fold(w) for w in STOPWORDS)
+# plural -> singular (formas com e sem acento); o resto perde só o "s" final
+_PLURALS = (("ções", "ção"), ("coes", "cao"), ("ões", "ão"), ("oes", "ao"), ("ães", "ão"), ("aes", "ao"), ("ies", "y"))
+
+
+def singular(word: str) -> str | None:
+    """Singular provável de uma palavra (pt/en), ou None se não parecer plural."""
+    for suffix, repl in _PLURALS:
+        if word.endswith(suffix) and len(word) > len(suffix) + 2:
+            return word[: -len(suffix)] + repl
+    if len(word) >= 5 and word.endswith("s") and not word.endswith(("ss", "us", "is")):
+        return word[:-1]
+    return None
 
 
 def split_identifier(ident: str) -> list[str]:
@@ -53,18 +78,32 @@ def code_terms(text: str) -> str:
         if _IDENT.fullmatch(word):
             terms.extend(_ident_terms(word))
         elif len(word) >= 2 and not word.isdigit():
-            terms.append(word.lower())
+            terms.append(fold(word.lower()))
         if len(terms) >= MAX_TERMS:
             break
     return " ".join(terms[:MAX_TERMS])
 
 
 def query_terms(query: str) -> list[str]:
-    """Termos de uma consulta: mesma tokenização, sem stopwords e sem repetição (ordem preservada)."""
+    """Termos de uma consulta: mesma tokenização, sem stopwords e sem repetição (ordem preservada).
+
+    Em frases, cada palavra vem também na forma acentuada original (casa o que foi indexado
+    antes de os acentos saírem) e no singular, quando parece plural.
+    """
+    natural = query_kind(query) == "natural"
+    accented = {fold(w.lower()): w.lower() for w in _WORD.findall(query) if fold(w.lower()) != w.lower()}
     out: list[str] = []
-    for term in code_terms(query).split():
-        if term not in STOPWORDS and term not in out and (len(term) >= 2):
+
+    def add(term: str | None) -> None:
+        if term and len(term) >= 2 and fold(term) not in _STOP_FOLDED and term not in out:
             out.append(term)
+
+    for term in code_terms(query).split():
+        add(term)
+        add(accented.get(term))
+        if natural:
+            add(singular(term))
+            add(singular(accented[term]) if term in accented else None)
     return out
 
 
@@ -82,6 +121,8 @@ def query_kind(query: str) -> QueryKind:
 def fusion_weights(kind: QueryKind) -> tuple[float, float]:
     """(peso da busca semântica, peso da busca por termos) na fusão RRF.
 
-    Frases: o vetor entende a intenção; termos só desempatam. Identificadores: o termo exato manda.
+    Frases: o vetor entende a intenção; termos reforçam. Identificadores: o termo exato manda.
+    Calibrado com `code-index eval --grid` (evals/queries.json): em frases, 1.0/0.7 acertou mais
+    na 1ª posição que 1.0/0.4; dar mais peso aos termos que ao vetor piorou bastante.
     """
-    return (0.6, 1.0) if kind == "identifier" else (1.0, 0.4)
+    return (0.6, 1.0) if kind == "identifier" else (1.0, 0.7)

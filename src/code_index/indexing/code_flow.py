@@ -29,8 +29,8 @@ from numpy.typing import NDArray
 from ..domain.models import Repo
 from ..infra import llm
 from ..settings import Settings, get_settings
-from .content import CONTENT_LOGIC, redact, skip_reason
-from .context import Decl, chunk_bounds, chunk_header, declarations, full_lines, symbol_names
+from .content import CONTENT_LOGIC, file_language, redact, skip_reason
+from .context import Decl, chunk_header, chunk_spans, declarations, full_lines, symbol_names
 from ..domain.doc_content import strip_embedded_blobs
 from ..domain.doc_links import (
     MANIFESTS, alias_is_strong, blank_lines, manifest_aliases, page_mentions, page_path, parse_front_matter,
@@ -181,7 +181,7 @@ class DocTargets:
                 self.mentions.__coco_memo_key__(), self.skipped.__coco_memo_key__())
 
 
-@coco.fn(memo=True, version=6)
+@coco.fn(memo=True, version=7)  # 7: linhas das declarações, trechos sem repetição, sdl/pdl
 async def process_file(
     file: FileLike,
     repo: str,
@@ -204,7 +204,8 @@ async def process_file(
     if size > get_settings().max_file_bytes:
         doc_targets.skipped.declare_row(row=SkippedFile(repo=repo, path=path, reason="tamanho", size_bytes=size))
         return
-    language = detect_code_language(filename=file.file_path.path.name) or ""
+    language = file_language(file.file_path.path.name)  # inclui sdl/pdl, que o detector não conhece
+    splitter_language = detect_code_language(filename=file.file_path.path.name)  # só o que o tree-sitter entende
     reason = skip_reason(path, language, text)
     if reason:
         doc_targets.skipped.declare_row(row=SkippedFile(repo=repo, path=path, reason=reason, size_bytes=size))
@@ -233,14 +234,13 @@ async def process_file(
         chunk_size=1500,
         min_chunk_size=300,
         chunk_overlap=200,
-        language=language or None,
+        language=splitter_language,
     )
     lines = text.split("\n")
     decls = declarations(text, language, file.file_path.path.name)
     _declare_symbols(symbols_table, repo, path, language, decls, lines)
     items = []
-    for c in chunks:
-        start, end = chunk_bounds(c.start.line, c.end.line, c.end.column)
+    for start, end in chunk_spans([(c.start.line, c.end.line, c.end.column) for c in chunks], lines):
         header = chunk_header(repo, path, language, decls, start, end)
         if page_title:
             header += f"\n# página: {page_title}"

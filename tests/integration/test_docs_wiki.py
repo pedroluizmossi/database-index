@@ -312,3 +312,24 @@ async def test_visao_geral_e_vinculos_por_chave(int_settings: Settings, tmp_path
         assert await svc.unlink_doc_key("docs__wiki", "pt-br/Plataforma/Email.md", "email-front") is True
         assert (await svc.docs_overview())[0]["links"] == []
         assert await svc.unlink_doc_key("docs__wiki", "pt-br/Plataforma/Email.md", "email-front") is False
+
+
+async def test_pagina_ignorada_some_da_busca_e_volta(int_settings: Settings, fake_llm: Any, wiki: FakeWiki) -> None:
+    settings = int_settings.model_copy(update={"wikijs_token": SecretStr("tok-wiki")})
+    use_settings(settings)
+    from code_index.services import open_service
+
+    async with open_service(settings) as svc:
+        await svc.add_docs("wiki", url=WIKI, locale="pt-br", include=("Plataforma/**",))
+        await svc.index_doc_pages("docs__wiki", ["Plataforma/Email"])
+
+        antes = await svc.search("envio transacional de mensagens", kind="doc", mode="keyword", rerank=False)
+        assert {h.path for h in antes} == {"pt-br/Plataforma/Email.md"}
+
+        await svc.ignore_doc("wiki", "Plataforma/Email", reason="página de teste")
+        assert await svc.search("envio transacional de mensagens", kind="doc", mode="keyword", rerank=False) == []
+
+        assert await svc.unignore_doc("wiki", "Plataforma/Email") is True
+        assert await svc.unignore_doc("wiki", "Plataforma/Email") is False
+        volta = await svc.search("envio transacional de mensagens", kind="doc", mode="keyword", rerank=False)
+        assert {h.path for h in volta} == {"pt-br/Plataforma/Email.md"}

@@ -115,8 +115,10 @@ uv run code-index search "criação de tabela" -l sql -p "**/migration/**"
 uv run code-index show minha-org__meu-backend/src/main/App.java:10-40
 uv run code-index search "..." --no-rerank                 # só busca híbrida
 uv run code-index symbol HmacServiceImpl                    # onde está declarado (também Classe.metodo)
+uv run code-index symbol "HmacServiceImpl.*"                # membros da classe
 uv run code-index grep "Saldo insuficiente" -p "**/*.java"  # texto exato via ripgrep (-E para regex)
 uv run code-index search "envio de e-mail" --kind doc       # só documentação (README, docs/, wiki)
+uv run code-index eval -v                                   # mede a qualidade da busca (evals/queries.json)
 ```
 
 **Pipeline de busca.** Duas fontes, combinadas por RRF (Reciprocal Rank Fusion) **com pesos**:
@@ -131,10 +133,28 @@ uv run code-index search "envio de e-mail" --kind doc       # só documentação
   | `fts` | Postgres comum: full-text nativo nas mesmas colunas, com pesos A/B |
   | `fts-legacy` | tabela antiga, antes de reindexar: full-text sobre o código |
 
-Os pesos da fusão dependem da consulta: frases favorecem o vetor (1,0 contra 0,4); consultas que parecem um
+Os pesos da fusão dependem da consulta: frases favorecem o vetor (1,0 contra 0,7); consultas que parecem um
 identificador (`HmacServiceImpl`, `get_user`, `Classe.metodo`) favorecem os termos (1,0 contra 0,6). Os 40
 melhores (`RERANK_CANDIDATES`) vão para o reranker (`RERANK_MODEL=voyage/rerank-2.5`), que devolve os top-k.
 Se o rerank falhar, a resposta usa a ordem da fusão.
+
+O reranker é genérico e tende a preferir prosa (wiki, descrições do `.sdl`) ao código que implementa a
+função. Por isso a consulta vai a ele com uma instrução pedindo código (`RERANK_INSTRUCTION=true`, padrão;
+desligada quando a busca é `kind=doc`). Medido com `code-index eval --rerank-variants`: MRR de 0,76 para 0,88
+e hit@3 de 0,81 para 1,00. Mandar o cabeçalho de contexto (`RERANK_HEADER`) ou reordenar só o código
+(`RERANK_CODE_ONLY`) não trouxe ganho claro; ficam desligados. Consultas que parecem um identificador
+(`BlockedWordsCache`, `get_user`) não vão ao reranker (`RERANK_SKIP_IDENTIFIERS=true`): a busca por termos
+já acha o nome exato, e o rerank só a piorava (MRR dessas consultas de 0,87 para 0,93, sem custo de rerank).
+
+Os termos ignoram acentos ("validacao" acha "validação"), e a consulta também procura o singular
+("tokens" acha "token"). Na resposta, trechos vizinhos do mesmo arquivo são fundidos (no máximo 2 por
+arquivo), um trecho idêntico em vários repos (boilerplate) aparece uma vez, com os outros em `also_in`, e
+as páginas de documentação ficam limitadas a um quarto do top-k (mínimo 2; `--max-docs` muda isso).
+
+**Avaliação.** `evals/queries.json` tem perguntas com a resposta conhecida (repo, caminho e linha
+opcional). `code-index eval` mede hit@1, hit@3, hit@k e MRR em cada modo de busca, e `--grid` compara os
+pesos da fusão sem rerank. Rode depois de mexer na busca ou no chunking. Cada pergunta custa um embedding
+de consulta e, nos modos com rerank, uma chamada ao reranker (centavos).
 
 **Símbolos.** A tabela `code_symbols` é preenchida na indexação, sem custo de API, com as declarações de
 cada arquivo: nome, tipo, classe envolvente, linha e assinatura.

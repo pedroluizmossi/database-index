@@ -160,3 +160,41 @@ def test_linhas_inteiras_e_fim_na_quebra_de_linha() -> None:
     assert chunk_bounds(1, 3, 1) == (1, 2)
     assert chunk_bounds(1, 3, 5) == (1, 3)
     assert chunk_bounds(2, 2, 1) == (2, 2)  # chunk de uma linha só não encolhe
+
+
+def test_linha_da_classe_anotada_e_a_do_nome() -> None:
+    d = declarations(JAVA, "java", "HmacServiceImpl.java")
+    (cls,) = [x for x in d if x.kind == "container"]
+    assert JAVA.split("\n")[cls.line - 1].startswith("public class HmacServiceImpl")
+
+
+def test_metodo_com_modificadores_em_varias_linhas() -> None:
+    src = "class A {\n    public\n    static void run(int x) {\n    }\n}\n"
+    (run,) = [x for x in declarations(src, "java", "A.java") if x.name == "run"]
+    assert run.line == 3
+
+
+def test_spans_sem_repeticao_de_linha_longa() -> None:
+    from code_index.indexing.context import chunk_spans
+
+    lines = ["x" * 5000]
+    # o splitter corta a linha em pedaços; todos viram a mesma linha inteira
+    assert chunk_spans([(1, 1, 1500), (1, 1, 3000), (1, 1, 5001)], lines) == [(1, 1)]
+
+
+def test_spans_funde_trecho_pequeno_ao_anterior_e_ao_proximo() -> None:
+    from code_index.indexing.context import chunk_spans
+
+    body = [f"    linha_de_codigo_{i} = calcula(valor, {i})" for i in range(40)]
+    lines = body + ["  }", "}"]
+    spans = chunk_spans([(1, 20, 50), (21, 40, 50), (41, 42, 2)], lines)
+    assert spans == [(1, 20), (21, 42)]
+    # pequeno no início vai para o próximo
+    lines2 = ["import x;", ""] + body
+    assert chunk_spans([(1, 2, 1), (3, 42, 50)], lines2) == [(1, 42)]
+
+
+def test_spans_arquivo_pequeno_inteiro_continua() -> None:
+    from code_index.indexing.context import chunk_spans
+
+    assert chunk_spans([(1, 3, 2)], ["a: 1", "b: 2", "c: 3"]) == [(1, 3)]

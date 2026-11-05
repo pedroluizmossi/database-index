@@ -16,7 +16,7 @@ from collections.abc import Callable, Coroutine
 from typing import Any
 
 from ..domain.models import SyncResult
-from ..services import open_service
+from ..services import CodeIndexService, open_service
 from ..settings import Settings, bootstrap
 
 CommandFn = Callable[[argparse.Namespace, Settings], Coroutine[Any, Any, None]]
@@ -198,12 +198,17 @@ async def _cmd_search(a: argparse.Namespace, settings: Settings) -> None:
             candidates=a.candidates,
             kind=a.kind,
             include_linked_docs=not a.no_linked_docs,
+            exclude_repos=a.exclude_repo,
+            exclude_path_glob=a.exclude_path,
+            max_docs=a.max_docs,
         )
     if a.json:
         print(json.dumps([h.to_dict() for h in hits], indent=2, ensure_ascii=False))
         return
     for h in hits:
         print(f"\033[1m[{h.score:.3f}] {h.repo}/{h.path}:{h.start_line}-{h.end_line}\033[0m ({h.language or '?'})")
+        if h.also_in:
+            print(f"    também em: {', '.join(h.also_in)}")
         if h.url:
             print(f"    {h.title or ''} <{h.url}>" + (f"  ligado a: {', '.join(h.linked_repos)}" if h.linked_repos else ""))
         lines = h.code.splitlines()
@@ -212,6 +217,48 @@ async def _cmd_search(a: argparse.Namespace, settings: Settings) -> None:
         if len(lines) > a.lines:
             print(f"    ... (+{len(lines) - a.lines} linhas)")
         print()
+
+
+_EVAL_CONFIGS: list[dict] = [
+    {"name": "hybrid+rerank", "mode": "hybrid", "rerank": True},
+    {"name": "hybrid", "mode": "hybrid", "rerank": False},
+    {"name": "semantic", "mode": "semantic", "rerank": False},
+    {"name": "keyword", "mode": "keyword", "rerank": False},
+]
+# Grade da fusão (sem rerank, para isolar o efeito dos pesos): (peso do vetor, peso dos termos)
+_EVAL_GRID = [(1.0, 0.2), (1.0, 0.4), (1.0, 0.7), (1.0, 1.0), (0.7, 1.0), (0.4, 1.0)]
+
+
+async def _cmd_eval(a: argparse.Namespace, settings: Settings) -> None:
+    configs = [c for c in _EVAL_CONFIGS if a.no_rerank is False or not c["rerank"]]
+    if a.rerank_variants:
+        configs = CodeIndexService.rerank_variants()
+    elif a.grid:
+        configs = [{"name": f"pesos {v}/{k}", "mode": "hybrid", "rerank": False, "weights": (v, k)} for v, k in _EVAL_GRID]
+    async with open_service(settings) as svc:
+        cases = svc.load_eval_cases(a.file)
+        reports = await svc.evaluate(cases, configs, top_k=a.top_k)
+    if a.json:
+        print(json.dumps([r.to_dict() for r in reports], indent=2, ensure_ascii=False))
+        return
+    print(f"{len(cases)} perguntas, top {a.top_k}\n")
+    print(f"{'configuração':<20} {'hit@1':>6} {'hit@3':>6} {'hit@k':>6} {'MRR':>6}")
+    for r in reports:
+        m = r.metrics()
+        print(f"{r.name:<20} {m['hit@1']:>6.2f} {m['hit@3']:>6.2f} {m['hit@k']:>6.2f} {m['mrr']:>6.2f}")
+    tags = reports[0].tags() if reports else []
+    if tags:
+        counts = {t: sum(1 for c in reports[0].results if c.tag == t) for t in tags}
+        print("\nMRR por categoria (nº de perguntas)")
+        print(f"{'configuração':<20} " + " ".join(f"{t + f' ({counts[t]})':>11}" for t in tags))
+        for r in reports:
+            print(f"{r.name:<20} " + " ".join(f"{r.metrics(t)['mrr']:>11.2f}" for t in tags))
+    if a.verbose:
+        for r in reports:
+            print(f"\n\033[1m{r.name}\033[0m")
+            for c in r.results:
+                mark = f"#{c.rank}" if c.rank else "--"
+                print(f"  {mark:>3}  [{c.tag}] {c.query}" + ("" if c.rank else f"   (veio: {', '.join(c.top)})"))
 
 
 async def _cmd_skips(a: argparse.Namespace, settings: Settings) -> None:
@@ -312,6 +359,18 @@ async def _cmd_docs_link(a: argparse.Namespace, settings: Settings) -> None:
     print(f"vínculo gravado ({res['origin']}): {res['page']} -> {res['repo']}; {estado}")
 
 
+async def _cmd_docs_ignore(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        res = await svc.ignore_doc(a.source, a.page, reason=a.reason or "")
+    print(f"página ignorada: {res['page']} (sai dos resultados da busca; `docs unignore` desfaz).")
+
+
+async def _cmd_docs_unignore(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        removed = await svc.unignore_doc(a.source, a.page)
+    print("página voltou para a busca." if removed else "a página não estava ignorada.")
+
+
 async def _cmd_docs_unlink(a: argparse.Namespace, settings: Settings) -> None:
     async with open_service(settings) as svc:
         removed = await svc.unlink_doc(a.source, a.page, a.repo)
@@ -368,18 +427,14 @@ async def _cmd_show(a: argparse.Namespace, settings: Settings) -> None:
 async def _cmd_serve(a: argparse.Namespace, settings: Settings) -> None:
     import uvicorn
 
-    from .http.app import create_app
+    from .http.app import create_app, server_config
 
     host = a.host or settings.http_host
     port = a.port or settings.http_port
     if host not in ("127.0.0.1", "localhost", "::1") and not settings.public_url.startswith("https://"):
         logging.warning("escutando em %s sem CODE_INDEX_PUBLIC_URL https: use um proxy com TLS na frente", host)
     app = create_app(settings)
-    config = uvicorn.Config(
-        app, host=host, port=port, log_level="info", proxy_headers=True,
-        forwarded_allow_ips=a.forwarded_allow_ips, server_header=False,
-    )
-    await uvicorn.Server(config).serve()
+    await uvicorn.Server(server_config(app, host, port, forwarded_allow_ips=a.forwarded_allow_ips)).serve()
 
 
 async def _cmd_token_create(a: argparse.Namespace, settings: Settings) -> None:
@@ -505,10 +560,24 @@ def main() -> None:
     q.add_argument("--no-rerank", action="store_true", help="só busca híbrida, sem reranker")
     q.add_argument("-c", "--candidates", type=int, help="candidatos enviados ao reranker (padrão RERANK_CANDIDATES=40)")
     q.add_argument("--kind", choices=["code", "doc"], help="só código ou só documentação")
+    q.add_argument("--exclude-repo", action="append", help="repo que não pode aparecer (pode repetir)")
+    q.add_argument("--exclude-path", action="append", help="glob de caminho que não pode aparecer (pode repetir)")
     q.add_argument("--no-linked-docs", action="store_true",
                    help="com --repo, não inclui as páginas de documentação ligadas ao repo")
+    q.add_argument("--max-docs", type=int, help="páginas de documentação no resultado (padrão: top_k/4, mín. 2)")
     q.add_argument("--json", action="store_true")
     q.set_defaults(fn=_cmd_search)
+
+    ev = sub.add_parser("eval", help="mede a qualidade da busca com perguntas de resposta conhecida")
+    ev.add_argument("file", nargs="?", default="evals/queries.json")
+    ev.add_argument("-k", "--top-k", type=int, default=10)
+    ev.add_argument("--no-rerank", action="store_true", help="pula as configurações com rerank (só embeddings)")
+    ev.add_argument("--grid", action="store_true", help="compara pesos da fusão vetor/termos (sem rerank)")
+    ev.add_argument("--rerank-variants", action="store_true",
+                    help="compara as variações do rerank (instrução, cabeçalho, só código) com a busca sem rerank")
+    ev.add_argument("-v", "--verbose", action="store_true", help="mostra cada pergunta e o que veio nos erros")
+    ev.add_argument("--json", action="store_true")
+    ev.set_defaults(fn=_cmd_eval)
 
     dc = sub.add_parser("docs", help="fontes de documentação externa (Wiki.js)").add_subparsers(required=True)
     d = dc.add_parser("add", help="cadastra uma wiki (valida o acesso; não indexa)")
@@ -533,6 +602,15 @@ def main() -> None:
     d.add_argument("--reason", help="motivo da ligação (obrigatório para origem agent)")
     d.add_argument("--origin", choices=["manual", "agent"], default="manual")
     d.set_defaults(fn=_cmd_docs_link)
+    d = dc.add_parser("ignore", help="tira uma página dos resultados da busca (reversível)")
+    d.add_argument("source")
+    d.add_argument("page", help="caminho da página sem idioma, ex.: SRE/post-mortems/antigo")
+    d.add_argument("--reason", help="motivo (opcional)")
+    d.set_defaults(fn=_cmd_docs_ignore)
+    d = dc.add_parser("unignore", help="volta a mostrar uma página ignorada")
+    d.add_argument("source")
+    d.add_argument("page")
+    d.set_defaults(fn=_cmd_docs_unignore)
     d = dc.add_parser("unlink", help="remove um vínculo gravado")
     d.add_argument("source")
     d.add_argument("page")
@@ -559,7 +637,7 @@ def main() -> None:
     sk.add_argument("--json", action="store_true")
     sk.set_defaults(fn=_cmd_skips)
     sy = sub.add_parser("symbol", help="onde uma classe/função/método é declarado")
-    sy.add_argument("name", help="nome, parte dele ou Classe.metodo")
+    sy.add_argument("name", help="nome, parte dele, Classe.metodo ou Classe.* (membros)")
     sy.add_argument("-k", "--kind", choices=["container", "member", "section"])
     sy.add_argument("-r", "--repo", action="append", help="filtra por repo (pode repetir)")
     sy.add_argument("-l", "--lang", help="filtra por linguagem")

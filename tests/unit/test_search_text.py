@@ -28,7 +28,7 @@ def test_code_terms_mantem_inteiro_e_partes_e_frequencia() -> None:
 
 
 def test_code_terms_palavras_comuns_e_acentos() -> None:
-    assert code_terms("// valida a assinatura não 42") == "valida assinatura não"
+    assert code_terms("// valida a assinatura não 42") == "valida assinatura nao"
 
 
 def test_query_terms_remove_stopwords_e_repeticao() -> None:
@@ -61,3 +61,29 @@ def test_pesos_da_fusao() -> None:
     assert vec > kw
     vec, kw = fusion_weights("identifier")
     assert kw > vec
+
+
+def test_consulta_procura_sem_acento_com_acento_e_singular() -> None:
+    assert query_terms("validação das requisições") == [
+        "validacao", "validação", "requisicoes", "requisições", "requisicao", "requisição",
+    ]
+    assert query_terms("remove tokens expirados") == ["remove", "tokens", "token", "expirados", "expirado"]
+
+
+def test_identificador_nao_ganha_singular() -> None:
+    assert query_terms("UserKeys") == ["userkeys", "user", "keys"]
+
+
+def test_stopwords_acentuadas_ou_nao() -> None:
+    assert query_terms("o token é válido e está ativo") == ["token", "valido", "válido", "ativo"]
+
+
+@pytest.mark.parametrize(
+    ("word", "sing"),
+    [("tokens", "token"), ("requisicoes", "requisicao"), ("entities", "entity"), ("status", None),
+     ("class", None), ("redis", None), ("dias", None), ("permissões", "permissão")],
+)
+def test_singular(word: str, sing: str | None) -> None:
+    from code_index.domain.search_text import singular
+
+    assert singular(word) == sing

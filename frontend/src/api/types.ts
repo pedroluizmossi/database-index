@@ -35,6 +35,45 @@ export interface Repo {
   tags: string[];
   /** O repo mudou desde que o cartão foi escrito. */
   card_stale: boolean;
+  /** Domínio/serviço do DDD dono do repo ('platform/audit'); vazio = sem dono. */
+  owners: string[];
+  owner_origin: OwnerOrigin | null;
+  owner_confidence: string | null;
+}
+
+/** De onde veio o dono: manual vence; o resto é inferido (SDL, repo irmão, rotas chamadas, uso de lib). */
+export type OwnerOrigin = "manual" | "declared" | "sibling" | "api_calls" | "usage";
+
+export interface OwnershipService {
+  name: string;
+  label: string;
+  repos: number;
+  declared_in: string[];
+  /** Criado à mão (não existe em nenhum .sdl). */
+  manual: boolean;
+}
+
+export interface OwnershipDomain {
+  name: string;
+  label: string;
+  repos: number;
+  services: OwnershipService[];
+}
+
+export interface OwnershipCatalog {
+  domains: OwnershipDomain[];
+  coverage: { repos: number; owned: number; percent: number; by_origin: Partial<Record<OwnerOrigin | "none", number>> };
+}
+
+export interface OwnershipRow {
+  repo: string;
+  /** Pasta (monorepo) com dono próprio; null = o repo inteiro. */
+  path: string | null;
+  owners: string[];
+  origin: OwnerOrigin | null;
+  confidence: string | null;
+  evidence: Record<string, unknown>;
+  alternatives: { owner: string; origin: OwnerOrigin; confidence: string | null }[];
 }
 
 export interface SdlService {

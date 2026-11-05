@@ -179,6 +179,35 @@ def test_admin_gerencia_repos(server: Server, tmp_path: Any) -> None:
     assert admin.delete("/api/v1/repos/meu-repo").json()["result"] == "removed"
 
 
+def test_dono_ddd_pela_api(server: Server, tmp_path: Any) -> None:
+    admin, leitor = client(server, "admin-bot"), client(server, "leitor")
+    assert admin.post("/api/v1/repos", json={"source": str(tmp_path / "meu-repo"), "name": "meu-repo"}).status_code == 201
+    admin.post("/api/v1/sync", json={"dry_run": True, "discover": False})  # registra o repo na tabela de estado
+    catalog = leitor.get("/api/v1/ownership/catalog").json()
+    assert [d["name"] for d in catalog["domains"]] == ["transversal"]
+    assert catalog["coverage"]["owned"] == 0
+
+    body = {"repos": ["meu-repo"], "owner": "financeiro/contas"}
+    assert leitor.put("/api/v1/ownership", json=body).status_code == 403
+    r = admin.put("/api/v1/ownership", json=body)
+    assert r.status_code == 400 and "desconhecido" in r.json()["detail"]
+    r = admin.put("/api/v1/ownership", json={**body, "create": True, "reason": "teste"})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"updated": 1, "owner": "financeiro/contas", "entities": ["repo:meu-repo"]}
+
+    rows = leitor.get("/api/v1/ownership", params={"domain": "financeiro"}).json()
+    assert [(x["repo"], x["owners"], x["origin"]) for x in rows] == [("meu-repo", ["financeiro/contas"], "manual")]
+    repo = next(x for x in leitor.get("/api/v1/repos").json() if x["name"] == "meu-repo")
+    assert (repo["owners"], repo["owner_origin"]) == (["financeiro/contas"], "manual")
+    assert leitor.post("/api/v1/search", json={"query": "ola", "domain": "nada"}).status_code == 400
+
+    assert leitor.post("/api/v1/ownership/clear", json={"repos": ["meu-repo"]}).status_code == 403
+    assert admin.post("/api/v1/ownership/clear", json={"repos": ["meu-repo"]}).json()["cleared"] == 1
+    assert leitor.get("/api/v1/ownership", params={"unowned": True}).json()[0]["repo"] == "meu-repo"
+    audit = admin.get("/api/v1/audit").json()
+    assert {"owner:set:api", "owner:clear:api"} <= {e["action"] for e in audit}
+
+
 def test_tokens_so_por_sessao_google_e_com_csrf(server: Server) -> None:
     origin = {"Origin": server.url}
     # agent (mesmo admin) não emite token
@@ -258,8 +287,8 @@ def test_mcp_exige_token(server: Server) -> None:
 
 def test_mcp_so_expoe_leitura(server: Server) -> None:
     tools, search, symbol, grep = asyncio.run(_mcp(server, "leitor"))
-    assert tools == ["search_code", "read_file_lines", "list_repos", "find_repos", "find_api_impl", "related",
-                     "repo_card", "find_symbol", "grep_code"]
+    assert tools == ["search_code", "read_file_lines", "list_repos", "list_domains", "find_repos", "find_api_impl",
+                     "related", "repo_card", "find_symbol", "grep_code"]
     assert not search.is_error and not symbol.is_error and not grep.is_error
     assert json.loads(grep.content[0].text) == {"matches": [], "truncated": False}
 

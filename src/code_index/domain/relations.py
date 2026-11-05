@@ -1,8 +1,8 @@
 """Relações entre entidades (puro, sem I/O): chaves, tipos de relação e origens.
 
 Todo vínculo do sistema é uma linha da tabela `relations`: (src, dst, tipo, origem) + estado.
-- **Chave de entidade**: texto com prefixo do tipo (`repo:`, `doc:`, `op:`, `code:`). Sem tabela de
-  entidades: a chave basta para ligar e para mostrar.
+- **Chave de entidade**: texto com prefixo do tipo (`repo:`, `doc:`, `op:`, `code:`, `dir:`, `dom:`,
+  `svc:`). Sem tabela de entidades: a chave basta para ligar e para mostrar.
 - **Origem**: quem criou a relação. Linkers determinísticos (menção, tag, SDL, handler...) recalculam as
   suas no fim de cada sync; pessoas e agents gravam as suas (manual, agent, llm).
 - **Relação efetiva** (o que busca, X-Ray e MCP usam): status `active` e action `add`, menos as relações
@@ -17,6 +17,7 @@ from typing import Any
 # ------------------------------------------------------------------ chaves de entidade
 
 REPO, DOC, OP, CODE = "repo", "doc", "op", "code"
+DIR, DOM, SVC = "dir", "dom", "svc"   # pasta de um repo (monorepo); domínio e serviço do DDD
 
 
 def repo_key(name: str) -> str:
@@ -33,6 +34,24 @@ def op_key(domain: str, service: str, operation: str) -> str:
 
 def code_key(repo: str, path: str, line: int) -> str:
     return f"{CODE}:{repo}/{path}:{int(line)}"
+
+
+def dir_key(repo: str, path: str) -> str:
+    """Pasta de um repo (sem barras nas pontas): 'dir:repo/modulos/folha'."""
+    return f"{DIR}:{repo}/{path.strip('/')}"
+
+
+def split_dir_key(key: str) -> tuple[str, str]:
+    repo, _, path = key.removeprefix(f"{DIR}:").partition("/")
+    return repo, path
+
+
+def dom_key(domain: str) -> str:
+    return f"{DOM}:{domain.lower()}"
+
+
+def svc_key(domain: str, service: str) -> str:
+    return f"{SVC}:{domain.lower()}/{service.lower()}"
 
 
 def key_kind(key: str) -> str:
@@ -63,7 +82,8 @@ DOCUMENTS = "documents"            # doc → repo: a página documenta o repo
 DESCRIBES = "describes"            # doc → op: a página de API descreve a operação
 IMPLEMENTED_BY = "implemented_by"  # op → code: a operação é implementada por esta classe
 RELATED_TO = "related_to"          # repo → repo: repos relacionados (cartão do repo)
-RELATION_TYPES = (DOCUMENTS, DESCRIBES, IMPLEMENTED_BY, RELATED_TO)
+BELONGS_TO = "belongs_to"          # repo|dir → svc|dom: dono do código no DDD (ver domain/ownership.py)
+RELATION_TYPES = (DOCUMENTS, DESCRIBES, IMPLEMENTED_BY, RELATED_TO, BELONGS_TO)
 
 # ------------------------------------------------------------------ origens
 
@@ -84,6 +104,10 @@ ORIGINS: tuple[Origin, ...] = (  # da mais confiável para a menos
     Origin("explicit", "regra", "regra --link da fonte de documentação"),
     Origin("source", "fonte", "declarado pela própria fonte (ex.: página de API → operação)"),
     Origin("sdl", "SDL", "domain/service declarados no .sdl do repo"),
+    Origin("declared", "SDL do repo", "domínio/serviço declarados no .sdl do próprio repo (ou da pasta)"),
+    Origin("sibling", "repo irmão", "mesmo nome-base de um repo com SDL (ex.: x-frontend e x-backend)"),
+    Origin("api_calls", "chamadas de API", "o código chama, na maioria, rotas domínio/serviço deste serviço"),
+    Origin("usage", "uso da lib", "biblioteca usada só por repos deste domínio/serviço"),
     Origin("handler", "handler", "classe <operação>Handler (convenção do SDK)"),
     Origin("service", "nome do serviço", "nome do serviço de API igual ao nome do repo"),
     Origin("card", "cartão", "repos relacionados no cartão do repo"),

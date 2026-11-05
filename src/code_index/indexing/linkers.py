@@ -19,10 +19,11 @@ from typing import Any
 import asyncpg
 
 from ..domain.api_impl import match_handlers
+from ..domain.ownership import DERIVED_OWNER_ORIGINS, Assignment, infer, owner_from_key
 from ..domain.documents import WIKI_PAGE
 from ..domain.models import DocSource
 from ..domain.relations import (
-    DOCUMENTS, IMPLEMENTED_BY, RELATED_TO, Relation, code_key, doc_key, op_key, repo_key,
+    BELONGS_TO, DOCUMENTS, IMPLEMENTED_BY, RELATED_TO, Relation, code_key, doc_key, op_key, repo_key,
 )
 from ..infra.document_store import DocumentStore
 from ..infra.relation_store import RelationStore
@@ -145,7 +146,36 @@ class CardLinker:
         return out
 
 
-CORE_LINKERS: tuple[Linker, ...] = (AliasLinker(), RuleLinker(), HandlerLinker(), CardLinker())
+class OwnershipLinker:
+    """Repo (ou pasta de monorepo) → serviço/domínio do DDD, sem LLM: SDL do próprio repo, repo irmão,
+    rotas chamadas e uso de lib (domain/ownership.infer). Lê os fatos coletados em `enrich facts`."""
+
+    name = "ownership"
+    origins = DERIVED_OWNER_ORIGINS
+
+    async def run(self, conn: asyncpg.Connection, settings: Settings) -> list[Relation]:
+        s = f'"{settings.pg_schema}"'
+        rows = await conn.fetch(
+            f"""SELECT r.name, c.material->'facts'->'sdl' AS sdl, c.material->'ownership' AS own
+                FROM {s}.repos r LEFT JOIN {s}.repo_cards c ON c.repo = r.name
+                WHERE r.kind = 'code' AND NOT r.ignored"""
+        )
+        manual_rows = await conn.fetch(
+            f"""SELECT src, dst FROM {s}.relations
+                WHERE type = $1 AND origin = 'manual' AND status = 'active' AND action = 'add'""",
+            BELONGS_TO,
+        )
+        sdl = {r["name"]: json.loads(r["sdl"]) for r in rows if r["sdl"] and json.loads(r["sdl"])}
+        own = {r["name"]: json.loads(r["own"]) for r in rows if r["own"]}
+        manual = [Assignment(m["src"], owner, "manual") for m in manual_rows
+                  if (owner := owner_from_key(m["dst"])) is not None]
+        return [
+            Relation(a.entity, a.owner.key, BELONGS_TO, a.origin, evidence=dict(a.evidence), confidence=a.confidence)
+            for a in infer([r["name"] for r in rows], sdl, own, manual)
+        ]
+
+
+CORE_LINKERS: tuple[Linker, ...] = (AliasLinker(), RuleLinker(), HandlerLinker(), CardLinker(), OwnershipLinker())
 
 
 def all_linkers(sources: list[DocSource]) -> list[Linker]:

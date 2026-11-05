@@ -69,6 +69,39 @@ def manifest_aliases(filename: str, text: str) -> list[tuple[str, str]]:
     return list(dict.fromkeys(out))
 
 
+def manifest_dependencies(filename: str, text: str) -> list[str]:
+    """Pacotes/artefatos que o manifesto consome (pom.xml, package.json, pyproject.toml). Malformado → []."""
+    try:
+        names = _manifest_deps(filename, text)
+    except Exception:  # noqa: BLE001 - manifesto malformado não pode quebrar a coleta
+        return []
+    out: list[str] = []
+    for name in names:
+        n = normalize(name)
+        if len(n) >= 3 and "${" not in n:
+            out.append(n)
+            if n.startswith("@") and "/" in n:
+                out.append(n.split("/", 1)[1])
+    return list(dict.fromkeys(out))
+
+
+def _manifest_deps(filename: str, text: str) -> list[str]:
+    if filename == "package.json":
+        data = json.loads(text)
+        return [k for sec in ("dependencies", "devDependencies", "peerDependencies")
+                for k in (data.get(sec) or {}) if isinstance(k, str)]
+    if filename == "pom.xml":
+        root = ET.fromstring(text)
+        ns = root.tag.split("}")[0] + "}" if root.tag.startswith("{") else ""
+        found = (dep.find(f"{ns}artifactId") for dep in root.iter(f"{ns}dependency"))
+        return [el.text for el in found if el is not None and el.text]
+    if filename == "pyproject.toml":
+        data = tomllib.loads(text)
+        deps = data.get("project", {}).get("dependencies") or []
+        return [re.split(r"[\s<>=!~\[;(]", d, 1)[0] for d in deps if isinstance(d, str)]
+    return []
+
+
 def _manifest_names(filename: str, text: str) -> list[tuple[str, str]]:
     if filename == "package.json":
         name = json.loads(text).get("name")

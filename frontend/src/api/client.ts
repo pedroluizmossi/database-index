@@ -14,7 +14,7 @@ export class ApiError extends Error {
 type Query = Record<string, string | number | boolean | null | undefined>;
 
 interface RequestOptions {
-  method?: "GET" | "POST" | "DELETE";
+  method?: "GET" | "POST" | "PUT" | "DELETE";
   body?: unknown;
   query?: Query;
   /** Token explícito (usado no login, antes da sessão existir). */
@@ -77,9 +77,9 @@ export async function postJson<T>(path: string, body: unknown): Promise<T> {
   return (await res.json()) as T;
 }
 
-/** Requisição com corpo JSON opcional e método explícito (POST/DELETE). */
+/** Requisição com corpo JSON opcional e método explícito (POST/PUT/DELETE). */
 export async function sendJson<T>(
-  method: "POST" | "DELETE",
+  method: "POST" | "PUT" | "DELETE",
   path: string,
   options: Omit<RequestOptions, "method"> = {},
 ): Promise<T> {

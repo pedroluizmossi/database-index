@@ -36,6 +36,7 @@ from .auth import AuthMixin
 from .base import ServiceBase
 from .docs import DocsMixin
 from .enrich import EnrichMixin
+from .ownership import OwnershipMixin
 from .repos import ReposMixin
 from .search import SearchMixin
 from .sync import SyncMixin
@@ -45,7 +46,7 @@ log = logging.getLogger(__name__)
 
 
 class CodeIndexService(SyncMixin, ReposMixin, DocsMixin, WikiMixin, SearchMixin, ApisMixin, EnrichMixin, AuthMixin,
-                       ServiceBase):
+                       OwnershipMixin, ServiceBase):
     """Casos de uso do índice. Construído por `open_service()`, que cuida do ciclo de vida.
     Cada área fica num módulo deste pacote; as interfaces só conhecem esta classe."""
 

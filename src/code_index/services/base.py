@@ -76,6 +76,7 @@ class ServiceBase:
         self._relations = relations
         self._job_lock = asyncio.Lock()  # checagem + criação de job, sem corrida entre requisições
         self._job_tasks: set[asyncio.Task[None]] = set()
+        self._owner_cache: Any = None  # dono no DDD resolvido (services/ownership.py); limpo ao recalcular relações
 
     # ------------------------------------------------------------ repos e fontes
 
@@ -124,6 +125,7 @@ class ServiceBase:
     async def rebuild_relations(self, only: Sequence[str] | None = None) -> dict[str, Any]:
         """Recalcula o catálogo de documentos e as relações derivadas (sem LLM e sem Voyage).
         `only`: nomes de linkers a rodar (sem recalcular o catálogo de documentos)."""
+        self._owner_cache = None
         return await rebuild_relations(self._chunks.pool, self.settings, self._config.load_docs(), only=only)
 
     async def ensure_relations(self) -> None:
@@ -142,7 +144,7 @@ class ServiceBase:
 
     async def related(self, entity: str, *, type_: str | None = None, limit: int = 200) -> dict[str, Any]:
         """Tudo ligado a uma entidade. Aceita chave ('repo:x', 'doc:fonte/caminho', 'op:dom/serv/op',
-        'code:repo/caminho:linha') ou só o nome de um repo."""
+        'code:repo/caminho:linha', 'dir:repo/pasta', 'svc:dominio/servico', 'dom:dominio') ou só o nome de um repo."""
         from ..domain.relations import RELATION_TYPES, key_kind, repo_key
 
         raw = entity.strip()
@@ -150,8 +152,8 @@ class ServiceBase:
             raise ValueError("informe a entidade (nome do repo ou chave como 'op:platform/email/sendEmail')")
         if type_ is not None and type_ not in RELATION_TYPES:
             raise ValueError(f"tipo inválido: {type_} (use {', '.join(RELATION_TYPES)})")
-        if ":" in raw and key_kind(raw) in ("repo", "doc", "op", "code"):
-            key = raw
+        if ":" in raw and key_kind(raw) in ("repo", "doc", "op", "code", "dir", "svc", "dom"):
+            key = raw.lower() if key_kind(raw) in ("svc", "dom") else raw
             if key_kind(raw) == "repo":
                 key = repo_key((await self._resolve_repos([raw.split(":", 1)[1]]) or [""])[0])
         else:

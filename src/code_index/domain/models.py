@@ -199,6 +199,9 @@ class RepoStatus:
     summary: str | None = None   # resumo do cartão do repo (code-index enrich), se houver
     tags: list[str] = field(default_factory=list)  # domain_tags do cartão
     card_stale: bool = False     # o repo mudou desde que o cartão foi escrito
+    owners: list[str] = field(default_factory=list)  # domínio/serviço do DDD ('platform/audit')
+    owner_origin: str | None = None                  # de onde veio o dono (manual, declared, sibling...)
+    owner_confidence: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -221,6 +224,7 @@ class Hit:
     linked_repos: list[str] = field(default_factory=list)  # repos ligados à página
     also_in: list[str] = field(default_factory=list)       # outros repos com este mesmo trecho (boilerplate)
     implemented_in: list[str] = field(default_factory=list)  # página de API: handler da operação (repo/path:linha)
+    owners: list[str] = field(default_factory=list)          # domínio/serviço do DDD dono do arquivo
 
     def to_dict(self) -> dict:
         return asdict(self)

@@ -121,6 +121,16 @@ class EnrichStore:
         )
         return {r["repo"]: {**json.loads(r["card"]), "stale": r["stale"]} for r in rows}
 
+    async def sdl_catalog_rows(self) -> list[dict[str, Any]]:
+        """Serviços do `.sdl` e rótulos de cada repo (para o catálogo de domínios/serviços)."""
+        rows = await self._pool.fetch(
+            f"""SELECT repo, material->'facts'->'sdl' AS sdl, material->'ownership'->'sdl_labels' AS labels
+                FROM {self._cards}
+                WHERE jsonb_array_length(coalesce(material->'facts'->'sdl', '[]'::jsonb)) > 0"""
+        )
+        return [{"repo": r["repo"], "sdl": json.loads(r["sdl"]),
+                 "labels": json.loads(r["labels"]) if r["labels"] else {}} for r in rows]
+
     async def find(self, query: str, *, limit: int = 10) -> list[dict[str, Any]]:
         """Repos cujo cartão (ou fatos: nome, SDL) casa com a consulta. Full-text do Postgres, sem LLM.
         Pesos: nome e tags (A) > capacidades, glossário e SDL (B) > resumo (C). Termos em OU."""

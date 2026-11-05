@@ -37,17 +37,21 @@ export function AppShell({
   tab,
   onTab,
   tabs,
+  wide = false,
   children,
 }: {
   tab: Tab;
   onTab: (tab: Tab) => void;
   tabs: TabDef[];
+  /** Páginas com tabelas largas usam uma faixa de conteúdo mais larga. */
+  wide?: boolean;
   children: ReactNode;
 }) {
+  const width = wide ? "max-w-7xl" : "max-w-6xl";
   return (
     <div className="min-h-dvh">
       <header className="sticky top-0 z-40 bg-ink-950 text-white shadow-[0_1px_0_0_rgb(255_255_255/0.06),0_4px_12px_-6px_rgb(0_0_0/0.35)]">
-        <div className="mx-auto flex h-14 max-w-6xl items-center gap-4 px-4 sm:px-6 xl:gap-6">
+        <div className={cx("mx-auto flex h-14 items-center gap-4 px-4 sm:px-6 xl:gap-6", width)}>
           <Brand />
           <TabList tabs={tabs} tab={tab} onTab={onTab} className="hidden self-stretch lg:flex" />
           <div className="ml-auto flex shrink-0 items-center gap-1">
@@ -61,11 +65,11 @@ export function AppShell({
             tabs={tabs}
             tab={tab}
             onTab={onTab}
-            className="mx-auto flex h-11 max-w-6xl overflow-x-auto px-1 [scrollbar-width:none] sm:px-3"
+            className={cx("mx-auto flex h-11 overflow-x-auto px-1 [scrollbar-width:none] sm:px-3", width)}
           />
         </div>
       </header>
-      <main className="mx-auto max-w-6xl px-4 pt-10 pb-24 sm:px-6">{children}</main>
+      <main className={cx("mx-auto px-4 pt-10 pb-24 sm:px-6", width)}>{children}</main>
     </div>
   );
 }

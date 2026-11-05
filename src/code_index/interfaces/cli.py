@@ -222,12 +222,15 @@ async def _cmd_search(a: argparse.Namespace, settings: Settings) -> None:
             exclude_repos=a.exclude_repo,
             exclude_path_glob=a.exclude_path,
             max_docs=a.max_docs,
+            domain=a.domain,
+            service=a.service,
         )
     if a.json:
         print(json.dumps([h.to_dict() for h in hits], indent=2, ensure_ascii=False))
         return
     for h in hits:
-        print(f"\033[1m[{h.score:.3f}] {h.repo}/{h.path}:{h.start_line}-{h.end_line}\033[0m ({h.language or '?'})")
+        owners = f"  [{', '.join(h.owners)}]" if h.owners else ""
+        print(f"\033[1m[{h.score:.3f}] {h.repo}/{h.path}:{h.start_line}-{h.end_line}\033[0m ({h.language or '?'}){owners}")
         if h.also_in:
             print(f"    também em: {', '.join(h.also_in)}")
         if h.url:
@@ -629,6 +632,59 @@ async def _cmd_relations_show(a: argparse.Namespace, settings: Settings) -> None
         print(f"  {arrow} {r['type']:<15} {r['entity']}  ({', '.join(r['origins'])})")
 
 
+_ORIGIN_LABEL = {"manual": "manual", "declared": "SDL", "sibling": "irmão", "api_calls": "chamadas", "usage": "uso",
+                 "none": "sem dono"}
+
+
+async def _cmd_owner_catalog(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        res = await svc.ownership_catalog()
+    if a.json:
+        print(json.dumps(res, indent=2, ensure_ascii=False))
+        return
+    cov = res["coverage"]
+    origins = ", ".join(f"{_ORIGIN_LABEL.get(o, o)} {n}" for o, n in cov["by_origin"].items())
+    print(f"cobertura: {cov['owned']}/{cov['repos']} repos com dono ({cov['percent']}%) · {origins}")
+    for d in res["domains"]:
+        print(f"\033[1m{d['name']}\033[0m" + (f" ({d['label']})" if d["label"] else "") + f"  {d['repos']} repo(s)")
+        for svc_ in d["services"]:
+            extra = " [criado à mão]" if svc_["manual"] else ""
+            label = f" ({svc_['label']})" if svc_["label"] else ""
+            print(f"  {d['name']}/{svc_['name']}{label}  {svc_['repos']} repo(s){extra}")
+
+
+async def _cmd_owner_list(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        rows = await svc.ownership_list(domain=a.domain, service=a.service, origin=a.origin, unowned=a.sem_dono,
+                                        repo=a.repo)
+    if a.json:
+        print(json.dumps(rows, indent=2, ensure_ascii=False))
+        return
+    for r in rows:
+        name = r["repo"] + (f"/{r['path']}/" if r["path"] else "")
+        if not r["owners"]:
+            print(f"{name:<60} —")
+            continue
+        alt = f"  (alternativas: {', '.join(x['owner'] for x in r['alternatives'])})" if r["alternatives"] else ""
+        conf = f", {r['confidence']}" if r["confidence"] else ""
+        print(f"{name:<60} {', '.join(r['owners'])}  [{_ORIGIN_LABEL.get(r['origin'], r['origin'])}{conf}]{alt}")
+    print(f"\n{len(rows)} linha(s).")
+
+
+async def _cmd_owner_set(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        res = await svc.set_owner(None, a.repos, a.to, path=a.path, create=a.criar, reason=a.motivo or "")
+        await svc.audit(None, "owner:set:local", params={"owner": a.to, "path": a.path, "n": res["updated"]})
+    print(f"dono manual {res['owner']} gravado em {res['updated']} entidade(s): {', '.join(res['entities'][:10])}")
+
+
+async def _cmd_owner_clear(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        res = await svc.clear_owner(None, a.repos, path=a.path)
+        await svc.audit(None, "owner:clear:local", params={"path": a.path, "n": res["cleared"]})
+    print(f"dono manual removido de {res['cleared']} entidade(s); valem de novo o SDL e a inferência.")
+
+
 async def _cmd_serve(a: argparse.Namespace, settings: Settings) -> None:
     import uvicorn
 
@@ -640,24 +696,6 @@ async def _cmd_serve(a: argparse.Namespace, settings: Settings) -> None:
         logging.warning("escutando em %s sem CODE_INDEX_PUBLIC_URL https: use um proxy com TLS na frente", host)
     app = create_app(settings)
     await uvicorn.Server(server_config(app, host, port, forwarded_allow_ips=a.forwarded_allow_ips)).serve()
-
-
-async def _cmd_embed_serve(a: argparse.Namespace, settings: Settings) -> None:
-    import uvicorn
-
-    try:
-        from ..infra.local_embedder import SentenceTransformerEmbedder
-    except ImportError:
-        raise SystemExit("faltam as dependências do modelo local: uv sync --extra local-embed") from None
-    from .embed_server import create_embed_app
-
-    host = a.host or settings.local_embed_host
-    port = a.port or settings.local_embed_port
-    if host not in ("127.0.0.1", "localhost", "::1"):
-        logging.warning("servidor de embeddings escutando em %s: proteja a porta (a chave é EMBED_API_KEY)", host)
-    embedder = await asyncio.to_thread(SentenceTransformerEmbedder, settings)
-    app = create_embed_app(settings, embedder)
-    await uvicorn.Server(uvicorn.Config(app, host=host, port=port, log_level="info")).serve()
 
 
 async def _cmd_token_create(a: argparse.Namespace, settings: Settings) -> None:
@@ -794,6 +832,8 @@ def main() -> None:
     q.add_argument("--no-linked-docs", action="store_true",
                    help="com --repo, não inclui as páginas de documentação ligadas ao repo")
     q.add_argument("--max-docs", type=int, help="páginas de documentação no resultado (padrão: top_k/4, mín. 2)")
+    q.add_argument("--domain", help="só o código deste domínio do DDD (ex.: platform; ver `owner catalog`)")
+    q.add_argument("--service", help="com --domain, só este serviço (ex.: authentication)")
     q.add_argument("--json", action="store_true")
     q.set_defaults(fn=_cmd_search)
 
@@ -966,10 +1006,35 @@ def main() -> None:
     r_.set_defaults(fn=_cmd_relations_stats)
     r_ = rl.add_parser("show", help="tudo ligado a uma entidade (repo, doc:..., op:..., code:...)")
     r_.add_argument("entity", help="nome do repo ou chave, ex.: op:platform/email/sendEmail")
-    r_.add_argument("-t", "--type", choices=["documents", "describes", "implemented_by", "related_to"])
+    r_.add_argument("-t", "--type", choices=["documents", "describes", "implemented_by", "related_to", "belongs_to"])
     r_.add_argument("-n", "--limit", type=int, default=200)
     r_.add_argument("--json", action="store_true")
     r_.set_defaults(fn=_cmd_relations_show)
+
+    # dono no DDD (domínio/serviço)
+    ow = sub.add_parser("owner", help="domínio/serviço (DDD) dono de cada repo ou pasta").add_subparsers(required=True)
+    o_ = ow.add_parser("catalog", help="domínios e serviços (do SDL e criados à mão) e a cobertura")
+    o_.add_argument("--json", action="store_true")
+    o_.set_defaults(fn=_cmd_owner_catalog)
+    o_ = ow.add_parser("list", help="dono de cada repo (e pasta), com a origem e as alternativas")
+    o_.add_argument("--domain")
+    o_.add_argument("--service")
+    o_.add_argument("--origin", choices=sorted(set(_ORIGIN_LABEL) - {"none"}), help="só desta origem")
+    o_.add_argument("--sem-dono", action="store_true", help="só repos sem dono (para revisar)")
+    o_.add_argument("--repo")
+    o_.add_argument("--json", action="store_true")
+    o_.set_defaults(fn=_cmd_owner_list)
+    o_ = ow.add_parser("set", help="define o dono manual (vence a inferência; vale na hora)")
+    o_.add_argument("repos", nargs="+")
+    o_.add_argument("--to", required=True, help="dominio ou dominio/servico (ex.: hcm/payroll, transversal)")
+    o_.add_argument("--path", help="pasta do repo (monorepo); só com um repo")
+    o_.add_argument("--criar", action="store_true", help="cria o domínio/serviço se não existir no catálogo")
+    o_.add_argument("--motivo")
+    o_.set_defaults(fn=_cmd_owner_set)
+    o_ = ow.add_parser("clear", help="remove o dono manual (volta ao SDL/inferência)")
+    o_.add_argument("repos", nargs="+")
+    o_.add_argument("--path")
+    o_.set_defaults(fn=_cmd_owner_clear)
 
     # servidor HTTP (API + MCP)
     sv = sub.add_parser("serve", help="sobe a API HTTP e o MCP (/mcp)")
@@ -978,12 +1043,6 @@ def main() -> None:
     sv.add_argument("--forwarded-allow-ips", default="127.0.0.1",
                     help="IPs do proxy reverso confiáveis para X-Forwarded-* (padrão 127.0.0.1)")
     sv.set_defaults(fn=_cmd_serve)
-
-    # embeddings locais (voyage-4-nano em CPU), no formato da API da Voyage
-    es = sub.add_parser("embed-serve", help="sobe o modelo de embedding local (uv sync --extra local-embed)")
-    es.add_argument("--host", help=f"padrão LOCAL_EMBED_HOST ({settings.local_embed_host})")
-    es.add_argument("--port", type=int, help=f"padrão LOCAL_EMBED_PORT ({settings.local_embed_port})")
-    es.set_defaults(fn=_cmd_embed_serve)
 
     # tokens (operador local, com acesso direto ao banco)
     tk = sub.add_parser("token", help="tokens de agents (operador local)").add_subparsers(required=True)

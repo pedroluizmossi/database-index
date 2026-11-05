@@ -52,6 +52,11 @@ export function parseNumberedLines(text: string): NumberedLine[] {
   });
 }
 
+/** Forma no singular ou no plural conforme a quantidade: plural(1, "repositório", "repositórios"). */
+export function plural(n: number, singular: string, pluralForm: string): string {
+  return Math.abs(n) === 1 ? singular : pluralForm;
+}
+
 /** Duração legível: "45 s", "3 min 20 s", "1 h 5 min". */
 export function formatDuration(ms: number): string {
   const total = Math.max(0, Math.round(ms / 1000));

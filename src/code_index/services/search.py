@@ -19,12 +19,12 @@ from ..retrieval.evaluation import CaseResult, ConfigReport, EvalCase, first_hit
 from ..retrieval.redaction import mask_output
 from ..retrieval.search import RerankOptions
 
-from .base import ServiceBase
+from .ownership import OwnershipMixin
 
 log = logging.getLogger(__name__)
 
 
-class SearchMixin(ServiceBase):
+class SearchMixin(OwnershipMixin):
     async def search(
         self,
         query: str,
@@ -41,18 +41,27 @@ class SearchMixin(ServiceBase):
         exclude_repos: list[str] | None = None,
         exclude_path_glob: list[str] | None = None,
         max_docs: int | None = None,
+        domain: str | None = None,
+        service: str | None = None,
     ) -> list[Hit]:
         """Busca híbrida (vetor + full-text) com rerank opcional, em código e documentação.
+
+        domain / service: só o código do domínio (e serviço) do DDD, inclusive pastas de monorepos
+        (services/ownership.py). Nome fora do catálogo → ValueError com sugestões.
 
         max_docs: limite de páginas de documentação quando a busca mistura código e docs
         (padrão: um quarto do top_k, no mínimo 2).
 
         exclude_repos / exclude_path_glob: o que não pode aparecer no resultado (nomes de repo e globs de caminho).
         """
+        if service and not domain:
+            raise ValueError("informe o domínio junto com o serviço (ex.: domain=platform, service=audit)")
+        scope = await self.owner_scope(domain, service) if domain else None
         hits = await self._searcher.search(
             query,
             top_k=top_k,
             repos=await self._resolve_repos(repos),
+            scope=scope,
             language=language,
             path_glob=path_glob,
             mode=mode,
@@ -66,6 +75,7 @@ class SearchMixin(ServiceBase):
         )
         for h in hits:  # regras de máscara que só valem na saída (ver retrieval/redaction)
             h.code = mask_output(h.code, h.language)
+        await self.annotate_owners(hits)
         return hits
 
     async def read_file(

@@ -13,6 +13,7 @@ from collections import OrderedDict
 import numpy as np
 
 from ..domain.models import Hit
+from ..domain.ownership import Scope
 from ..indexing.context import Decl, chunk_header
 from ..infra.symbol_store import SymbolStore
 from ..infra import llm
@@ -148,6 +149,7 @@ class Searcher:
         weights: tuple[float, float] | None = None,
         max_docs: int | None = None,
         rerank_options: RerankOptions | None = None,
+        scope: Scope | None = None,
     ) -> list[Hit]:
         """Busca trechos de código e documentação.
 
@@ -157,6 +159,7 @@ class Searcher:
         rerank: reordena `candidates` resultados com `rerank_model` e devolve os `top_k` melhores.
         weights: (vetor, termos) da fusão no lugar dos padrões por tipo de consulta (avaliação).
         rerank_options: variações do rerank (padrão: as do Settings, RERANK_INSTRUCTION etc.).
+        scope: só o código de um domínio/serviço do DDD (repos e pastas; domain/ownership.scope_for).
         max_docs: páginas de documentação no resultado quando `kind` é vazio (padrão:
         default_max_docs(top_k)); com kind='doc' não há limite.
         """
@@ -200,6 +203,7 @@ class Searcher:
             include_linked_docs=include_linked_docs,
             exclude_repos=exclude_repos,
             exclude_path_glob=exclude_path_glob,
+            scope=scope,
         )
         if use_rerank and len(hits) > 1:
             try:

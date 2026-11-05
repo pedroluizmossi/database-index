@@ -34,7 +34,7 @@ log = logging.getLogger(__name__)
 MCP_CODE_MAX_CHARS = 4000  # trecho maior (ex.: JSON minificado) é cortado; o resto sai via read_file_lines
 
 
-_REPO_DROP = ("source", "pushed_at", "size_kb", "skipped", "card_stale")
+_REPO_DROP = ("source", "pushed_at", "size_kb", "skipped", "card_stale", "owner_confidence")
 
 
 def _compact_repo(repo: dict) -> dict:
@@ -156,6 +156,8 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
         exclude_repos: list[str] | None = None,
         exclude_path_glob: list[str] | None = None,
         max_docs: int | None = None,
+        domain: str | None = None,
+        service: str | None = None,
     ) -> list[dict]:
         """Busca trechos de código e de documentação (README, docs/ e páginas de wiki).
 
@@ -176,7 +178,10 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
             exclude_repos: repos que NÃO podem aparecer no resultado (nomes de list_repos).
             exclude_path_glob: globs de caminho que NÃO podem aparecer, ex.: ["**/old/**", "**/*.generated.*"].
             max_docs: máximo de páginas de documentação quando kind é vazio (padrão: top_k/4, mín. 2).
+            domain: só o código deste domínio do DDD (nome técnico de list_domains, ex.: "platform").
+            service: com domain, só este serviço (ex.: "authentication"). Inclui pastas de monorepos.
 
+        Cada resultado traz `owners` (domínio/serviço dono do arquivo), quando conhecido.
         Resultados de documentação externa trazem `url` (página original), `title` e `linked_repos`.
         Trechos vizinhos do mesmo arquivo vêm fundidos (no máximo 2 por arquivo); trechos muito
         longos vêm cortados (leia o resto com read_file_lines). Trecho idêntico em vários repos
@@ -188,14 +193,16 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
             hits = await svc.search(query, top_k=top_k, repos=repos, language=language,
                                     path_glob=path_glob, mode=mode, rerank=rerank, kind=kind,
                                     include_linked_docs=include_linked_docs, exclude_repos=exclude_repos,
-                                    exclude_path_glob=exclude_path_glob, max_docs=max_docs)
+                                    exclude_path_glob=exclude_path_glob, max_docs=max_docs,
+                                    domain=domain, service=service)
             return [_compact_hit(h.to_dict()) for h in hits]
 
         return await run_tool("search_code", {"query": query, "top_k": top_k, "repos": repos, "language": language,
                                               "path_glob": path_glob, "mode": mode, "kind": kind,
                                               "include_linked_docs": include_linked_docs,
                                               "exclude_repos": exclude_repos,
-                                              "exclude_path_glob": exclude_path_glob, "max_docs": max_docs},
+                                              "exclude_path_glob": exclude_path_glob, "max_docs": max_docs,
+                                              "domain": domain, "service": service},
                                "search", None, fn)
 
     @server.tool()
@@ -212,19 +219,48 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
         )
 
     @server.tool()
-    async def list_repos(status: str | None = None, org: str | None = None, name: str | None = None) -> list[dict]:
-        """Lista os repositórios conhecidos e seu estado de indexação.
+    async def list_repos(status: str | None = None, org: str | None = None, name: str | None = None,
+                         domain: str | None = None) -> list[dict]:
+        """Lista os repositórios conhecidos, seu estado de indexação e o dono no DDD (`owners`).
 
         Args:
             status: "indexed", "pending", "error" ou "ignored".
             org: filtra por org do GitHub.
             name: trecho do nome do repo.
+            domain: só repos deste domínio ("platform") ou serviço ("platform/authentication").
         """
 
         async def fn(svc: CodeIndexService) -> list[dict]:
-            return [_compact_repo(r.to_dict()) for r in await svc.list_repos(status=status, org=org, name=name)]
+            rows = await svc.list_repos(status=status, org=org, name=name)
+            if domain:
+                want = domain.strip().lower().rstrip("/")
+                rows = [r for r in rows if any(o == want or o.startswith(want + "/") for o in r.owners)]
+            return [_compact_repo(r.to_dict()) for r in rows]
 
-        return await run_tool("list_repos", {"status": status, "org": org, "name": name}, "read", None, fn)
+        return await run_tool("list_repos", {"status": status, "org": org, "name": name, "domain": domain},
+                              "read", None, fn)
+
+    @server.tool()
+    async def list_domains() -> dict:
+        """Domínios e serviços do DDD (do SDL e os definidos pela equipe), com rótulo e quantos repos cada
+        um tem. Use os nomes técnicos em `search_code(domain=..., service=...)` e `list_repos(domain=...)`."""
+
+        async def fn(svc: CodeIndexService) -> dict:
+            catalog = await svc.ownership_catalog()
+            return {
+                "domains": [
+                    {k: v for k, v in {
+                        "name": d["name"], "label": d["label"], "repos": d["repos"],
+                        "services": [{k2: v2 for k2, v2 in {"name": s["name"], "label": s["label"],
+                                                              "repos": s["repos"]}.items() if v2 not in ("", None)}
+                                     for s in d["services"]],
+                    }.items() if v not in ("", None, [])}
+                    for d in catalog["domains"]
+                ],
+                "coverage": {k: catalog["coverage"][k] for k in ("repos", "owned", "percent")},
+            }
+
+        return await run_tool("list_domains", {}, "read", None, fn)
 
     @server.tool()
     async def find_repos(query: str, limit: int = 10) -> list[dict]:
@@ -259,12 +295,14 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
     @server.tool()
     async def related(entity: str, type: str | None = None) -> dict:
         """Tudo ligado a uma entidade: páginas que documentam um repo, repos relacionados, operação ↔ handler,
-        página de API → operação. Cada relação traz a origem (manual, sdl, handler, tag, menção...).
+        página de API → operação, dono no DDD (repo → serviço/domínio). Cada relação traz a origem (manual, sdl,
+        handler, tag, menção, repo irmão...).
 
         Args:
             entity: nome do repo ('snr-email-backend') ou chave: 'repo:<nome>', 'doc:<fonte>/<caminho>',
-                'op:<domínio>/<serviço>/<operação>', 'code:<repo>/<caminho>:<linha>'.
-            type: filtra o tipo: documents | describes | implemented_by | related_to.
+                'op:<domínio>/<serviço>/<operação>', 'code:<repo>/<caminho>:<linha>', 'svc:<domínio>/<serviço>',
+                'dom:<domínio>'.
+            type: filtra o tipo: documents | describes | implemented_by | related_to | belongs_to.
         """
         return await run_tool("related", {"entity": entity, "type": type}, "read", None,
                               lambda svc: svc.related(entity, type_=type, limit=200))

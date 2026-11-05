@@ -7,12 +7,14 @@ tarefa ficam em `domain/repo_card.py`; aqui só o I/O.
 from __future__ import annotations
 
 import os
-from collections.abc import Sequence
+from collections import Counter
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from ..domain.doc_links import MANIFESTS
-from ..domain.repo_card import build_facts, clean_readme, is_test_path
+from ..domain.doc_links import MANIFESTS, manifest_aliases, manifest_dependencies
+from ..domain.ownership import api_refs
+from ..domain.repo_card import build_facts, clean_readme, is_test_path, parse_sdl_labels
 from .content import redact
 
 _SKIP_DIRS = frozenset({
@@ -26,6 +28,13 @@ _SDL_DEPTH = 4
 _README_NAMES = ("README.md", "README.MD", "Readme.md", "readme.md", "README.rst", "README.txt", "README")
 _MAX_SYMBOLS = 80
 _MAX_SUGGESTED = 8
+# Rotas chamadas (domínio/serviço): só arquivos de código/config, sem testes, até este total lido.
+_REF_EXTENSIONS = frozenset({
+    ".ts", ".tsx", ".js", ".jsx", ".mjs", ".vue", ".html", ".java", ".kt", ".groovy", ".py", ".go", ".cs",
+    ".json", ".yaml", ".yml", ".properties", ".xml", ".env.example",
+})
+_MAX_REF_FILES = 5000
+_MAX_REFS = 40
 
 
 def list_paths(root: Path) -> list[str]:
@@ -85,7 +94,42 @@ def collect_material(
         by_file[path] = max(by_file.get(path, 0), members)
     suggested = [p for p, _ in sorted(by_file.items(), key=lambda kv: (-kv[1], kv[0]))[:_MAX_SUGGESTED]]
 
-    return {"facts": facts.to_dict(), "readme": readme, "symbols": names, "suggested_files": suggested}
+    return {"facts": facts.to_dict(), "readme": readme, "symbols": names, "suggested_files": suggested,
+            "ownership": ownership_material(root, paths, interesting)}
+
+
+def ownership_material(root: Path, paths: Sequence[str], files: Mapping[str, str]) -> dict[str, Any]:
+    """Dados para inferir o domínio/serviço do repo (domain/ownership.py). Fora do hash do cartão."""
+    labels: dict[str, dict[str, str]] = {"domains": {}, "services": {}}
+    artifacts: list[str] = []
+    deps: list[str] = []
+    for rel, text in sorted(files.items()):
+        name = rel.rsplit("/", 1)[-1]
+        if name.endswith(".sdl"):
+            for k, v in parse_sdl_labels(text).items():
+                labels[k].update(v)
+        elif name in MANIFESTS:
+            artifacts += [a for a, _ in manifest_aliases(name, text)]
+            deps += manifest_dependencies(name, text)
+    refs: Counter[str] = Counter()
+    read = 0
+    for rel in paths:
+        if read >= _MAX_REF_FILES:
+            break
+        if is_test_path(rel) or not rel.lower().endswith(tuple(_REF_EXTENSIONS)):
+            continue
+        content = _read(root, rel)
+        if content is None:
+            continue
+        read += 1
+        refs.update(api_refs(content))
+    own = set(artifacts)
+    return {
+        "sdl_labels": labels,
+        "artifacts": list(dict.fromkeys(artifacts))[:50],
+        "dependencies": [d for d in dict.fromkeys(deps) if d not in own][:300],
+        "api_refs": dict(refs.most_common(_MAX_REFS)),
+    }
 
 
 def path_exists(root: Path, rel: str) -> bool:

@@ -86,6 +86,19 @@ def parse_sdl(text: str, path: str = "") -> list[SdlService]:
     return out
 
 
+_SDL_DOMAIN_LABEL = re.compile(r'^\s*domain\s+([A-Za-z_][\w-]*)\s*\(\s*"([^"\n]*)"', re.M)
+_SDL_SERVICE_LABEL = re.compile(r'(?<![\w.:])service\s+([A-Za-z_]\w*)\s*\(\s*"([^"\n]*)"')
+
+
+def parse_sdl_labels(text: str) -> dict[str, dict[str, str]]:
+    """Rótulos legíveis do `.sdl`: `domain platform ("Plataforma")`, `service blob ("Arquivos")`."""
+    clean = _SDL_COMMENT.sub("", text)
+    return {
+        "domains": {m.group(1).lower(): m.group(2).strip() for m in _SDL_DOMAIN_LABEL.finditer(clean) if m.group(2).strip()},
+        "services": {m.group(1).lower(): m.group(2).strip() for m in _SDL_SERVICE_LABEL.finditer(clean) if m.group(2).strip()},
+    }
+
+
 _PDL_GROUP = re.compile(r"(?<![\w.])properties\s+([\w.-]+)\s*\{")
 _PDL_PROP = re.compile(r"(?<![\w.])property\s+([\w.-]+)\s*\{([^{}]*)\}")
 _PDL_TYPE = re.compile(r"^\s*type\s*:\s*(\w+)", re.M)
@@ -162,7 +175,8 @@ _HAS_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 README_MAX_CHARS = 3000
 # Suba quando a coleta mudar (novos fatos): força recoletar todos os repos no próximo `enrich facts`.
-FACTS_VERSION = 4
+# 5: seção `ownership` do material (rótulos do SDL, dependências, rotas chamadas).
+FACTS_VERSION = 5
 
 
 @dataclass
@@ -276,9 +290,14 @@ def related_candidates(repo: str, others: Iterable[str], facts: Mapping[str, Map
 
 # ------------------------------------------------------------------ material da tarefa e hash
 
+# Partes do material que não vão para o agent do cartão: mudar a coleta delas não deixa cartões desatualizados.
+MATERIAL_UNHASHED = frozenset({"ownership"})
+
+
 def material_hash(material: Mapping[str, Any]) -> str:
     """Hash do que o agent recebe (sem candidatos, que mudam quando outros repos entram)."""
-    raw = json.dumps(material, sort_keys=True, ensure_ascii=False, default=str)
+    hashed = {k: v for k, v in material.items() if k not in MATERIAL_UNHASHED}
+    raw = json.dumps(hashed, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
 

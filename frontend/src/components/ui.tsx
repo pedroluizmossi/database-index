@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, CSSProperties, ReactNode } from "react";
+import { useRef, type ButtonHTMLAttributes, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { ChevronDown, CircleAlert, Info, LoaderCircle, type LucideIcon } from "lucide-react";
 import { cx } from "../lib/utils";
 
@@ -59,11 +59,13 @@ export function IconButton({
   onClick,
   children,
   className,
+  disabled = false,
 }: {
   label: string;
   onClick: () => void;
   children: ReactNode;
   className?: string;
+  disabled?: boolean;
 }) {
   return (
     <button
@@ -71,8 +73,12 @@ export function IconButton({
       aria-label={label}
       title={label}
       onClick={onClick}
+      disabled={disabled}
       className={cx(
-        "inline-flex size-8 shrink-0 items-center justify-center rounded-lg text-zinc-500 transition hover:bg-zinc-900/5 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-white/10 dark:hover:text-white",
+        "inline-flex size-8 shrink-0 items-center justify-center rounded-lg text-zinc-500 transition outline-none focus-visible:ring-2 focus-visible:ring-accent-500 dark:text-zinc-400",
+        disabled
+          ? "cursor-not-allowed opacity-40"
+          : "hover:bg-zinc-900/5 hover:text-zinc-900 dark:hover:bg-white/10 dark:hover:text-white",
         className,
       )}
     >
@@ -96,7 +102,7 @@ const BADGE_TONE: Record<BadgeTone, string> = {
 const DOT_TONE: Partial<Record<BadgeTone, string>> = {
   indexed: "bg-emerald-500",
   // Pendente é ausência de índice, não um estado com cor: anel vazio.
-  pending: "border-[1.5px] border-zinc-400 dark:border-zinc-500",
+  pending: "border-[1.5px] border-zinc-500 dark:border-zinc-500",
   error: "bg-rose-500",
   ignored: "bg-zinc-300 dark:bg-zinc-600",
 };
@@ -165,26 +171,64 @@ export function Segmented<T extends string>({
   value: T;
   onChange: (value: T) => void;
 }) {
+  const buttons = useRef<(HTMLButtonElement | null)[]>([]);
+  // Roving tabindex: só a opção marcada entra na ordem de Tab; as setas e Home/End andam pelo grupo.
+  const checked = Math.max(0, options.findIndex((o) => o.value === value));
+
+  function move(from: number, key: string) {
+    const n = options.length;
+    let next: number;
+    switch (key) {
+      case "ArrowRight":
+      case "ArrowDown":
+        next = (from + 1) % n;
+        break;
+      case "ArrowLeft":
+      case "ArrowUp":
+        next = (from - 1 + n) % n;
+        break;
+      case "Home":
+        next = 0;
+        break;
+      case "End":
+        next = n - 1;
+        break;
+      default:
+        return;
+    }
+    onChange(options[next].value);
+    buttons.current[next]?.focus();
+  }
+
   return (
     <div
       role="radiogroup"
       aria-label={label}
       className="inline-flex max-w-full flex-wrap gap-1 rounded-xl bg-zinc-900/5 p-1 dark:bg-white/5"
     >
-      {options.map((option) => {
+      {options.map((option, index) => {
         const active = option.value === value;
         return (
           <button
             key={option.value}
+            ref={(el) => {
+              buttons.current[index] = el;
+            }}
             type="button"
             role="radio"
             aria-checked={active}
+            tabIndex={index === checked ? 0 : -1}
             onClick={() => onChange(option.value)}
+            onKeyDown={(e: KeyboardEvent<HTMLButtonElement>) => {
+              if (!["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"].includes(e.key)) return;
+              e.preventDefault();
+              move(index, e.key);
+            }}
             className={cx(
-              "h-8 rounded-lg px-3 text-xs font-medium whitespace-nowrap transition",
+              "h-8 rounded-lg px-3 text-xs font-medium whitespace-nowrap transition outline-none focus-visible:ring-2 focus-visible:ring-accent-500",
               active
                 ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-800 dark:text-white"
-                : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200",
+                : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-white",
             )}
           >
             {option.label}
@@ -228,7 +272,7 @@ export function Switch({
 
 /** Classes dos campos de texto e seleção. */
 export const inputClass =
-  "h-10 w-full rounded-xl border border-zinc-200 bg-white px-3 text-sm text-zinc-900 shadow-sm outline-none transition placeholder:text-zinc-400 hover:border-zinc-300 focus:border-accent-500 focus:ring-4 focus:ring-accent-500/15 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:border-zinc-600";
+  "h-10 w-full rounded-xl border border-zinc-200 bg-white px-3 text-sm text-zinc-900 shadow-sm outline-none transition placeholder:text-zinc-500 dark:placeholder:text-zinc-400 hover:border-zinc-300 focus:border-accent-500 focus:ring-4 focus:ring-accent-500/15 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:border-zinc-600";
 
 export function Field({ label, className, children }: { label: string; className?: string; children: ReactNode }) {
   return (
@@ -243,17 +287,25 @@ export function Select({
   value,
   onChange,
   children,
+  label,
 }: {
   value: string;
   onChange: (value: string) => void;
   children: ReactNode;
+  /** Rótulo acessível quando o select não está dentro de um <Field>. */
+  label?: string;
 }) {
   return (
     <div className="relative">
-      <select value={value} onChange={(e) => onChange(e.target.value)} className={cx(inputClass, "appearance-none pr-9")}>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label={label}
+        className={cx(inputClass, "appearance-none pr-9")}
+      >
         {children}
       </select>
-      <ChevronDown className="pointer-events-none absolute top-1/2 right-3 size-4 -translate-y-1/2 text-zinc-400" aria-hidden="true" />
+      <ChevronDown className="pointer-events-none absolute top-1/2 right-3 size-4 -translate-y-1/2 text-zinc-500 dark:text-zinc-400" aria-hidden="true" />
     </div>
   );
 }

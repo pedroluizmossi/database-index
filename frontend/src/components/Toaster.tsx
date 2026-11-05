@@ -4,15 +4,25 @@ import { cx } from "../lib/utils";
 
 type Tone = "success" | "error" | "info";
 
-interface ToastItem {
-  id: number;
+/** Ação opcional do aviso (ex.: "Desfazer"). Ao clicar, o aviso some. */
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
+export interface ToastInput {
   tone: Tone;
   title: string;
   description?: string;
+  action?: ToastAction;
+}
+
+interface ToastItem extends ToastInput {
+  id: number;
 }
 
 interface ToastApi {
-  push: (toast: { tone: Tone; title: string; description?: string }) => void;
+  push: (toast: ToastInput) => void;
 }
 
 const ToastContext = createContext<ToastApi | null>(null);
@@ -30,6 +40,8 @@ const TONE_ICON: Record<Tone, LucideIcon> = {
 };
 
 const TOAST_TTL_MS = 5000;
+/** Aviso com ação precisa de mais tempo para ser lido e clicado. */
+const TOAST_ACTION_TTL_MS = 10000;
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
@@ -40,10 +52,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const push = useCallback(
-    (toast: { tone: Tone; title: string; description?: string }) => {
+    (toast: ToastInput) => {
       const id = nextId.current++;
       setToasts((list) => [...list.slice(-3), { ...toast, id }]);
-      window.setTimeout(() => dismiss(id), TOAST_TTL_MS);
+      window.setTimeout(() => dismiss(id), toast.action ? TOAST_ACTION_TTL_MS : TOAST_TTL_MS);
     },
     [dismiss],
   );
@@ -80,6 +92,18 @@ function ToastCard({ item, onClose }: { item: ToastItem; onClose: () => void }) 
         <p className="text-sm font-medium">{item.title}</p>
         {item.description && (
           <p className="mt-0.5 wrap-break-word text-xs text-zinc-600 dark:text-zinc-400">{item.description}</p>
+        )}
+        {item.action && (
+          <button
+            type="button"
+            onClick={() => {
+              item.action?.onClick();
+              onClose();
+            }}
+            className="-mx-2 mt-2 rounded-md px-2 py-1 text-xs font-semibold text-accent-700 underline underline-offset-2 outline-none transition hover:text-accent-800 focus-visible:ring-2 focus-visible:ring-accent-500 dark:text-accent-300 dark:hover:text-accent-200"
+          >
+            {item.action.label}
+          </button>
         )}
       </div>
       <button

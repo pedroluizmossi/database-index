@@ -37,7 +37,8 @@ const TAB_IDS: Tab[] = ["search", "repos", "docs", "apis", "xray", "tokens", "au
 function Workspace() {
   const { session } = useAuth();
   const tabs = tabsFor(session);
-  const fromHash = window.location.hash.slice(1) as Tab;
+  // "#repos?status=pending" abre a aba repos: o que vem depois de "?" são filtros da própria aba.
+  const fromHash = window.location.hash.slice(1).split("?")[0] as Tab;
   const [tab, setTab] = useState<Tab>(() => (TAB_IDS.includes(fromHash) ? fromHash : "search"));
   const [xrayTarget, setXrayTarget] = useState<XrayTarget | null>(null);
   // Uma aba só aparece se a sessão tem permissão; senão volta para a busca.
@@ -64,7 +65,7 @@ function Workspace() {
   }[current];
 
   return (
-    <AppShell tab={current} onTab={changeTab} tabs={tabs}>
+    <AppShell tab={current} onTab={changeTab} tabs={tabs} wide={current === "repos"}>
       {page}
     </AppShell>
   );

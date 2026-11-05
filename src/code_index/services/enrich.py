@@ -58,7 +58,7 @@ class EnrichMixin(ServiceBase):
             await self._collect_card_material(row, root)
             updated += 1
         if updated and rebuild:
-            await self.rebuild_relations(only=("handler", "openapi-sdl"))
+            await self.rebuild_relations(only=("handler", "openapi-sdl", "ownership"))
         return {"repos": len(targets) if wanted is None else len(wanted), "updated": updated}
 
     async def find_api_impl(self, operation: str, *, service: str | None = None,

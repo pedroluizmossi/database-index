@@ -4,7 +4,7 @@ import { api } from "../api/endpoints";
 import { describeError } from "../api/client";
 import type { DocsPreview, Repo, SyncJob, SyncResult } from "../api/types";
 import { useIndex } from "../data/IndexProvider";
-import { formatDateTime, repoShortName, timeAgo } from "../lib/utils";
+import { formatDateTime, plural, repoShortName, timeAgo } from "../lib/utils";
 import { useToast } from "./Toaster";
 import { Dialog } from "./Dialog";
 import { Alert, Badge, Button, Field, Skeleton, inputClass } from "./ui";
@@ -54,7 +54,7 @@ function DocsPreviewBlock({ name }: { name: string }) {
     <section className="space-y-3 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <p className="text-sm font-medium">
-          {numberFormat.format(data.total)} páginas em {data.roots.length} raízes
+          {numberFormat.format(data.total)} {plural(data.total, "página", "páginas")} em {data.roots.length} {plural(data.roots.length, "raiz", "raízes")}
         </p>
         <a href={data.url} target="_blank" rel="noopener noreferrer" className="truncate text-xs text-accent-600 hover:underline dark:text-accent-400">
           {data.url}
@@ -149,7 +149,7 @@ export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished,
                 next.status === "failed"
                   ? "Indexação falhou"
                   : failedRepos > 0
-                    ? `Indexação concluída com ${failedRepos} erro(s)`
+                    ? `Indexação concluída com ${failedRepos} ${plural(failedRepos, "erro", "erros")}`
                     : "Indexação concluída",
               description: next.error ?? undefined,
             });
@@ -216,7 +216,7 @@ export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished,
               loading={starting || job?.status === "running"}
               disabled={loadingPreview || !preview || selected.length === 0 || previewError !== null}
             >
-              {selected.length > 0 ? `Indexar ${selected.length} repo(s)` : "Nada a indexar"}
+              {selected.length > 0 ? `Indexar ${selected.length} ${plural(selected.length, "repositório", "repositórios")}` : "Nada a indexar"}
             </Button>
           </>
         )
@@ -251,7 +251,7 @@ export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished,
       {preview && !job && (
         <div className="space-y-4">
           {selected.length === 0 ? (
-            <p className="text-sm text-zinc-600 dark:text-zinc-300">Nada a indexar: não há repos pendentes ou alterados.</p>
+            <p className="text-sm text-zinc-600 dark:text-zinc-300">Nada a indexar: não há repositórios pendentes ou alterados.</p>
           ) : (
             <>
               <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -281,7 +281,7 @@ export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished,
                       </div>
                       <p className="text-xs text-zinc-500 dark:text-zinc-400">
                         {repo && repo.chunks > 0
-                          ? `${numberFormat.format(repo.chunks)} chunks hoje · indexado ${timeAgo(repo.indexed_at)}`
+                          ? `${numberFormat.format(repo.chunks)} trechos hoje · indexado ${timeAgo(repo.indexed_at)}`
                           : "ainda não indexado"}
                         {repo?.pushed_at && (
                           <span title={formatDateTime(repo.pushed_at)}> · último push {timeAgo(repo.pushed_at)}</span>
@@ -303,7 +303,7 @@ export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished,
 
               {preview.remaining > 0 && (
                 <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                  {numberFormat.format(preview.remaining)} repo(s) ficam para os próximos lotes.
+                  {numberFormat.format(preview.remaining)} {plural(preview.remaining, "repositório fica", "repositórios ficam")} para os próximos lotes.
                 </p>
               )}
               <p className="flex items-start gap-2 text-xs text-zinc-500 dark:text-zinc-400">
@@ -341,7 +341,7 @@ export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished,
           {job.result && (
             <div className="space-y-2 text-sm">
               <p>
-                {Object.keys(job.result.indexed).length} indexado(s), {Object.keys(job.result.errors).length} com erro.
+                {Object.keys(job.result.indexed).length} {plural(Object.keys(job.result.indexed).length, "indexado", "indexados")}, {Object.keys(job.result.errors).length} com erro.
               </p>
               {Object.entries(job.result.errors).map(([name, msg]) => (
                 <p key={name} className="text-rose-600 dark:text-rose-400">

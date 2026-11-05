@@ -23,6 +23,7 @@ import asyncpg
 import numpy as np
 
 from code_index.domain.models import Hit
+from code_index.domain.ownership import Scope
 from code_index.domain.path_glob import glob_regex
 from code_index.domain.search_text import STOPWORDS
 from code_index.infra.document_store import DocumentStore
@@ -104,10 +105,13 @@ def _filters(
     linked_docs_sql: str | None = None,
     exclude_repos: Sequence[str] | None = None,
     exclude_path_glob: Sequence[str] | None = None,
+    scope: Scope | None = None,
 ) -> str:
-    """`linked_docs_sql`: subconsulta de vínculos; com ela, o filtro de repos também traz as páginas
-    de documentação ligadas a esses repos."""
+    """`linked_docs_sql`: subconsulta de vínculos; com ela, o filtro de repos (e o de domínio) também traz
+    as páginas de documentação ligadas a esses repos. `scope`: código de um domínio/serviço do DDD."""
     clauses = []
+    if scope is not None:
+        clauses.append(_scope_sql(p, scope, linked_docs_sql))
     if repos:
         r = p(list(repos))
         if linked_docs_sql:
@@ -130,6 +134,30 @@ def _filters(
     for glob in exclude_path_glob or ():
         clauses.append(f"path !~ {p(glob_regex(glob))}")
     return " AND ".join(clauses) or "TRUE"
+
+
+def _scope_sql(p: _Params, scope: Scope, linked_docs_sql: str | None) -> str:
+    """Repos inteiros do domínio, menos pastas de outro dono (monorepo), mais pastas deste dono em outros
+    repos. `starts_with` em vez de LIKE: nomes de pasta com '_' ou '%' não viram curinga."""
+    if scope.empty:
+        return "FALSE"
+
+    def under(folders: Sequence[str]) -> str:
+        return " OR ".join(f"starts_with(path, {p(f.rstrip('/') + '/')})" for f in folders)
+
+    parts = []
+    simple = sorted(r for r in scope.whole if r not in scope.exclude)
+    if simple:
+        parts.append(f"repo = ANY({p(simple)})")
+    for repo, folders in sorted(scope.exclude.items()):
+        if repo in scope.whole:
+            parts.append(f"(repo = {p(repo)} AND NOT ({under(folders)}))")
+    for repo, folders in sorted(scope.include.items()):
+        parts.append(f"(repo = {p(repo)} AND ({under(folders)}))")
+    if linked_docs_sql:
+        parts.append(f"(repo, path) IN (SELECT l.doc_repo, l.doc_path FROM ({linked_docs_sql}) l"
+                     f" WHERE l.repo = ANY({p(sorted(scope.repos))}))")
+    return "(" + " OR ".join(parts) + ")"
 
 
 @dataclass(frozen=True)
@@ -216,13 +244,18 @@ class ChunkStore:
         include_linked_docs: bool = True,
         exclude_repos: Sequence[str] | None = None,
         exclude_path_glob: Sequence[str] | None = None,
+        scope: Scope | None = None,
     ) -> list[Hit]:
         """Fusão RRF ponderada: score = Σ peso_fonte / (60 + posição na fonte).
 
         `terms` já vêm tokenizados (domain.search_text.query_terms). `per_source` é quantos
         candidatos cada fonte traz; `limit` é quantos sobram após a fusão. Sem fontes → [].
         `kind`: 'code' | 'doc' | None. `include_linked_docs`: com `repos`, traz também as páginas
-        de documentação externa ligadas a eles.
+        de documentação externa ligadas a eles. `scope`: só o código de um domínio/serviço do DDD.
+
+        Com filtro de repos ou de domínio sobre um subconjunto pequeno (até SEARCH_EXACT_MAX_CHUNKS trechos),
+        a busca vetorial é exata (sem o HNSW): o índice aproximado descarta quase tudo quando o filtro é
+        seletivo e pode devolver poucos resultados.
         """
         if kind is not None and kind not in KINDS:
             raise ValueError(f"kind inválido: {kind} (use code ou doc)")
@@ -235,9 +268,10 @@ class ChunkStore:
 
         p = _Params()
         k = p(per_source)
-        linked = self._relations.doc_links_sql() if (repos and include_linked_docs) else None
+        linked = self._relations.doc_links_sql() if ((repos or scope) and include_linked_docs) else None
         where = _filters(p, repos, language, path_glob, kind=kind, linked_docs_sql=linked,
-                         exclude_repos=exclude_repos, exclude_path_glob=exclude_path_glob)
+                         exclude_repos=exclude_repos, exclude_path_glob=exclude_path_glob, scope=scope)
+        exact = use_vec and await self._small_subset(repos, scope)
         # páginas de documentação ignoradas (docs ignore) não aparecem em nenhum resultado
         where = f"({where}) AND (repo, path) NOT IN ({self._documents.ignored_sql()})"
         t = self._table
@@ -249,7 +283,7 @@ class ChunkStore:
             parts.append(f"""
             SELECT repo, path, id, row_number() OVER (ORDER BY embedding <=> {v}) AS rnk, {float(vec_weight)}::float8 AS w
             FROM (SELECT repo, path, id, embedding FROM {t} WHERE {where}
-                  ORDER BY embedding <=> {v} LIMIT {k}) v""")
+                  ORDER BY {"(embedding <=> " + v + ") + 0" if exact else "embedding <=> " + v} LIMIT {k}) v""")
             weights.append(vec_weight)
 
         if use_kw:
@@ -273,7 +307,7 @@ class ChunkStore:
         try:
             async with self._pool.acquire() as conn:
                 async with conn.transaction():
-                    if use_vec:
+                    if use_vec and not exact:
                         # pgvector >= 0.8: continua varrendo o HNSW quando filtros descartam candidatos.
                         await conn.execute("SET LOCAL hnsw.iterative_scan = relaxed_order")
                     rows = await conn.fetch(sql, *p.values)
@@ -295,6 +329,21 @@ class ChunkStore:
         ]
         await self._annotate_docs(hits)
         return hits
+
+    async def _small_subset(self, repos: Sequence[str] | None, scope: Scope | None) -> bool:
+        """O filtro restringe a busca a poucos trechos (vale a busca vetorial exata, `(dist) + 0` impede o
+        HNSW e o Postgres usa o índice por repo)."""
+        if not repos and scope is None:
+            return False
+        names = set(repos or ()) if scope is None else (scope.repos & set(repos) if repos else scope.repos)
+        if not names:
+            return True
+        try:
+            n = await self._pool.fetchval(f"SELECT count(*) FROM {self._table} WHERE repo = ANY($1::text[])",
+                                          sorted(names))
+        except asyncpg.UndefinedTableError:
+            return False
+        return int(n) <= self._settings.search_exact_max_chunks
 
     @property
     def skips(self) -> SkipStore:

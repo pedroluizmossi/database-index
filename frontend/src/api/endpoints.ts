@@ -6,6 +6,8 @@ import type {
   Me,
   NewToken,
   OrgDiscovery,
+  OwnershipCatalog,
+  OwnershipRow,
   OrgSummary,
   RepoInput,
   Repo,
@@ -79,6 +81,14 @@ export const api = {
   unignoreRepo: (name: string) => postJson<{ name: string }>(`/api/v1/repos/${seg(name)}/unignore`, undefined),
   refreshOrg: (name: string) =>
     sendJson<Record<string, OrgDiscovery>>("POST", "/api/v1/orgs/refresh", { query: { name } }),
+
+  // dono no DDD (domínio/serviço): leitura para todos; atribuição manual (admin)
+  ownershipCatalog: () => getJson<OwnershipCatalog>("/api/v1/ownership/catalog"),
+  ownership: (repo: string) => getJson<OwnershipRow[]>("/api/v1/ownership", { query: { repo } }),
+  setOwner: (body: { repos: string[]; owner: string; path?: string | null; create?: boolean; reason?: string }) =>
+    sendJson<{ updated: number; owner: string; entities: string[] }>("PUT", "/api/v1/ownership", { body }),
+  clearOwner: (body: { repos: string[]; path?: string | null }) =>
+    postJson<{ cleared: number; entities: string[] }>("/api/v1/ownership/clear", body),
 
   // tokens (emitir: sessão Google; listar/revogar: dono ou admin)
   tokens: (includeInactive = false) =>

@@ -1,7 +1,7 @@
 """Relações entre entidades (tabela `relations` e view `effective_relations`). Ver domain/relations.py.
 
-Único ponto que lê ou grava vínculos: página → repo, página de API → operação, operação → handler e
-repo → repo. Linkers derivados são regravados por `replace_derived` (indexing/linkers.py); vínculos de
+Único ponto que lê ou grava vínculos: página → repo, página de API → operação, operação → handler,
+repo → repo e o dono do código no DDD (repo/pasta → serviço/domínio). Linkers derivados são regravados por `replace_derived` (indexing/linkers.py); vínculos de
 pessoas/agents e sugestões de LLM são gravados pelos métodos de escrita abaixo.
 """
 
@@ -14,7 +14,7 @@ from typing import Any
 import asyncpg
 
 from ..domain.relations import (
-    DESCRIBES, DOCUMENTS, IMPLEMENTED_BY, RELATED_TO, STORED, Relation, doc_key, origin_rank, repo_key,
+    BELONGS_TO, DESCRIBES, DOCUMENTS, IMPLEMENTED_BY, RELATED_TO, STORED, Relation, doc_key, origin_rank, repo_key,
     sort_origins, split_code_key,
 )
 from ..settings import Settings
@@ -255,6 +255,40 @@ class RelationStore:
             repo_key(repo), RELATED_TO,
         )
         return [{"repo": r["repo"], "origin": r["origin"], **json.loads(r["evidence"])} for r in rows]
+
+    # ------------------------------------------------------------ dono no DDD: repo|pasta → serviço|domínio
+
+    async def owner_rows(self) -> list[dict[str, Any]]:
+        """Todas as atribuições efetivas (derivadas e manuais), para resolver por origem (domain/ownership)."""
+        rows = await self._pool.fetch(
+            f"SELECT src, dst, origin, confidence, evidence, agent, updated_at FROM {self.effective} WHERE type = $1",
+            BELONGS_TO,
+        )
+        return [{**dict(r), "evidence": json.loads(r["evidence"])} for r in rows]
+
+    async def set_manual_owner(self, entities: Sequence[str], owner_key: str, *, actor: str, reason: str = "") -> int:
+        """Troca o dono manual destas entidades ('repo:x' ou 'dir:x/caminho'). Vale na hora, sem reindexar."""
+        keys = sorted(set(entities))
+        evidence = _jsonb({"reason": reason} if reason else {})
+        async with self._pool.acquire() as conn, conn.transaction():
+            await conn.execute(
+                f"DELETE FROM {self.table} WHERE type = $1 AND origin = 'manual' AND src = ANY($2::text[])",
+                BELONGS_TO, keys,
+            )
+            await conn.executemany(
+                f"""INSERT INTO {self.table} (src, dst, type, origin, evidence, agent)
+                    VALUES ($1, $2, $3, 'manual', $4::jsonb, $5)""",
+                [(k, owner_key, BELONGS_TO, evidence, actor) for k in keys],
+            )
+        return len(keys)
+
+    async def clear_manual_owner(self, entities: Sequence[str]) -> int:
+        """Apaga o dono manual (a entidade volta para o que a inferência disser)."""
+        res = await self._pool.execute(
+            f"DELETE FROM {self.table} WHERE type = $1 AND origin = 'manual' AND src = ANY($2::text[])",
+            BELONGS_TO, sorted(set(entities)),
+        )
+        return int(res.split()[-1])
 
     # ------------------------------------------------------------ genérico: tudo ligado a uma entidade
 

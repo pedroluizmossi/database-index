@@ -3,7 +3,7 @@ import { ChevronRight, History, LoaderCircle } from "lucide-react";
 import { api } from "../api/endpoints";
 import { describeError } from "../api/client";
 import type { RepoProgress, RepoProgressStatus, SyncJob, SyncProgress } from "../api/types";
-import { cx, formatDateTime, formatDuration, timeAgo } from "../lib/utils";
+import { cx, formatDateTime, formatDuration, plural, timeAgo } from "../lib/utils";
 import { Dialog } from "./Dialog";
 import { Alert, Badge, Button, EmptyState, Panel, ProgressBar, Skeleton, type BadgeTone } from "./ui";
 
@@ -98,7 +98,7 @@ function filesLabel(done: number, total: number | null): string {
 /** Resumo de uma linha do andamento: etapa, repos e arquivos. */
 function progressLine(p: SyncProgress): string {
   const parts = [p.phase_label];
-  if (p.repos_total > 0) parts.push(`${p.repos_done}/${p.repos_total} repos`);
+  if (p.repos_total > 0) parts.push(`${p.repos_done}/${p.repos_total} repositórios`);
   if (p.phase === "index" || p.phase === "finish") parts.push(filesLabel(p.files_done, p.files_total || null));
   return parts.join(" · ");
 }
@@ -109,7 +109,7 @@ function summary(job: SyncJob): string {
     const ok = Object.keys(job.result.indexed).length;
     const bad = Object.keys(job.result.errors).length;
     if (ok === 0 && bad === 0) return "nada a indexar";
-    return `${ok} indexado(s)${bad ? ` · ${bad} com erro` : ""}`;
+    return `${ok} ${plural(ok, "indexado", "indexados")}${bad ? ` · ${bad} com erro` : ""}`;
   }
   return job.error ?? "sem resultado";
 }
@@ -301,7 +301,7 @@ export function JobDialog({ job, onClose }: { job: SyncJob | null; onClose: () =
                 </Section>
               )}
               {result.remaining > 0 && (
-                <p className="text-zinc-500 dark:text-zinc-400">{result.remaining} repo(s) ficaram para os próximos lotes.</p>
+                <p className="text-zinc-500 dark:text-zinc-400">{result.remaining} {plural(result.remaining, "repositório ficou", "repositórios ficaram")} para os próximos lotes.</p>
               )}
             </>
           )}

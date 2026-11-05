@@ -501,29 +501,36 @@ Regras:
   pelo texto: só textos novos vão para a Voyage. Mantenha estáveis o nome do app, as ContextKeys, o
   subpath `("repo", nome)` e o schema da tabela.
 
-### Embeddings locais (voyage-4-nano)
+### Domínio e serviço (DDD)
 
-O modelo aberto da Voyage roda nesta máquina, num servidor com a mesma forma da API de embeddings da
-Voyage. O rerank continua na API (`RERANK_MODEL`).
+Cada repo (ou pasta de um monorepo) pode ter um dono: um domínio (`hcm`) ou serviço (`hcm/payroll`). Ele
+filtra a busca (`--domain`/`--service` na CLI, `domain`/`service` na API e no MCP) e aparece em cada
+resultado (`owners`). O catálogo vem dos `.sdl` (nome técnico e rótulo); não há lista oficial.
+
+De onde vem o dono, do mais forte para o mais fraco (sem LLM e sem custo, recalculado em cada sync):
+
+| Origem | Regra |
+|---|---|
+| `manual` | definido por uma pessoa (interface, API ou CLI); vence todas as outras |
+| `declared` | `.sdl` do próprio repo; monorepo com um serviço por pasta ganha dono por pasta |
+| `sibling` | mesmo nome-base de um repo com SDL (`x-frontend` herda de `x-backend`) |
+| `api_calls` | o código chama, na maioria, as rotas `dominio/servico/{queries,actions,...}` de um serviço |
+| `usage` | biblioteca usada só por repos de um domínio |
 
 ```bash
-uv sync --extra local-embed      # torch (CPU) + sentence-transformers
-uv run code-index embed-serve    # 127.0.0.1:8766; baixa o modelo na primeira vez (~700 MB)
+uv run code-index owner catalog                       # domínios, serviços e cobertura
+uv run code-index owner list --sem-dono               # o que falta mapear
+uv run code-index owner set snr-erp-legado --to financeiro --criar --motivo "ERP antigo"
+uv run code-index owner set snr-erp --to hcm/payroll --path modulos/folha   # pasta de monorepo
+uv run code-index owner clear snr-erp-legado          # volta ao inferido
+uv run code-index search "cálculo de férias" --domain hcm --service vacation
 ```
 
-```bash
-# .env
-EMBED_MODEL=voyage/voyage-4-nano
-EMBED_DIMENSIONS=1024            # 256, 512, 1024 ou 2048
-EMBED_API_BASE=http://127.0.0.1:8766/v1
-# EMBED_API_KEY=local            # chave do servidor local (a da Voyage nunca é enviada a ele)
-```
-
-- A revisão do modelo é fixa (`LOCAL_EMBED_REVISION`): ele usa `trust_remote_code`, então trocar a revisão
-  exige revisar de novo o código remoto.
-- Em CPU (12 núcleos), a consulta leva ~0,06 s, mas a indexação faz ~0,4 trecho/s. Comece por poucos repos.
-- O servidor precisa estar no ar para indexar **e** para buscar.
-- Trocar de modelo (ida ou volta) reprocessa todo o índice.
+Na interface, a tela de Repositórios mostra o dono e a origem, filtra por domínio ou "Sem dono" e permite
+definir o dono de um repo ou de vários (seleção), inclusive de uma pasta. A atribuição exige `admin`.
+Domínio/serviço fora do catálogo só com confirmação (`--criar` / `create`), para um erro de digitação não
+virar um domínio novo. Os fatos usados na inferência vêm de `enrich facts` (rodado no fim de cada sync);
+repo ainda não indexado só recebe dono por nome (repo irmão) ou manual.
 
 ## Desenvolvimento
 

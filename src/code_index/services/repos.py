@@ -14,12 +14,13 @@ from ..domain.models import Org, Repo, RepoStatus
 from ..domain.policies import name_from_path, name_from_url, normalize_source
 from ..retrieval.redaction import mask_output
 
-from .base import ServiceBase, _to_status
+from .base import _to_status
+from .ownership import OwnershipMixin
 
 log = logging.getLogger(__name__)
 
 
-class ReposMixin(ServiceBase):
+class ReposMixin(OwnershipMixin):
     async def add_repo(
         self,
         source: str,
@@ -93,7 +94,12 @@ class ReposMixin(ServiceBase):
             n_files, n_chunks = counts.get(r.name, (0, 0))
             out.append(_to_status(r, n_files, n_chunks, skipped.get(r.name, 0)))
         cards = await self._enrich.cards([r.name for r in out])
+        owners = await self.owners_by_repo()
         for st in out:
+            own = owners.get(st.name)
+            if own is not None:
+                st.owners = [o.label for o in own.owners]
+                st.owner_origin, st.owner_confidence = own.origin, own.confidence
             card = cards.get(st.name)
             if card:
                 st.summary = mask_output(card.get("summary") or "", "markdown") or None

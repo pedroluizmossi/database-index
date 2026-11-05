@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Check, Copy, FileText } from "lucide-react";
+import { BookOpen, Check, Copy, ExternalLink, FileText } from "lucide-react";
 import type { Hit } from "../api/types";
 import { Badge, Button, IconButton } from "./ui";
 import { CodeLines, type CodeLine } from "./CodeLines";
@@ -48,9 +48,40 @@ export function ResultCard({ hit, maxScore, onOpen }: ResultCardProps) {
         </span>
         <div className="ml-auto flex items-center gap-4">
           <ScoreMeter percent={percent} score={hit.score} />
-          <Badge>{hit.language}</Badge>
+          {hit.kind === "doc" ? (
+            <Badge tone="pending">
+              <BookOpen className="size-3" aria-hidden="true" />
+              doc
+            </Badge>
+          ) : (
+            <Badge>{hit.language}</Badge>
+          )}
         </div>
       </header>
+
+      {(hit.url || hit.linked_repos.length > 0) && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 pb-3 text-xs text-zinc-500 dark:text-zinc-400">
+          {hit.url && (
+            <a
+              href={hit.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex min-w-0 items-center gap-1 font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+            >
+              <span className="truncate">{hit.title || hit.url}</span>
+              <ExternalLink className="size-3 shrink-0" aria-hidden="true" />
+            </a>
+          )}
+          {hit.linked_repos.length > 0 && (
+            <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+              ligado a
+              {hit.linked_repos.map((r) => (
+                <Badge key={r}>{r}</Badge>
+              ))}
+            </span>
+          )}
+        </div>
+      )}
 
       <div className="overflow-x-auto border-y border-zinc-100 bg-zinc-50/70 py-2 dark:border-zinc-800 dark:bg-zinc-950/50">
         <CodeLines lines={lines} collapsedAfter={8} />

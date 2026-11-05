@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     pg_schema: str = "code_index"
     chunks_table: str = "code_chunks"
     symbols_table: str = "code_symbols"
+    doc_pages_table: str = "doc_pages"
+    aliases_table: str = "repo_aliases"
+    mentions_table: str = "doc_mentions"
+    skipped_table: str = "skipped_files"
 
     # Embedding / rerank (nomes no formato LiteLLM)
     embed_model: str = Field("voyage/voyage-code-4", validation_alias="EMBED_MODEL")
@@ -46,6 +50,9 @@ class Settings(BaseSettings):
 
     # GitHub
     github_token: str | None = Field(None, validation_alias=AliasChoices("GITHUB_TOKEN", "GH_TOKEN"))
+
+    # Wiki.js (fontes [[docs]]): API key de leitura, criada em Administração → API Access
+    wikijs_token: SecretStr | None = Field(None, validation_alias="WIKIJS_TOKEN")
 
     # Arquivos locais (relativos a `base_dir`)
     repos_file: Path = Field(Path("repos.toml"), validation_alias="CODE_INDEX_REPOS")
@@ -109,6 +116,9 @@ class Settings(BaseSettings):
     @property
     def symbols_table_qualified(self) -> str:
         return f'"{self.pg_schema}"."{self.symbols_table}"'
+
+    def qualified(self, table: str) -> str:
+        return f'"{self.pg_schema}"."{table}"'
 
     @property
     def admin_set(self) -> frozenset[str]:

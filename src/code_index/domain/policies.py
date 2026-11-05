@@ -59,7 +59,8 @@ def pick_batch(
 ) -> tuple[list[str], int]:
     """Escolhe os próximos repos a processar.
 
-    Ordem: (1) indexados que mudaram upstream, (2) pendentes, (3) com erro (mais antigos antes).
+    Ordem: (1) indexados que mudaram upstream, (2) pendentes, (3) erros e wikis indexadas,
+    alternando os menos recentemente processados.
     Em (1) e (2): pela posição da linguagem em `Org.languages`, depois push mais recente.
     `manual_changed`: repos avulsos com HEAD remoto diferente do indexado (calculado fora, via git).
     Diretórios locais (`path`) indexados entram sempre em (1): revarrer é barato.
@@ -67,15 +68,18 @@ def pick_batch(
     Retorna (selecionados, quantos ficaram na fila).
     """
     org_by_name = {o.name: o for o in orgs}
-    changed, pending, failed = [], [], []
+    changed, pending, retry_or_docs = [], [], []
     for r in rows.values():
         if r.ignored:
             continue
         if r.error:
-            failed.append(r)
+            retry_or_docs.append(r)
         elif not r.indexed:
             pending.append(r)
-        elif r.path is not None or (r.org is not None and r.changed_upstream) or r.name in manual_changed:
+        elif r.kind == "docs":
+            retry_or_docs.append(r)
+        elif (r.path is not None
+              or (r.org is not None and r.changed_upstream) or r.name in manual_changed):
             changed.append(r)
 
     def priority(r: RepoState) -> tuple[int, float]:
@@ -83,7 +87,8 @@ def pick_batch(
         rank = org.language_rank(r.language) if org else 0
         return rank, -(r.pushed_at.timestamp() if r.pushed_at else 0)
 
-    order = sorted(changed, key=priority) + sorted(pending, key=priority) + sorted(failed, key=lambda r: r.updated_at)
+    order = (sorted(changed, key=priority) + sorted(pending, key=priority)
+             + sorted(retry_or_docs, key=lambda r: r.updated_at))
     names = [r.name for r in order]
     if batch is None:
         return names, 0

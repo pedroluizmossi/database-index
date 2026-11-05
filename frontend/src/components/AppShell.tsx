@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Database, KeyRound, LogOut, Moon, ScrollText, Search, SearchCode, Sun, type LucideIcon } from "lucide-react";
+import { BookOpen, Database, KeyRound, LogOut, Moon, ScrollText, Search, SearchCode, Sun, type LucideIcon } from "lucide-react";
 import { useAuth } from "../auth/AuthProvider";
 import { canWrite, hasScope } from "../lib/capabilities";
 import type { Session } from "../auth/AuthProvider";
@@ -7,7 +7,7 @@ import { applyTheme, readTheme, saveTheme, systemPrefersDark, watchSystemTheme, 
 import { cx } from "../lib/utils";
 import { Backdrop, Badge, IconButton } from "./ui";
 
-export type Tab = "search" | "repos" | "tokens" | "audit";
+export type Tab = "search" | "repos" | "docs" | "tokens" | "audit";
 
 interface TabDef {
   id: Tab;
@@ -20,6 +20,7 @@ export function tabsFor(session: Session | null): TabDef[] {
   const tabs: TabDef[] = [
     { id: "search", label: "Busca", icon: Search },
     { id: "repos", label: "Repositórios", icon: Database },
+    { id: "docs", label: "Documentação", icon: BookOpen },
   ];
   if (session && canWrite(session)) tabs.push({ id: "tokens", label: "Tokens", icon: KeyRound });
   if (session && hasScope(session.me, "admin")) tabs.push({ id: "audit", label: "Auditoria", icon: ScrollText });

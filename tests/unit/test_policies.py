@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from dataclasses import replace
 
 import pytest
 
@@ -226,3 +227,16 @@ def test_falhas_mais_antigas_primeiro() -> None:
     names, _ = pick_batch(rows(recent, old), None)
 
     assert names == ["a__old", "a__recent"]
+
+
+def test_wiki_nao_bloqueia_pendentes_e_alterna_com_erros_e_outras_wikis() -> None:
+    wiki1 = replace(state("docs__one", revision="docs:1", updated=T0), kind="docs")
+    wiki2 = replace(state("docs__two", revision="docs:2", updated=T0 + timedelta(seconds=1)), kind="docs")
+    failed = state("falhou", error="erro", updated=T0 + timedelta(seconds=2))
+    pending = state("novo")
+    assert pick_batch(rows(wiki1, wiki2, failed, pending), 1)[0] == ["novo"]
+    assert pick_batch(rows(wiki1, wiki2, failed), 1)[0] == ["docs__one"]
+    wiki1 = replace(wiki1, updated_at=T0 + timedelta(seconds=3))
+    assert pick_batch(rows(wiki1, wiki2, failed), 1)[0] == ["docs__two"]
+    wiki2 = replace(wiki2, updated_at=T0 + timedelta(seconds=4))
+    assert pick_batch(rows(wiki1, wiki2, failed), 1)[0] == ["falhou"]

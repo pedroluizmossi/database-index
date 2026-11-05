@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { CircleCheck, CircleX, Info, LoaderCircle } from "lucide-react";
 import { api } from "../api/endpoints";
 import { describeError } from "../api/client";
-import type { Repo, SyncJob, SyncResult } from "../api/types";
+import type { DocsPreview, Repo, SyncJob, SyncResult } from "../api/types";
 import { useIndex } from "../data/IndexProvider";
 import { formatDateTime, repoShortName, timeAgo } from "../lib/utils";
 import { useToast } from "./Toaster";
@@ -31,9 +31,63 @@ function formatSize(kb: number | null | undefined): string {
 }
 
 /** O que acontece com cada repo ao indexar. */
+/** Prévia de uma wiki: quantas páginas entrariam, por raiz, e a lista (sem baixar conteúdo). */
+function DocsPreviewBlock({ name }: { name: string }) {
+  const [data, setData] = useState<DocsPreview | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    api
+      .docsPreview(name)
+      .then((d) => active && setData(d))
+      .catch((err) => active && setError(describeError(err)));
+    return () => {
+      active = false;
+    };
+  }, [name]);
+
+  if (error) return <Alert>{error}</Alert>;
+  if (!data) return <Skeleton className="h-24 w-full" />;
+
+  return (
+    <section className="space-y-3 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <p className="text-sm font-medium">
+          {numberFormat.format(data.total)} páginas em {data.roots.length} raízes
+        </p>
+        <a href={data.url} target="_blank" rel="noopener noreferrer" className="truncate text-xs text-indigo-600 hover:underline dark:text-indigo-400">
+          {data.url}
+        </a>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {data.roots.map((r) => (
+          <Badge key={r.root}>
+            {r.root} · {numberFormat.format(r.pages)}
+          </Badge>
+        ))}
+      </div>
+      <ul className="max-h-[30dvh] divide-y divide-zinc-100 overflow-y-auto rounded-lg border border-zinc-100 dark:divide-zinc-800 dark:border-zinc-800">
+        {data.pages.map((p) => (
+          <li key={p.path} className="px-2.5 py-2">
+            <p className="truncate text-sm" title={p.title}>{p.title}</p>
+            <p className="truncate font-mono text-xs text-zinc-500 dark:text-zinc-400">{p.path}</p>
+          </li>
+        ))}
+      </ul>
+      {data.truncated && (
+        <p className="text-xs text-zinc-500 dark:text-zinc-400">
+          Mostrando {numberFormat.format(data.pages.length)} de {numberFormat.format(data.total)} (o restante entra normalmente na indexação).
+        </p>
+      )}
+    </section>
+  );
+}
+
 function plan(repo: Repo | undefined): { label: string; tone: "accent" | "neutral" | "warning"; hint: string } {
   if (!repo || repo.chunks === 0) {
-    return { label: "1ª indexação", tone: "accent", hint: "todo o código (após os filtros) vai para a Voyage" };
+    const what = repo?.kind === "docs" ? "as páginas selecionadas" : "todo o código (após os filtros)";
+    return { label: "1ª indexação", tone: "accent", hint: `${what} vai para a Voyage` };
   }
   if (repo.outdated) {
     return { label: "Atualizar", tone: "warning", hint: "houve push: só arquivos alterados vão para a Voyage" };
@@ -218,8 +272,9 @@ export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished,
                             {repo ? repoShortName(repo.name, repo.org) : name}
                           </p>
                           <p className="truncate text-xs text-zinc-500 dark:text-zinc-400">
-                            {repo?.org ?? "repositório avulso"} · {repo?.language ?? "linguagem desconhecida"} ·{" "}
-                            {formatSize(repo?.size_kb)}
+                            {repo?.kind === "docs"
+                              ? "documentação externa (wiki)"
+                              : `${repo?.org ?? "repositório avulso"} · ${repo?.language ?? "linguagem desconhecida"} · ${formatSize(repo?.size_kb)}`}
                           </p>
                         </div>
                         <Badge tone={p.tone}>{p.label}</Badge>
@@ -239,6 +294,12 @@ export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished,
                   );
                 })}
               </ul>
+
+              {details
+                .filter((d) => d.repo?.kind === "docs")
+                .map((d) => (
+                  <DocsPreviewBlock key={d.name} name={d.name} />
+                ))}
 
               {preview.remaining > 0 && (
                 <p className="text-sm text-zinc-500 dark:text-zinc-400">

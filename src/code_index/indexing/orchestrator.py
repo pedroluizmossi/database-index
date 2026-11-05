@@ -36,6 +36,7 @@ from ..infra.github import GitHubClient
 from ..infra.repo_store import RepoStore
 from ..settings import Settings
 from ..sources.github_org import GitHubOrgSource
+from ..sources.wikijs import MANIFEST, OWNER_MARKER, WikiJsClient, sync_docs
 
 log = logging.getLogger(__name__)
 
@@ -75,6 +76,7 @@ class Indexer:
         progress: bool = True,
         dry_run: bool = False,
         allow_register: bool = True,
+        doc_pages: frozenset[str] | None = None,
     ) -> SyncResult:
         """Sincroniza e indexa.
 
@@ -84,6 +86,7 @@ class Indexer:
         dry_run: só mostra a seleção (não clona, não indexa, não gasta tokens).
         allow_register: aceita nomes desconhecidos (URL, 'org/repo', diretório) registrando-os
                como repo avulso. Desligado para chamadas remotas sem scope admin.
+        doc_pages: só para fontes de documentação: sincroniza apenas estas páginas (caminho sem idioma).
         """
         res = SyncResult()
         with self._lock():
@@ -98,9 +101,9 @@ class Indexer:
             if dry_run:
                 return res
 
-            manual = {r.name: r for r in self._config.load_repos()}
+            manual = configured_repos(self._config)
             revisions = await self._fetch(
-                selected, rows, orgs, manual, forced=bool(names), pull=pull, res=res
+                selected, rows, orgs, manual, forced=bool(names), pull=pull, res=res, doc_pages=doc_pages
             )
             plan = self._plan(rows, revisions, orgs, manual)
             if not selected:
@@ -133,7 +136,8 @@ class Indexer:
                 res.errors[f"org:{org.name}"] = str(e)
 
     async def _load_rows(self, orgs: list[Org]) -> dict[str, RepoState]:
-        await self._repos.reconcile_manual(self._config.load_repos())
+        # [[repo]] avulsos e fontes [[docs]] (cada fonte vira um repo kind="docs")
+        await self._repos.reconcile_manual(configured_repos(self._config).values())
         await self._repos.prune_orgs([o.name for o in orgs])
         return await self._repos.all_rows()
 
@@ -183,6 +187,8 @@ class Indexer:
         for r in rows.values():
             if r.ignored or r.error or not r.indexed or r.path is not None or r.org is not None:
                 continue
+            if r.kind == "docs":  # não é git: o conector da wiki decide o que mudou
+                continue
             if r.url is None:
                 continue
             try:
@@ -204,6 +210,7 @@ class Indexer:
         forced: bool,
         pull: bool,
         res: SyncResult,
+        doc_pages: frozenset[str] | None = None,
     ) -> dict[str, tuple[str | None, str]]:
         """Git sync dos selecionados. Devolve {nome: (commit, revisão)} dos que deram certo."""
         revisions: dict[str, tuple[str | None, str]] = {}
@@ -211,12 +218,16 @@ class Indexer:
             row = rows[name]
             repo = self._to_repo(row, orgs, manual)
             try:
-                if pull or not repo.local_path(self._settings.repos_dir).is_dir():
+                if repo.kind == "docs":
+                    commit = None
+                    revision = await self._fetch_docs(repo, row, pull, only=doc_pages)
+                elif pull or not repo.local_path(self._settings.repos_dir).is_dir():
                     log.info("git sync %s", name)
                     commit = await asyncio.to_thread(self._git.sync, repo)
+                    revision = commit or "local"
                 else:
                     commit = row.indexed_commit
-                revision = commit or "local"
+                    revision = commit or "local"
                 if forced or repo.path is not None:
                     revision += f"#{time.time_ns()}"  # força revarrer o repo (arquivos seguem memoizados)
                 revisions[name] = (commit, revision)
@@ -224,6 +235,27 @@ class Indexer:
                 log.error("git sync falhou para %s: %s", name, e)
                 res.errors[name] = str(e)
         return revisions
+
+    async def _fetch_docs(self, repo: Repo, row: RepoState, pull: bool, *, only: frozenset[str] | None = None) -> str:
+        """Baixa só as páginas novas/alteradas da fonte de documentação. Revisão = hash do manifesto."""
+        dest = repo.local_path(self._settings.repos_dir)
+        if dest.exists():
+            if ((dest / ".git").exists() or
+                    not ((dest / OWNER_MARKER).is_file() or (dest / MANIFEST).is_file())):
+                raise RuntimeError(f"pasta de {repo.name} não identificada como documentação")
+        else:
+            dest.mkdir(parents=True)
+            (dest / OWNER_MARKER).write_text("code-index docs\n", encoding="utf-8")
+        if not pull and only is None and (dest / MANIFEST).is_file() and row.revision:
+            return row.revision.split("#", 1)[0]
+        source = repo.doc_source
+        if source is None:
+            raise RuntimeError(f"fonte de documentação {repo.name} não está mais no repos.toml")
+        token = self._settings.wikijs_token.get_secret_value() if self._settings.wikijs_token else None
+        log.info("sync de documentação %s (%s)", repo.name, source.url)
+        result = await sync_docs(source, WikiJsClient(source.url, token), dest, only=only)
+        log.info("%s: %d páginas, %d baixadas, %d removidas", repo.name, result.total, result.changed, result.deleted)
+        return result.revision
 
     def _plan(
         self,
@@ -292,6 +324,16 @@ class Indexer:
     @staticmethod
     def _to_repo(row: RepoState, orgs: list[Org], manual: dict[str, Repo]) -> Repo:
         return repo_for_row(row, orgs, manual)
+
+
+def configured_repos(config: ConfigFile) -> dict[str, Repo]:
+    """Repos definidos no repos.toml: [[repo]] avulsos + um repo kind="docs" por fonte [[docs]]."""
+    repos = {r.name: r for r in config.load_repos()}
+    for source in config.load_docs():
+        if source.repo_name in repos:
+            raise ValueError(f"fonte de documentação conflita com repo: {source.repo_name}")
+        repos[source.repo_name] = source.to_repo()
+    return repos
 
 
 def repo_for_row(row: RepoState, orgs: list[Org], manual: dict[str, Repo]) -> Repo:

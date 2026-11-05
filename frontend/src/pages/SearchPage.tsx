@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Search, SearchX, Sparkles } from "lucide-react";
 import { ApiError, describeError } from "../api/client";
 import { api } from "../api/endpoints";
-import type { Hit, SearchMode } from "../api/types";
+import type { Hit, HitKind, SearchMode } from "../api/types";
 import { useToast } from "../components/Toaster";
 import { ResultCard } from "../components/ResultCard";
 import { FileDrawer, type FileTarget } from "../components/FileDrawer";
@@ -16,6 +16,12 @@ const MODES: { value: SearchMode; label: string; help: string }[] = [
 ];
 
 const TOP_K = [8, 16, 30];
+
+const KINDS: { value: "" | HitKind; label: string }[] = [
+  { value: "", label: "Código e docs" },
+  { value: "code", label: "Só código" },
+  { value: "doc", label: "Só documentação" },
+];
 
 interface Results {
   query: string;
@@ -32,6 +38,7 @@ export function SearchPage() {
   const [repo, setRepo] = useState("");
   const [language, setLanguage] = useState("");
   const [pathGlob, setPathGlob] = useState("");
+  const [kind, setKind] = useState<"" | HitKind>("");
   const [topK, setTopK] = useState(8);
   const [rerank, setRerank] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -67,6 +74,8 @@ export function SearchPage() {
         repos: repo ? [repo] : null,
         language: language.trim() || null,
         path_glob: pathGlob.trim() || null,
+        kind: kind || null,
+        include_linked_docs: true,
       });
       setResults({ query: text, hits });
     } catch (err) {
@@ -117,13 +126,22 @@ export function SearchPage() {
             <p className="text-xs text-zinc-500 dark:text-zinc-400">{modeHelp}</p>
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
             <Field label="Repositório">
               <Select value={repo} onChange={setRepo}>
                 <option value="">Todos</option>
                 {indexed.map((r) => (
                   <option key={r.name} value={r.name}>
                     {r.name}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Conteúdo">
+              <Select value={kind} onChange={(v) => setKind(v as "" | HitKind)}>
+                {KINDS.map((k) => (
+                  <option key={k.value} value={k.value}>
+                    {k.label}
                   </option>
                 ))}
               </Select>

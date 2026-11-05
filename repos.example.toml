@@ -17,3 +17,12 @@
 # [[repo]]
 # name = "projeto-local"
 # path = "/home/voce/projetos/projeto-local"
+#
+# [[docs]]: documentação externa (Wiki.js 2.x via GraphQL; requer WIKIJS_TOKEN). Vira o repo docs__<name>.
+# [[docs]]
+# name = "wiki"
+# url = "https://wiki.exemplo.com"
+# locale = "pt-br"
+# include = ["Plataforma/**"]          # opcional: globs de caminho de página
+# exclude = ["Rascunhos/**"]           # opcional
+# links = [{ path = "Plataforma/Email/**", repos = ["snr-email-backend"] }]  # opcional: vínculos explícitos

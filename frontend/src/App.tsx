@@ -5,6 +5,7 @@ import { Spinner } from "./components/ui";
 import { IndexProvider } from "./data/IndexProvider";
 import { LoginPage } from "./pages/LoginPage";
 import { AuditPage } from "./pages/AuditPage";
+import { DocsPage } from "./pages/DocsPage";
 import { ReposPage } from "./pages/ReposPage";
 import { SearchPage } from "./pages/SearchPage";
 import { TokensPage } from "./pages/TokensPage";
@@ -28,7 +29,7 @@ export default function App() {
   );
 }
 
-const TAB_IDS: Tab[] = ["search", "repos", "tokens", "audit"];
+const TAB_IDS: Tab[] = ["search", "repos", "docs", "tokens", "audit"];
 
 function Workspace() {
   const { session } = useAuth();
@@ -46,6 +47,7 @@ function Workspace() {
   const page = {
     search: <SearchPage />,
     repos: <ReposPage />,
+    docs: <DocsPage />,
     tokens: <TokensPage />,
     audit: <AuditPage />,
   }[current];

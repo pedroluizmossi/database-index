@@ -124,8 +124,10 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
         path_glob: str | None = None,
         mode: str = "hybrid",
         rerank: bool = True,
+        kind: str | None = None,
+        include_linked_docs: bool = True,
     ) -> list[dict]:
-        """Busca trechos de código.
+        """Busca trechos de código e de documentação (README, docs/ e páginas de wiki).
 
         Args:
             query: descrição em linguagem natural ("onde validamos o token JWT") ou identificadores.
@@ -135,16 +137,22 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
             path_glob: filtra por caminho, ex.: "src/**/*.ts".
             mode: "hybrid" (padrão), "semantic" ou "keyword".
             rerank: reordena os candidatos com o reranker da Voyage (padrão: sim).
+            kind: "code" (só código), "doc" (só documentação) ou vazio (ambos).
+            include_linked_docs: com `repos`, inclui as páginas de wiki ligadas a esses repos (padrão: sim).
+
+        Resultados de documentação externa trazem `url` (página original), `title` e `linked_repos`.
         """
         top_k = max(1, min(top_k, 50))
 
         async def fn(svc: CodeIndexService) -> list[dict]:
             hits = await svc.search(query, top_k=top_k, repos=repos, language=language,
-                                    path_glob=path_glob, mode=mode, rerank=rerank)
+                                    path_glob=path_glob, mode=mode, rerank=rerank, kind=kind,
+                                    include_linked_docs=include_linked_docs)
             return [h.to_dict() for h in hits]
 
         return await run_tool("search_code", {"query": query, "top_k": top_k, "repos": repos, "language": language,
-                                              "path_glob": path_glob, "mode": mode}, "search", None, fn)
+                                              "path_glob": path_glob, "mode": mode, "kind": kind,
+                                              "include_linked_docs": include_linked_docs}, "search", None, fn)
 
     @server.tool()
     async def read_file_lines(repo: str, path: str, start_line: int | None = None, end_line: int | None = None) -> str:

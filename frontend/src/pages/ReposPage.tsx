@@ -13,6 +13,7 @@ import {
   ServerCrash,
   ChevronLeft,
   ChevronRight,
+  BookOpen,
   Play,
   Plus,
   RefreshCw,
@@ -28,6 +29,7 @@ import { describeError } from "../api/client";
 import { canWrite, hasScope } from "../lib/capabilities";
 import { useToast } from "../components/Toaster";
 import { Dialog } from "../components/Dialog";
+import { RepoDocsDialog } from "../components/RepoDocsDialog";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { SyncDialog } from "../components/SyncDialog";
 import { JobDialog, JobsPanel, RunningJobBanner, useJobs } from "../components/JobsPanel";
@@ -728,6 +730,15 @@ function RepoRow({ repo: r, actions, selection }: { repo: Repo; actions: RowActi
               {repoShortName(r.name, r.org)}
             </p>
             <p className="truncate text-xs text-zinc-500 dark:text-zinc-400">{r.org ?? "repositório avulso"}</p>
+            <RepoDocsButton repo={r} />
+            {r.skipped > 0 && (
+              <p
+                className="text-xs text-amber-600 dark:text-amber-400"
+                title="Arquivos fora da indexação: acima do limite de tamanho ou binários. Liste com: code-index skips"
+              >
+                {numberFormat.format(r.skipped)} descartado(s)
+              </p>
+            )}
             {r.error && (
               <p className="mt-0.5 truncate text-xs text-rose-600 dark:text-rose-400" title={r.error}>
                 {r.error}
@@ -783,6 +794,15 @@ function RepoCard({ repo: r, actions, selection }: { repo: Repo; actions: RowAct
             {repoShortName(r.name, r.org)}
           </p>
           <p className="truncate text-xs text-zinc-500 dark:text-zinc-400">{r.org ?? "repositório avulso"}</p>
+          <RepoDocsButton repo={r} />
+          {r.skipped > 0 && (
+            <p
+              className="text-xs text-amber-600 dark:text-amber-400"
+              title="Arquivos fora da indexação: acima do limite de tamanho ou binários. Liste com: code-index skips"
+            >
+              {numberFormat.format(r.skipped)} descartado(s)
+            </p>
+          )}
         </div>
         <Badge tone={r.status} dot>
           {STATUS_LABEL[r.status]}
@@ -813,6 +833,25 @@ function RepoCard({ repo: r, actions, selection }: { repo: Repo; actions: RowAct
 }
 
 /** Ações de um repo. Na tabela são ícones (com rótulo acessível); no cartão, botões com texto. */
+/** Abre a documentação ligada ao repo (qualquer sessão pode ver). Fontes de docs não têm essa seção. */
+function RepoDocsButton({ repo }: { repo: Repo }) {
+  const [open, setOpen] = useState(false);
+  if (repo.kind === "docs") return null;
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+      >
+        <BookOpen className="size-3.5" aria-hidden="true" />
+        Documentação
+      </button>
+      <RepoDocsDialog repo={repo.name} open={open} onClose={() => setOpen(false)} />
+    </>
+  );
+}
+
 function RepoActions({ repo: r, actions, compact }: { repo: Repo; actions: RowActions; compact: boolean }) {
   const indexable = actions.canIndex && r.status !== "ignored";
   const reactivable = actions.canAdmin && r.status === "ignored";

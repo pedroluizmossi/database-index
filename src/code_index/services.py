@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 from collections import Counter
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
@@ -23,10 +24,10 @@ from typing import Any, Literal
 from cocoindex.ops.text import detect_code_language
 
 from .domain.auth import ADMIN, Principal, check_can_issue, scopes_for_user, validate_scopes
-from .domain.models import Hit, SymbolHit, Org, Repo, RepoState, RepoStatus, SyncResult, validate_name
+from .domain.models import DocLinkRule, DocSource, Hit, SymbolHit, Org, Repo, RepoState, RepoStatus, SyncResult, validate_name
 from .domain.policies import name_from_path, name_from_url, normalize_source, resolve_name
 from .indexing.content import redact
-from .indexing.orchestrator import Indexer, repo_for_row
+from .indexing.orchestrator import Indexer, configured_repos, repo_for_row
 from .infra import llm
 from .infra.auth_store import AuditStore, TokenInfo, TokenStore
 from .infra.chunk_store import ChunkStore
@@ -107,6 +108,8 @@ class CodeIndexService:
         repos = self._config.load_repos()
         if any(r.name == name for r in repos):
             raise ValueError(f"já existe um repo chamado {name!r}")
+        if any(d.repo_name == name for d in self._config.load_docs()):
+            raise ValueError(f"nome reservado por uma fonte de documentação: {name!r}")
         kwargs: dict[str, Any] = {}
         if include:
             kwargs["include"] = tuple(include)
@@ -146,12 +149,13 @@ class CodeIndexService:
         """Estado de cada repo (tabela de estado) com contagens de arquivos e chunks do índice."""
         rows = await self._repos.all_rows()
         counts = await self._chunks.counts_by_repo()
+        skipped = await self._chunks.skips.counts_by_repo()
         out: list[RepoStatus] = []
         for r in sorted(rows.values(), key=lambda r: r.name):
             if (status and r.status != status) or (org and r.org != org) or (name and name not in r.name):
                 continue
             n_files, n_chunks = counts.get(r.name, (0, 0))
-            out.append(_to_status(r, n_files, n_chunks))
+            out.append(_to_status(r, n_files, n_chunks, skipped.get(r.name, 0)))
         return out
 
     # ------------------------------------------------------------ orgs
@@ -214,6 +218,219 @@ class CodeIndexService:
         new = replace(org, **changes)
         self._config.save(orgs=[new if o.name == name else o for o in orgs])
         return (await self._indexer.discover([new]))[new.name]
+
+    # ------------------------------------------------------------ fontes de documentação
+
+    def list_docs(self) -> list[DocSource]:
+        return self._config.load_docs()
+
+    async def add_docs(
+        self,
+        name: str,
+        *,
+        url: str,
+        locale: str = "pt-br",
+        include: Sequence[str] = (),
+        exclude: Sequence[str] = (),
+        links: Sequence[tuple[str, Sequence[str]]] = (),
+    ) -> dict:
+        """Cadastra uma wiki, validando acesso à lista e ao conteúdo de uma página."""
+        from .sources.wikijs import WikiJsClient, WikiJsError
+
+        docs = self._config.load_docs()
+        if any(d.name == name for d in docs):
+            raise ValueError(f"fonte de documentação já existe: {name}")
+        if not url.startswith(("https://", "http://")):
+            raise ValueError("url da wiki deve começar com https://")
+        source = DocSource(
+            name=name, url=url.rstrip("/"), locale=locale, include=tuple(include), exclude=tuple(exclude),
+            links=tuple(DocLinkRule(path=p, repos=tuple(r)) for p, r in links),
+        )
+        if any(r.name == source.repo_name for r in self._config.load_repos()):
+            raise ValueError(f"fonte de documentação conflita com repo: {source.repo_name}")
+        if source.repo_name in await self._repos.all_rows():
+            raise ValueError(f"fonte de documentação conflita com repo existente: {source.repo_name}")
+        if (self.settings.repos_dir / source.repo_name).exists():
+            raise ValueError(f"pasta já existe para {source.repo_name}; escolha outro nome")
+        token = self.settings.wikijs_token.get_secret_value() if self.settings.wikijs_token else None
+        client = WikiJsClient(source.url, token)
+        pages = await client.list_pages(source.locale)
+        if not pages:
+            raise WikiJsError("nenhuma página acessível para validar read:source; publique uma página antes de cadastrar")
+        await client.get_page(pages[0].id)
+        selected = _select_pages(source, pages)
+        self._config.save(docs=docs + [source])
+        return {"name": source.repo_name, "pages": len(selected), "pages_in_locale": len(pages)}
+
+    async def docs_preview(self, name: str, *, limit: int = 200) -> dict:
+        """Prévia sem custo: as páginas que entrariam na indexação, agrupadas pela raiz.
+
+        Lista a wiki (leitura), mas não baixa conteúdo nem chama a Voyage.
+        """
+        from .sources.wikijs import WikiJsClient
+
+        docs = self._config.load_docs()
+        source = next((d for d in docs if d.name == name or d.repo_name == name), None)
+        if source is None:
+            raise ValueError(f"fonte de documentação não encontrada: {name}")
+        token = self.settings.wikijs_token.get_secret_value() if self.settings.wikijs_token else None
+        pages = await WikiJsClient(source.url, token).list_pages(source.locale)
+        selected = sorted(_select_pages(source, pages), key=lambda p: p.path.lower())
+        roots = Counter(p.path.split("/", 1)[0] for p in selected)
+        cap = max(1, min(limit, 1000))
+        return {
+            "name": source.repo_name,
+            "url": source.url,
+            "locale": source.locale,
+            "total": len(selected),
+            "pages_in_locale": len(pages),
+            "roots": [{"root": r, "pages": n} for r, n in sorted(roots.items(), key=lambda kv: kv[0].lower())],
+            "pages": [
+                {"path": p.path, "title": p.title, "url": source.page_url(p.locale, p.path),
+                 "tags": list(p.tags), "updated_at": p.updated_at}
+                for p in selected[:cap]
+            ],
+            "truncated": len(selected) > cap,
+        }
+
+    def _doc_source(self, name: str) -> DocSource:
+        source = next((d for d in self._config.load_docs() if d.name == name or d.repo_name == name), None)
+        if source is None:
+            raise ValueError(f"fonte de documentação não encontrada: {name}")
+        return source
+
+    async def _check_link(self, origin: str, reason: str, repo: str) -> tuple[str, str]:
+        """Valida origem, motivo e o repo de código de um vínculo. Devolve (repo resolvido, motivo limpo)."""
+        if origin not in ("manual", "agent"):
+            raise ValueError("origem inválida: use manual ou agent")
+        reason = reason.strip()
+        if origin == "agent" and not reason:
+            raise ValueError("vínculo de agent precisa de motivo (o texto que justifica a ligação)")
+        (resolved,) = await self._resolve_repos([repo]) or (None,)
+        if resolved is None:
+            raise ValueError(f"repositório desconhecido: {repo}")
+        state = (await self._repos.all_rows()).get(resolved)
+        if state is None or state.kind != "code":
+            raise ValueError(f"só repos de código podem receber vínculo: {resolved}")
+        return resolved, reason
+
+    async def link_doc(self, source: str, page: str, repo: str, *, reason: str = "", origin: str = "manual") -> dict:
+        """Grava um vínculo página → repo (origem manual ou agent) a partir do caminho sem idioma.
+
+        `page` é o caminho da página na wiki, sem idioma (ex.: 'Plataforma/Email'). Não reindexa nada:
+        a busca passa a usar o vínculo na próxima consulta, e ele some se a página ou o repo saírem.
+        """
+        doc = self._doc_source(source)
+        page = page.strip().strip("/")
+        if not page or ".." in page.split("/"):
+            raise ValueError(f"caminho de página inválido: {page!r}")
+        result = await self.link_doc_key(doc.repo_name, f"{doc.locale}/{page}.md", repo, reason=reason, origin=origin)
+        return {**result, "page": page}
+
+    async def link_doc_key(self, doc_repo: str, doc_path: str, repo: str, *, reason: str = "",
+                           origin: str = "manual") -> dict:
+        """Grava vínculo pela chave da página (doc_repo + doc_path, como aparece em docs_overview)."""
+        doc = self._doc_source(doc_repo)
+        if not doc_path.startswith(f"{doc.locale}/") or not doc_path.endswith(".md") or ".." in doc_path.split("/"):
+            raise ValueError(f"caminho de página inválido: {doc_path!r}")
+        resolved, reason = await self._check_link(origin, reason, repo)
+        await self._chunks.links.set_link(doc.repo_name, doc_path, resolved, origin=origin, reason=reason)
+        return {
+            "doc_repo": doc.repo_name, "doc_path": doc_path, "repo": resolved, "origin": origin,
+            "indexed": await self._chunks.links.page_indexed(doc.repo_name, doc_path),
+        }
+
+    async def unlink_doc(self, source: str, page: str, repo: str) -> bool:
+        """Remove um vínculo gravado manualmente ou por agent. Devolve False se não existia."""
+        doc = self._doc_source(source)
+        return await self.unlink_doc_key(doc.repo_name, f"{doc.locale}/{page.strip('/')}.md", repo)
+
+    async def unlink_doc_key(self, doc_repo: str, doc_path: str, repo: str) -> bool:
+        doc = self._doc_source(doc_repo)
+        (resolved,) = await self._resolve_repos([repo]) or (repo,)
+        return await self._chunks.links.remove_link(doc.repo_name, doc_path, resolved)
+
+    async def docs_overview(self, *, limit: int = 500) -> list[dict]:
+        """Páginas indexadas, com a raiz e os repos ligados (ver DocLinkStore.overview)."""
+        from .domain.doc_links import page_path
+
+        out = []
+        for r in await self._chunks.links.overview(limit=limit):
+            page = page_path(r["path"])
+            out.append({
+                "doc_repo": r["repo"], "doc_path": r["path"], "page": page, "root": page.split("/", 1)[0],
+                "title": r["title"], "url": r["url"], "links": r["links"],
+            })
+        return out
+
+    async def doc_links(self, *, source: str | None = None, repo: str | None = None) -> list[dict]:
+        """Vínculos gravados (manual/agent), com a página e o repo de cada um."""
+        doc_repo = self._doc_source(source).repo_name if source else None
+        resolved: str | None = None
+        if repo:
+            names = await self._resolve_repos([repo]) or []
+            resolved = names[0] if names else None
+        return await self._chunks.links.list_links(doc_repo=doc_repo, repo=resolved)
+
+    async def index_doc_pages(self, name: str, pages: Sequence[str]) -> SyncResult:
+        """Indexa só as páginas indicadas de uma fonte já cadastrada (caminho sem idioma, ex.: 'Plataforma/Email').
+
+        A página precisa estar na seleção da fonte. A seleção não muda, e as outras páginas já baixadas
+        ficam como estão (sem reprocessar nem apagar nada).
+        """
+        from .sources.wikijs import WikiJsClient
+
+        source = self._doc_source(name)
+        wanted = {p.strip().strip("/") for p in pages if p.strip().strip("/")}
+        if not wanted or any(".." in p.split("/") for p in wanted):
+            raise ValueError("informe caminhos de página válidos, ex.: Plataforma/Email")
+        token = self.settings.wikijs_token.get_secret_value() if self.settings.wikijs_token else None
+        listed = _select_pages(source, await WikiJsClient(source.url, token).list_pages(source.locale))
+        missing = sorted(wanted - {p.path for p in listed})
+        if missing:
+            raise ValueError(f"fora da seleção da fonte {source.name} (ou inexistente): {', '.join(missing)}")
+        result = await self._indexer.sync(
+            [source.repo_name], batch=None, do_discover=False, pull=True, progress=False,
+            allow_register=False, doc_pages=frozenset(wanted),
+        )
+        await self._ensure_search_indexes()
+        return result
+
+    async def skipped_files(self, repo: str | None = None, *, limit: int = 200) -> list[dict]:
+        """Arquivos descartados na indexação (de um repo, ou de todos), com o motivo e o tamanho."""
+        resolved = None
+        if repo:
+            names = await self._resolve_repos([repo]) or []
+            resolved = names[0] if names else None
+        return await self._chunks.skips.rows_for(repo=resolved, limit=limit)
+
+    async def linked_docs(self, repo: str, *, limit: int = 100) -> list[dict]:
+        """Páginas de documentação externa ligadas a um repo, com a origem de cada vínculo."""
+        resolved = await self._resolve_repos([repo])
+        assert resolved
+        return await self._chunks.linked_docs(resolved[0], limit=limit)
+
+    async def remove_docs(self, name: str, *, keep_files: bool = False) -> None:
+        """Remove a fonte; os trechos somem no próximo sync."""
+        from .sources.wikijs import MANIFEST, OWNER_MARKER
+
+        docs = self._config.load_docs()
+        source = next((d for d in docs if d.name == name or d.repo_name == name), None)
+        if source is None:
+            raise ValueError(f"fonte de documentação não encontrada: {name}")
+        if any(r.name == source.repo_name for r in self._config.load_repos()):
+            raise ValueError(f"fonte de documentação conflita com repo: {source.repo_name}")
+        row = (await self._repos.all_rows()).get(source.repo_name)
+        if row is not None and (row.kind != "docs" or row.org is not None):
+            raise ValueError(f"fonte de documentação conflita com repo existente: {source.repo_name}")
+        folder = self.settings.repos_dir / source.repo_name
+        if not keep_files and folder.exists() and ((folder / ".git").exists() or
+                not ((folder / MANIFEST).is_file() or (folder / OWNER_MARKER).is_file())):
+            raise ValueError(f"pasta de {source.repo_name} não identificada como documentação; use --keep-files")
+        self._config.save(docs=[d for d in docs if d is not source])
+        await self._repos.delete([source.repo_name])
+        if not keep_files and folder.is_dir():
+            await asyncio.to_thread(shutil.rmtree, folder)
 
     async def remove_org(self, name: str, *, keep_clones: bool = False) -> int:
         """Remove uma org: apaga seus repos do estado (e, por padrão, os clones). Retorna quantos repos saíram."""
@@ -315,17 +532,21 @@ class CodeIndexService:
         mode: str = "hybrid",
         rerank: bool = True,
         candidates: int | None = None,
+        kind: str | None = None,
+        include_linked_docs: bool = True,
     ) -> list[Hit]:
-        """Busca híbrida (vetor + full-text) com rerank opcional."""
+        """Busca híbrida (vetor + full-text) com rerank opcional, em código e documentação."""
         return await self._searcher.search(
             query,
             top_k=top_k,
-            repos=repos,
+            repos=await self._resolve_repos(repos),
             language=language,
             path_glob=path_glob,
             mode=mode,
             rerank=rerank,
             candidates=candidates,
+            kind=kind,
+            include_linked_docs=include_linked_docs,
         )
 
     async def read_file(
@@ -344,9 +565,9 @@ class CodeIndexService:
             validate_name(repo)
         except ValueError:
             raise ValueError(f"repositório desconhecido: {repo}") from None
-        for r in self._config.load_repos():
-            if r.name == repo:
-                return r.local_path(self.settings.repos_dir)
+        configured = configured_repos(self._config).get(repo)
+        if configured is not None:
+            return configured.local_path(self.settings.repos_dir)
         return self.settings.repos_dir / repo
 
 
@@ -397,7 +618,7 @@ class CodeIndexService:
         wanted = await self._resolve_repos(repos)
         rows = await self._repos.all_rows()
         orgs = self._config.load_orgs()
-        manual = {r.name: r for r in self._config.load_repos()}
+        manual = configured_repos(self._config)
         targets: list[GrepTarget] = []
         for row in rows.values():
             if row.ignored or (wanted is not None and row.name not in wanted):
@@ -587,7 +808,7 @@ class CodeIndexService:
         return await self._audit.recent(limit=limit, actor=actor)
 
 
-def _to_status(r: RepoState, n_files: int, n_chunks: int) -> RepoStatus:
+def _to_status(r: RepoState, n_files: int, n_chunks: int, n_skipped: int = 0) -> RepoStatus:
     return RepoStatus(
         name=r.name,
         org=r.org,
@@ -602,7 +823,17 @@ def _to_status(r: RepoState, n_files: int, n_chunks: int) -> RepoStatus:
         chunks=n_chunks,
         error=r.error,
         size_kb=r.size_kb,
+        kind=r.kind,
+        skipped=n_skipped,
     )
+
+
+def _select_pages(source: DocSource, pages: Sequence[Any]) -> list[Any]:
+    """Páginas que passam nos filtros include/exclude da fonte (glob sobre o caminho da página)."""
+    from .sources.wikijs import page_matches
+
+    return [p for p in pages if (not source.include or page_matches(p.path, source.include))
+            and not page_matches(p.path, source.exclude)]
 
 
 @asynccontextmanager

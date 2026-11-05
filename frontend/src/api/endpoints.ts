@@ -10,6 +10,9 @@ import type {
   Repo,
   SearchRequest,
   SyncJob,
+  DocPageRow,
+  DocsPreview,
+  RepoDocLink,
   SyncResult,
   SyncStart,
   TokenInfo,
@@ -35,6 +38,13 @@ export const api = {
   // sync (index:write). A prévia (dry_run) não custa nada; a indexação gera custo na Voyage.
   // Redescobrir a org (API do GitHub, alguns segundos) só faz sentido no lote automático:
   // com repos escolhidos pelo nome, a seleção não depende dela.
+  docsPreview: (name: string) => getJson<DocsPreview>(`/api/v1/docs/${encodeURIComponent(name)}/preview`),
+  docsOverview: () => getJson<DocPageRow[]>("/api/v1/docs/overview"),
+  repoDocs: (name: string) => getJson<RepoDocLink[]>(`/api/v1/repos/${seg(name)}/docs`),
+  addDocLink: (body: { doc_repo: string; doc_path: string; repo: string; reason: string }) =>
+    postJson<unknown>("/api/v1/docs/links", body),
+  removeDocLink: (q: { doc_repo: string; doc_path: string; repo: string }) =>
+    sendJson<{ removed: boolean }>("DELETE", `/api/v1/docs/links?${new URLSearchParams(q).toString()}`),
   syncPreview: (repos: string[] | null, batch: number) =>
     postJson<SyncResult>("/api/v1/sync", { repos, batch, discover: repos === null, pull: true, dry_run: true }),
   syncStart: (repos: string[] | null, batch: number) =>

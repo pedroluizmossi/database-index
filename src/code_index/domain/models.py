@@ -19,6 +19,47 @@ def validate_name(name: str) -> str:
 
 
 @dataclass(frozen=True)
+class DocLinkRule:
+    """Vínculo explícito: páginas cujo caminho casa `path` (glob) ficam ligadas aos repos que casam `repos` (globs)."""
+
+    path: str
+    repos: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class DocSource:
+    """Fonte de documentação externa (hoje: Wiki.js via GraphQL).
+
+    As páginas viram arquivos .md em <repos_dir>/docs__<name>/ e são indexadas como um "repo" de
+    kind="docs" pelo mesmo pipeline do código. Só páginas novas/alteradas são baixadas.
+    """
+
+    name: str
+    url: str                              # base da wiki, ex.: https://wiki.exemplo.com
+    type: str = "wikijs"
+    locale: str = "pt-br"
+    include: tuple[str, ...] = ()         # globs de caminho de página (vazio = todas)
+    exclude: tuple[str, ...] = ()
+    links: tuple[DocLinkRule, ...] = ()
+
+    def __post_init__(self) -> None:
+        validate_name(self.name)
+        if self.type != "wikijs":
+            raise ValueError(f"fonte {self.name!r}: tipo não suportado {self.type!r} (use wikijs)")
+
+    @property
+    def repo_name(self) -> str:
+        return f"docs__{self.name}"
+
+    def page_url(self, locale: str, path: str) -> str:
+        return f"{self.url.rstrip('/')}/{locale}/{path}"
+
+    def to_repo(self) -> Repo:
+        return Repo(name=self.repo_name, url=self.url, kind="docs", include=("**/*.md",),
+                    exclude=("**/.*",), doc_source=self)
+
+
+@dataclass(frozen=True)
 class Repo:
     """Um repositório a indexar (o que o pipeline recebe).
 
@@ -34,9 +75,13 @@ class Repo:
     include: tuple[str, ...] = field(default_factory=lambda: tuple(DEFAULT_INCLUDE))
     exclude: tuple[str, ...] = field(default_factory=lambda: tuple(DEFAULT_EXCLUDE))
     extra_exclude: tuple[str, ...] = ()  # somados a `exclude`
+    kind: str = "code"                   # "code" (git/pasta) | "docs" (páginas de uma DocSource)
+    doc_source: DocSource | None = None  # só para kind="docs"
 
     def __post_init__(self) -> None:
         validate_name(self.name)
+        if self.kind not in ("code", "docs"):
+            raise ValueError(f"repo {self.name!r}: kind inválido {self.kind!r}")
         if (self.url is None) == (self.path is None):
             raise ValueError(f"repo {self.name!r}: informe exatamente um de 'url' ou 'path'")
 
@@ -111,6 +156,7 @@ class RepoState:
     error: str | None
     updated_at: datetime
     language: str | None = None
+    kind: str = "code"
 
     @property
     def indexed(self) -> bool:
@@ -148,6 +194,8 @@ class RepoStatus:
     chunks: int
     error: str | None
     size_kb: int | None = None   # tamanho do repositório no GitHub (inclui histórico)
+    kind: str = "code"
+    skipped: int = 0             # arquivos descartados na indexação (tamanho, binário...)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -164,6 +212,10 @@ class Hit:
     end_line: int
     score: float
     code: str
+    kind: str = "code"                      # "code" | "doc" (Markdown/RST no repo ou página de wiki)
+    url: str | None = None                  # página original (documentação externa)
+    title: str | None = None
+    linked_repos: list[str] = field(default_factory=list)  # repos ligados à página
 
     def to_dict(self) -> dict:
         return asdict(self)

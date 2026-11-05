@@ -34,10 +34,15 @@ class RepoStore:
         async with self._pool.acquire() as conn:
             async with conn.transaction():
                 for r in items:
+                    if r.kind == "docs":
+                        existing = await conn.fetchrow(f"SELECT org, kind FROM {t} WHERE name = $1 FOR UPDATE", r.name)
+                        if existing is not None and (existing["org"] is not None or existing["kind"] != "docs"):
+                            raise ValueError(f"fonte de documentação conflita com repo existente: {r.name}")
                     await conn.execute(
-                        f"""INSERT INTO {t} (name, url, path, default_branch) VALUES ($1, $2, $3, $4)
-                            ON CONFLICT (name) DO UPDATE SET org = NULL, url = $2, path = $3, default_branch = $4""",
-                        r.name, r.url, r.path, r.branch,
+                        f"""INSERT INTO {t} (name, url, path, default_branch, kind) VALUES ($1, $2, $3, $4, $5)
+                            ON CONFLICT (name) DO UPDATE SET org = NULL, url = $2, path = $3, default_branch = $4,
+                                kind = $5""",
+                        r.name, r.url, r.path, r.branch, r.kind,
                     )
                 await conn.execute(f"DELETE FROM {t} WHERE org IS NULL AND NOT (name = ANY($1))", [r.name for r in items])
 

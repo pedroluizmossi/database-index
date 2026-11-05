@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Annotated
+from typing import Annotated, Any
 
 import asyncpg
 import cocoindex as coco
@@ -28,10 +28,16 @@ from numpy.typing import NDArray
 
 from ..domain.models import Repo
 from ..infra import llm
-from ..settings import get_settings
+from ..settings import Settings, get_settings
 from .content import CONTENT_LOGIC, redact, skip_reason
 from .context import Decl, chunk_bounds, chunk_header, declarations, full_lines, symbol_names
+from ..domain.doc_content import strip_embedded_blobs
+from ..domain.doc_links import (
+    MANIFESTS, alias_is_strong, blank_lines, manifest_aliases, page_mentions, page_path, parse_front_matter,
+    repo_name_aliases,
+)
 from ..domain.search_text import code_terms
+from ..sources.wikijs import page_matches
 from ..infra.chunk_store import FTS_DOCUMENT
 
 PG_DB = coco.ContextKey[asyncpg.Pool]("code_index_db")
@@ -107,6 +113,49 @@ async def process_chunk(
     )
 
 
+@dataclass
+class DocPage:
+    """Página de documentação externa: de onde veio (URL) e como se chama."""
+
+    repo: str
+    path: str
+    url: str
+    title: str
+    tags: str          # separadas por espaço
+    updated_at: str
+
+
+@dataclass
+class RepoAlias:
+    """Apelido de um repo (nome, pacote, artefato, componente), usado para ligar documentação."""
+
+    repo: str
+    alias: str
+    origin: str        # name | package.json | pom.xml | pyproject.toml | ... | catalog
+    path: str          # arquivo de onde saiu ("" para os derivados do nome)
+    strong: bool       # específico o bastante para casar por menção no texto
+
+
+@dataclass
+class DocMention:
+    """Termo citado numa página de documentação (explicit | tag | url | mention)."""
+
+    doc_repo: str
+    doc_path: str
+    term: str
+    origin: str
+
+
+@dataclass
+class SkippedFile:
+    """Arquivo descartado na indexação (acima do limite de tamanho, binário, CRD...). Some quando volta a ser indexado."""
+
+    repo: str
+    path: str
+    reason: str
+    size_bytes: int
+
+
 @dataclass(frozen=True)
 class ChunkInput:
     """Chunk pronto para embedar: linhas inteiras (o que é guardado/exibido) + cabeçalho de contexto."""
@@ -118,24 +167,67 @@ class ChunkInput:
     end_line: int
 
 
-@coco.fn(memo=True, version=4)
+@dataclass(frozen=True)
+class DocTargets:
+    """Tabelas de documentação/vínculos, agrupadas para não alongar as assinaturas."""
+
+    pages: postgres.TableTarget[DocPage]
+    aliases: postgres.TableTarget[RepoAlias]
+    mentions: postgres.TableTarget[DocMention]
+    skipped: postgres.TableTarget[SkippedFile]
+
+    def __coco_memo_key__(self) -> tuple[str, str, str, str]:
+        return (self.pages.__coco_memo_key__(), self.aliases.__coco_memo_key__(),
+                self.mentions.__coco_memo_key__(), self.skipped.__coco_memo_key__())
+
+
+@coco.fn(memo=True, version=6)
 async def process_file(
     file: FileLike,
     repo: str,
     root: str,
+    kind: str,
+    link_rules: tuple[tuple[str, tuple[str, ...]], ...],
     table: postgres.TableTarget[CodeChunk],
     symbols_table: postgres.TableTarget[CodeSymbol],
+    doc_targets: DocTargets,
 ) -> None:
     coco.use_logic_dep(CONTENT_LOGIC)
     path = file.file_path.path.relative_to(root).as_posix()
     text = await file.read_text()  # decodifica com errors="replace": binários são barrados em skip_reason
     text = text.replace("\r\n", "\n").replace("\r", "\n")  # CRLF/CR: linhas iguais às do read_file
-    if not text.strip() or len(text.encode()) > get_settings().max_file_bytes:
+    if kind == "docs":
+        text = strip_embedded_blobs(text)  # diagramas/imagens em base64 saem antes do limite de tamanho
+    if not text.strip():
+        return
+    size = len(text.encode())
+    if size > get_settings().max_file_bytes:
+        doc_targets.skipped.declare_row(row=SkippedFile(repo=repo, path=path, reason="tamanho", size_bytes=size))
         return
     language = detect_code_language(filename=file.file_path.path.name) or ""
-    if skip_reason(path, language, text):
+    reason = skip_reason(path, language, text)
+    if reason:
+        doc_targets.skipped.declare_row(row=SkippedFile(repo=repo, path=path, reason=reason, size_bytes=size))
         return
     text, _ = redact(text, language)  # segredos/certificados nunca vão para a Voyage nem para o banco
+    filename = file.file_path.path.name
+    page_title = ""
+    if kind == "docs":
+        meta, fm_lines = parse_front_matter(text)
+        text = blank_lines(text, fm_lines)  # front-matter fora dos chunks, numeração de linhas preservada
+        page_title = str(meta.get("title") or path)
+        tags = [str(t) for t in meta.get("tags") or []]
+        doc_targets.pages.declare_row(row=DocPage(
+            repo=repo, path=path, url=str(meta.get("url") or ""), title=page_title,
+            tags=" ".join(tags), updated_at=str(meta.get("updated_at") or ""),
+        ))
+        for term, origin in page_mentions(page_path(path), tags, text, link_rules, page_matches):
+            doc_targets.mentions.declare_row(row=DocMention(doc_repo=repo, doc_path=path, term=term, origin=origin))
+    elif filename in MANIFESTS:
+        for alias, origin in manifest_aliases(filename, text):
+            doc_targets.aliases.declare_row(row=RepoAlias(
+                repo=repo, alias=alias, origin=origin, path=path, strong=alias_is_strong(alias),
+            ))
     chunks = _splitter.split(
         text,
         chunk_size=1500,
@@ -149,10 +241,13 @@ async def process_file(
     items = []
     for c in chunks:
         start, end = chunk_bounds(c.start.line, c.end.line, c.end.column)
+        header = chunk_header(repo, path, language, decls, start, end)
+        if page_title:
+            header += f"\n# página: {page_title}"
         items.append(ChunkInput(
             code=full_lines(lines, start, end),
-            header=chunk_header(repo, path, language, decls, start, end),
-            symbols=" ".join([path, *symbol_names(decls, start, end)]),
+            header=header,
+            symbols=" ".join([path, page_title, *symbol_names(decls, start, end)]),
             start_line=start,
             end_line=end,
         ))
@@ -190,6 +285,7 @@ async def index_repo(
     revision: str,
     table: postgres.TableTarget[CodeChunk],
     symbols_table: postgres.TableTarget[CodeSymbol],
+    doc_targets: DocTargets,
 ) -> None:
     """Memoizado por (repo, revision): se o commit não mudou, o repo nem é percorrido
     e as linhas já gravadas são mantidas. Por isso o custo de um sync é proporcional
@@ -203,7 +299,15 @@ async def index_repo(
             excluded_patterns=repo.all_excludes,
         ),
     )
-    await coco.mount_each(process_file, files.items(), repo.name, str(root), table, symbols_table)
+    if repo.kind == "code":
+        for alias, origin in repo_name_aliases(repo.name):
+            doc_targets.aliases.declare_row(row=RepoAlias(
+                repo=repo.name, alias=alias, origin=origin, path="", strong=alias_is_strong(alias),
+            ))
+    rules = tuple((r.path, r.repos) for r in repo.doc_source.links) if repo.doc_source else ()
+    await coco.mount_each(
+        process_file, files.items(), repo.name, str(root), repo.kind, rules, table, symbols_table, doc_targets
+    )
 
 
 @coco.fn
@@ -242,10 +346,37 @@ async def app_main(repos: list[tuple[Repo, str]]) -> None:
         f"(lower(name) text_pattern_ops)",
         teardown_sql=f'DROP INDEX IF EXISTS "{settings.pg_schema}".code_symbols_name',
     )
+    doc_targets = await _mount_doc_tables(settings)
     for repo, revision in repos:
         await coco.mount(
-            coco.component_subpath("repo", repo.name), index_repo, repo, revision, table, symbols_table
+            coco.component_subpath("repo", repo.name), index_repo, repo, revision, table, symbols_table, doc_targets
         )
+
+
+async def _mount_doc_tables(settings: Settings) -> DocTargets:
+    async def mount(cls: type, name: str, pk: list[str]) -> Any:  # tipo da linha varia por tabela
+        return await postgres.mount_table_target(
+            PG_DB,
+            table_name=name,
+            table_schema=await postgres.TableSchema.from_class(cls, primary_key=pk),
+            pg_schema_name=settings.pg_schema,
+        )
+
+    pages = await mount(DocPage, settings.doc_pages_table, ["repo", "path"])
+    aliases = await mount(RepoAlias, settings.aliases_table, ["repo", "alias", "origin", "path"])
+    mentions = await mount(DocMention, settings.mentions_table, ["doc_repo", "doc_path", "term", "origin"])
+    skipped = await mount(SkippedFile, settings.skipped_table, ["repo", "path"])
+    aliases.declare_sql_command_attachment(
+        name="alias_index",
+        setup_sql=f"CREATE INDEX IF NOT EXISTS repo_aliases_alias ON {settings.qualified(settings.aliases_table)} (alias)",
+        teardown_sql=f'DROP INDEX IF EXISTS "{settings.pg_schema}".repo_aliases_alias',
+    )
+    mentions.declare_sql_command_attachment(
+        name="term_index",
+        setup_sql=f"CREATE INDEX IF NOT EXISTS doc_mentions_term ON {settings.qualified(settings.mentions_table)} (term)",
+        teardown_sql=f'DROP INDEX IF EXISTS "{settings.pg_schema}".doc_mentions_term',
+    )
+    return DocTargets(pages=pages, aliases=aliases, mentions=mentions, skipped=skipped)
 
 
 def build_app(plan: list[tuple[Repo, str]]) -> coco.App:

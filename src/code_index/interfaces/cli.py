@@ -141,6 +141,15 @@ def _print_result(res: SyncResult) -> None:
 
 
 async def _cmd_sync(a: argparse.Namespace, settings: Settings) -> None:
+    if a.page:
+        if len(a.repos) != 1 or not a.repos[0].startswith("docs__"):
+            raise SystemExit("--page exige exatamente uma fonte de documentação, ex.: code-index index docs__wiki --page Plataforma/Email")
+        if a.dry_run:
+            raise SystemExit("--page não combina com --dry-run (use `code-index docs preview` para ver a seleção)")
+        async with open_service(settings) as svc:
+            res = await svc.index_doc_pages(a.repos[0], a.page)
+        _print_result(res)
+        return
     async with open_service(settings) as svc:
         res = await svc.sync(
             a.repos or None,
@@ -187,18 +196,36 @@ async def _cmd_search(a: argparse.Namespace, settings: Settings) -> None:
             mode=a.mode,
             rerank=not a.no_rerank,
             candidates=a.candidates,
+            kind=a.kind,
+            include_linked_docs=not a.no_linked_docs,
         )
     if a.json:
         print(json.dumps([h.to_dict() for h in hits], indent=2, ensure_ascii=False))
         return
     for h in hits:
         print(f"\033[1m[{h.score:.3f}] {h.repo}/{h.path}:{h.start_line}-{h.end_line}\033[0m ({h.language or '?'})")
+        if h.url:
+            print(f"    {h.title or ''} <{h.url}>" + (f"  ligado a: {', '.join(h.linked_repos)}" if h.linked_repos else ""))
         lines = h.code.splitlines()
         for line in lines[: a.lines]:
             print(f"    {line}")
         if len(lines) > a.lines:
             print(f"    ... (+{len(lines) - a.lines} linhas)")
         print()
+
+
+async def _cmd_skips(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        rows = await svc.skipped_files(a.repo, limit=a.limit)
+    if a.json:
+        print(json.dumps(rows, indent=2, ensure_ascii=False))
+        return
+    if not rows:
+        print("nenhum arquivo descartado.")
+    for r in rows:
+        print(f"{r['repo']}/{r['path']}  \033[1m{r['reason']}\033[0m  {r['size_bytes']:,} bytes".replace(",", "."))
+    if len(rows) >= a.limit:
+        print(f"(mostrando {len(rows)}; use --limit para ver mais)")
 
 
 async def _cmd_symbol(a: argparse.Namespace, settings: Settings) -> None:
@@ -229,6 +256,99 @@ async def _cmd_grep(a: argparse.Namespace, settings: Settings) -> None:
         print(f"... parou em {len(res.matches)} resultados (use -n para mais, ou filtre com -r/-p).")
     elif not res.matches:
         print("nada encontrado.")
+
+
+def _parse_link(raw: str) -> tuple[str, list[str]]:
+    """'Plataforma/email/**=*email*,org__repo' -> ('Plataforma/email/**', ['*email*', 'org__repo'])."""
+    path, sep, repos = raw.partition("=")
+    if not sep or not path.strip() or not repos.strip():
+        raise ValueError(f"--link inválido: {raw!r} (use caminho_glob=repo_glob[,repo_glob...])")
+    return path.strip(), [r.strip() for r in repos.split(",") if r.strip()]
+
+
+async def _cmd_docs_add(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        res = await svc.add_docs(
+            a.name, url=a.url, locale=a.locale, include=a.include or (), exclude=a.exclude or (),
+            links=[_parse_link(x) for x in (a.link or [])],
+        )
+    print(f"fonte {res['name']}: {res['pages']} páginas selecionadas (de {res['pages_in_locale']} em {a.locale}).")
+    print(f"nenhuma página foi salva ou indexada: rode `code-index index {res['name']}` (ou indexe pela interface).")
+
+
+async def _cmd_docs_list(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        docs = svc.list_docs()
+    if not docs:
+        print("nenhuma fonte de documentação.")
+    for d in docs:
+        print(f"{d.repo_name:<30} {d.type:<7} {d.url}  locale={d.locale}"
+              + (f"  include={list(d.include)}" if d.include else "") + (f"  exclude={list(d.exclude)}" if d.exclude else ""))
+        for rule in d.links:
+            print(f"    vínculo: {rule.path} -> {', '.join(rule.repos)}")
+
+
+async def _cmd_docs_preview(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        prev = await svc.docs_preview(a.name, limit=a.limit)
+    if a.json:
+        print(json.dumps(prev, indent=2, ensure_ascii=False))
+        return
+    print(f"{prev['name']}: {prev['total']} páginas de {prev['pages_in_locale']} em {prev['locale']} ({prev['url']})")
+    for r in prev["roots"]:
+        print(f"  {r['root']:<34} {r['pages']:>5}")
+    print()
+    for p in prev["pages"]:
+        print(f"  {p['title']}  \033[2m{p['path']}\033[0m")
+    if prev["truncated"]:
+        print(f"  ... (mostrando {len(prev['pages'])} de {prev['total']}; use --limit)")
+
+
+async def _cmd_docs_link(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        res = await svc.link_doc(a.source, a.page, a.repo, reason=a.reason or "", origin=a.origin)
+    estado = ("página indexada: a busca já usa o vínculo." if res["indexed"]
+              else "página ainda não indexada: o vínculo vale quando ela entrar no índice.")
+    print(f"vínculo gravado ({res['origin']}): {res['page']} -> {res['repo']}; {estado}")
+
+
+async def _cmd_docs_unlink(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        removed = await svc.unlink_doc(a.source, a.page, a.repo)
+    print("vínculo removido." if removed else "nenhum vínculo para remover.")
+
+
+async def _cmd_docs_vinculos(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        rows = await svc.doc_links(source=a.source, repo=a.repo)
+    if a.json:
+        print(json.dumps(rows, indent=2, ensure_ascii=False))
+        return
+    if not rows:
+        print("nenhum vínculo gravado.")
+    for r in rows:
+        print(f"{r['doc_repo']}/{r['doc_path']} -> {r['repo']}  [{r['origin']}]  {r['created_at'][:10]}")
+        if r["reason"]:
+            print(f"    {r['reason']}")
+
+
+async def _cmd_docs_links(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        docs = await svc.linked_docs(a.repo, limit=a.limit)
+    if a.json:
+        print(json.dumps(docs, indent=2, ensure_ascii=False))
+        return
+    if not docs:
+        print("nenhuma página ligada (os vínculos aparecem depois do sync da fonte de documentação e do repo).")
+    for d in docs:
+        print(f"\033[1m{d['title'] or d['path']}\033[0m  [{', '.join(d['origins'])}]")
+        print(f"    {d['url'] or d['doc_repo'] + '/' + d['path']}")
+
+
+async def _cmd_docs_remove(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        await svc.remove_docs(a.name, keep_files=a.keep_files)
+    print(f"fonte {a.name} removida; os trechos somem no próximo sync.")
 
 
 async def _cmd_show(a: argparse.Namespace, settings: Settings) -> None:
@@ -363,6 +483,9 @@ def main() -> None:
     s.add_argument("--no-pull", action="store_true", help="não atualiza os clones")
     s.add_argument("--full", action="store_true", help="reprocessa tudo, ignorando caches (caro!)")
     s.add_argument("--dry-run", action="store_true", help="só mostra o que seria processado (sem custo)")
+    s.add_argument("--page", action="append", metavar="CAMINHO",
+                   help="fonte de documentação: indexa só esta página (sem idioma, ex.: Plataforma/Email); "
+                        "pode repetir. A página precisa estar na seleção da fonte.")
     s.set_defaults(fn=_cmd_sync)
 
     w = sub.add_parser("watch", help="sync periódico em lotes")
@@ -381,9 +504,60 @@ def main() -> None:
     q.add_argument("-n", "--lines", type=int, default=12, help="linhas exibidas por resultado")
     q.add_argument("--no-rerank", action="store_true", help="só busca híbrida, sem reranker")
     q.add_argument("-c", "--candidates", type=int, help="candidatos enviados ao reranker (padrão RERANK_CANDIDATES=40)")
+    q.add_argument("--kind", choices=["code", "doc"], help="só código ou só documentação")
+    q.add_argument("--no-linked-docs", action="store_true",
+                   help="com --repo, não inclui as páginas de documentação ligadas ao repo")
     q.add_argument("--json", action="store_true")
     q.set_defaults(fn=_cmd_search)
 
+    dc = sub.add_parser("docs", help="fontes de documentação externa (Wiki.js)").add_subparsers(required=True)
+    d = dc.add_parser("add", help="cadastra uma wiki (valida o acesso; não indexa)")
+    d.add_argument("name", help="nome curto; o repo de documentação vira docs__<nome>")
+    d.add_argument("--url", required=True, help="base da wiki, ex.: https://wiki.exemplo.com")
+    d.add_argument("--locale", default="pt-br")
+    d.add_argument("--include", nargs="+", help="globs de caminho de página (ex.: 'Plataforma/**')")
+    d.add_argument("--exclude", nargs="+", help="globs de caminho de página a ignorar")
+    d.add_argument("--link", action="append",
+                   help="vínculo explícito: 'caminho_glob=repo_glob[,repo_glob]' (pode repetir)")
+    d.set_defaults(fn=_cmd_docs_add)
+    dc.add_parser("list", help="fontes cadastradas").set_defaults(fn=_cmd_docs_list)
+    d = dc.add_parser("preview", help="páginas que entrariam na indexação, por raiz (sem custo)")
+    d.add_argument("name")
+    d.add_argument("--limit", type=int, default=30, help="páginas listadas (máx. 1000)")
+    d.add_argument("--json", action="store_true")
+    d.set_defaults(fn=_cmd_docs_preview)
+    d = dc.add_parser("link", help="grava vínculo página → repo (sem reindexar)")
+    d.add_argument("source", help="nome da fonte de documentação, ex.: wiki")
+    d.add_argument("page", help="caminho da página sem idioma, ex.: Plataforma/Email")
+    d.add_argument("repo")
+    d.add_argument("--reason", help="motivo da ligação (obrigatório para origem agent)")
+    d.add_argument("--origin", choices=["manual", "agent"], default="manual")
+    d.set_defaults(fn=_cmd_docs_link)
+    d = dc.add_parser("unlink", help="remove um vínculo gravado")
+    d.add_argument("source")
+    d.add_argument("page")
+    d.add_argument("repo")
+    d.set_defaults(fn=_cmd_docs_unlink)
+    d = dc.add_parser("vinculos", help="vínculos gravados manualmente ou por agent")
+    d.add_argument("--source", help="filtra por fonte de documentação")
+    d.add_argument("--repo", help="filtra por repo")
+    d.add_argument("--json", action="store_true")
+    d.set_defaults(fn=_cmd_docs_vinculos)
+    d = dc.add_parser("links", help="páginas de documentação ligadas a um repo (e por quê)")
+    d.add_argument("repo")
+    d.add_argument("--limit", type=int, default=100)
+    d.add_argument("--json", action="store_true")
+    d.set_defaults(fn=_cmd_docs_links)
+    d = dc.add_parser("remove", help="remove uma fonte")
+    d.add_argument("name")
+    d.add_argument("--keep-files", action="store_true", help="mantém as páginas baixadas")
+    d.set_defaults(fn=_cmd_docs_remove)
+
+    sk = sub.add_parser("skips", help="arquivos descartados na indexação (tamanho, binário...) e o motivo")
+    sk.add_argument("repo", nargs="?", help="filtra por repo")
+    sk.add_argument("--limit", type=int, default=200)
+    sk.add_argument("--json", action="store_true")
+    sk.set_defaults(fn=_cmd_skips)
     sy = sub.add_parser("symbol", help="onde uma classe/função/método é declarado")
     sy.add_argument("name", help="nome, parte dele ou Classe.metodo")
     sy.add_argument("-k", "--kind", choices=["container", "member", "section"])

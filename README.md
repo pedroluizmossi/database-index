@@ -116,6 +116,7 @@ uv run code-index show minha-org__meu-backend/src/main/App.java:10-40
 uv run code-index search "..." --no-rerank                 # só busca híbrida
 uv run code-index symbol HmacServiceImpl                    # onde está declarado (também Classe.metodo)
 uv run code-index grep "Saldo insuficiente" -p "**/*.java"  # texto exato via ripgrep (-E para regex)
+uv run code-index search "envio de e-mail" --kind doc       # só documentação (README, docs/, wiki)
 ```
 
 **Pipeline de busca.** Duas fontes, combinadas por RRF (Reciprocal Rank Fusion) **com pesos**:
@@ -140,6 +141,53 @@ cada arquivo: nome, tipo, classe envolvente, linha e assinatura.
 
 **Grep.** Roda o ripgrep nos clones locais, com os mesmos filtros de arquivo do índice. Respeita o
 `.gitignore`, ignora arquivos ocultos e binários, mascara segredos e tem limites de resultado e tempo.
+
+### Documentação externa (Wiki.js) ligada aos repos
+
+Páginas de uma wiki [Wiki.js](https://js.wiki) 2.x entram no índice como um repo `kind = "docs"`
+(`docs__<nome>`), lado a lado com o código. O acesso é pela API GraphQL (não precisa de storage git).
+O token precisa das permissões `read:pages` e `read:source`. O cadastro lê uma página publicada
+acessível para verificar ambas; uma wiki sem páginas acessíveis precisa de uma página publicada antes do cadastro.
+
+```bash
+# .env: WIKIJS_TOKEN=<API key com read:pages e read:source> (Administração → API Access)
+uv run code-index docs add wiki --url https://wiki.exemplo.com --locale pt-br \
+  --include 'Plataforma/**' --exclude 'Rascunhos/**' \
+  --link 'Plataforma/Email/**=snr-email-backend,snr-email-frontend'
+uv run code-index docs list
+uv run code-index sync --dry-run                 # mostra o que entraria (custo zero)
+uv run code-index index docs__wiki               # baixa as páginas e indexa
+uv run code-index docs links snr-email-backend   # páginas ligadas ao repo, e por quê
+uv run code-index docs remove wiki
+```
+
+- **Incremental:** a cada sync, só a lista de páginas é consultada. O conteúdo só é baixado para páginas
+  novas, com caminho alterado ou com `updatedAt` diferente, e as páginas removidas (ou que saíram dos filtros) são apagadas.
+  Cada página vira `.repos/docs__<nome>/<locale>/<caminho>.md`, com front-matter (título, URL, tags). Como
+  no código, só trechos novos vão à Voyage.
+- **Páginas não publicadas ou privadas** são ignoradas. HTML (editor visual) é convertido para Markdown.
+- **URL da página:** resultados de documentação externa trazem `url` (a página original), `title` e
+  `linked_repos`.
+
+**Vínculos página → repo.** São calculados na consulta, sem custo de API, então não ficam desatualizados.
+Valem para qualquer stack:
+
+| Origem | Como liga |
+|---|---|
+| `explicit` | regra `--link 'caminho_glob=repo_glob,...'` (o repo casa com ou sem a org) |
+| `tag` | tag da página igual a um **apelido** do repo |
+| `url` | link `github.com/<org>/<repo>` na página |
+| `mention` | termo do texto igual a um apelido **forte** do repo |
+
+Apelidos de um repo saem do nome (`org__repo`, `org/repo`, `repo` e `repo` sem prefixo curto como `snr-`) e
+dos manifestos: `package.json`, `pom.xml`, `pyproject.toml`, `setup.cfg`, `go.mod`, `Cargo.toml`,
+`settings.gradle(.kts)` e `catalog-info.yaml` (Backstage). Um apelido é **forte** quando é específico:
+8+ caracteres com `-`, `_`, `.`, `/` ou `@` (ex.: `email-backend`), ou 14+ caracteres. Nomes genéricos
+(`email`, `core`) só ligam por tag ou regra explícita.
+
+**Na busca:** filtrar por repo (`-r`, `repos`) traz também as páginas ligadas a ele. Use `--no-linked-docs`
+(`include_linked_docs=false`) para desligar. `--kind code|doc` (`kind`) restringe a código ou a documentação;
+README, `docs/` e outros Markdown/RST/AsciiDoc dos repos contam como `doc`.
 
 ## Servidor HTTP: API REST + MCP
 
@@ -232,7 +280,8 @@ claude mcp add --scope user --transport http code-index https://<host>/mcp \
   --header "Authorization: Bearer cix_..."
 ```
 
-Ferramentas, todas com `search:read`: `search_code` (por significado), `find_symbol` (onde algo é
+Ferramentas, todas com `search:read`: `search_code` (por significado; `kind` e `include_linked_docs` como
+na API), `find_symbol` (onde algo é
 declarado), `grep_code` (texto exato ou regex), `read_file_lines` e `list_repos`. O MCP não indexa:
 sync fica na API e na interface, que mostram a prévia e pedem confirmação.
 
@@ -260,13 +309,14 @@ src/code_index/
   domain/            puro, sem I/O: models, file_patterns (o que indexar), policies (lote, nomes)
   infra/             mundo externo: db (pool + migrations sql/NNN_*.sql), repo_store, chunk_store,
                      config_file (repos.toml), git, github, llm (LiteLLM: embed/rerank)
-  sources/           de onde vêm os repos (RepoSource): github_org; ponto de extensão p/ novas fontes
+  sources/           de onde vêm os repos (RepoSource): github_org, wikijs (docs via GraphQL)
   indexing/          content (máscara/skip), code_flow (app CocoIndex), orchestrator (sync em etapas)
   retrieval/         search (híbrida + rerank), files (leitura com máscara)
   services.py        casos de uso: ÚNICO ponto usado pelas interfaces
   interfaces/        cli.py e http/ (app FastAPI, mcp em /mcp, security): só parsing/formatação
   domain/auth.py     scopes e regras de emissão de token (puro)
   infra/auth_store   tokens (hash HMAC) e auditoria; infra/google_oidc: login Google
+  domain/doc_links   apelidos de repos (manifestos) e menções das páginas; infra/doc_link_store: vínculos
 ```
 
 Regras:

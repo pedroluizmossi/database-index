@@ -11,7 +11,7 @@ import logging
 from ..domain.models import Hit
 from ..infra import llm
 from ..domain.search_text import fusion_weights, query_kind, query_terms
-from ..infra.chunk_store import ChunkStore
+from ..infra.chunk_store import KINDS, ChunkStore
 from ..settings import Settings
 
 log = logging.getLogger(__name__)
@@ -36,14 +36,20 @@ class Searcher:
         mode: str = "hybrid",
         rerank: bool = True,
         candidates: int | None = None,
+        kind: str | None = None,
+        include_linked_docs: bool = True,
     ) -> list[Hit]:
-        """Busca trechos de código.
+        """Busca trechos de código e documentação.
 
         mode: 'hybrid' (padrão), 'semantic' ou 'keyword'.
+        kind: 'code', 'doc' ou None (ambos). include_linked_docs: com `repos`, inclui páginas de
+        documentação externa ligadas a eles.
         rerank: reordena `candidates` resultados com `rerank_model` e devolve os `top_k` melhores.
         """
         if mode not in _MODES:
             raise ValueError(f"mode inválido: {mode}")
+        if kind is not None and kind not in KINDS:
+            raise ValueError(f"kind inválido: {kind} (use code ou doc)")
         s = self._settings
         use_vec = mode in ("hybrid", "semantic")
         use_kw = mode in ("hybrid", "keyword")
@@ -66,6 +72,8 @@ class Searcher:
             repos=repos,
             language=language,
             path_glob=path_glob,
+            kind=kind,
+            include_linked_docs=include_linked_docs,
         )
         if use_rerank and len(hits) > 1:
             try:
@@ -75,7 +83,7 @@ class Searcher:
         return hits[:top_k]
 
     async def _rerank(self, query: str, hits: list[Hit], top_k: int) -> list[Hit]:
-        docs = [f"{h.repo}/{h.path}\n{h.code[:_RERANK_DOC_CHARS]}" for h in hits]
+        docs = [f"{h.repo}/{h.path}{f' — {h.title}' if h.title else ''}\n{h.code[:_RERANK_DOC_CHARS]}" for h in hits]
         ranked = await llm.rerank(self._settings, query, docs, top_k)
         out: list[Hit] = []
         for idx, score in ranked:

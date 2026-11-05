@@ -127,6 +127,15 @@ class SearchIn(BaseModel):
     path_glob: str | None = None
     mode: Literal["hybrid", "semantic", "keyword"] = "hybrid"
     rerank: bool = True
+    kind: Literal["code", "doc"] | None = None
+    include_linked_docs: bool = True
+
+
+class DocLinkIn(BaseModel):
+    doc_repo: str = Field(min_length=1, max_length=200)
+    doc_path: str = Field(min_length=1, max_length=1000)
+    repo: str = Field(min_length=1, max_length=200)
+    reason: str = Field("", max_length=500)
 
 
 class TokenIn(BaseModel):
@@ -273,7 +282,7 @@ def create_app(settings: Settings) -> FastAPI:
         svc = get_service(request)
         hits = await audited(request, principal, "search", body.model_dump(exclude={"rerank"}), svc.search(
             body.query, top_k=body.top_k, repos=body.repos, language=body.language, path_glob=body.path_glob,
-            mode=body.mode, rerank=body.rerank,
+            mode=body.mode, rerank=body.rerank, kind=body.kind, include_linked_docs=body.include_linked_docs,
         ))
         return [h.to_dict() for h in hits]
 
@@ -314,6 +323,49 @@ def create_app(settings: Settings) -> FastAPI:
                          name: str | None = None, _: Principal = Depends(require(SEARCH_READ))) -> list[dict[str, Any]]:
         rows = await get_service(request).list_repos(status=status_, org=org, name=name)
         return [r.to_dict() for r in rows]
+
+    @app.get("/api/v1/docs/{name}/preview", tags=["docs"],
+             summary="Prévia das páginas de uma fonte de documentação (sem custo)")
+    async def docs_preview(name: str, request: Request, limit: int = Query(200, ge=1, le=1000),
+                           _: Principal = Depends(require(SEARCH_READ))) -> dict[str, Any]:
+        return await get_service(request).docs_preview(name, limit=limit)
+
+    @app.get("/api/v1/docs/overview", tags=["docs"],
+             summary="Páginas de documentação indexadas, com os repos ligados a cada uma")
+    async def docs_overview(request: Request, limit: int = Query(500, ge=1, le=2000),
+                            _: Principal = Depends(require(SEARCH_READ))) -> list[dict[str, Any]]:
+        return await get_service(request).docs_overview(limit=limit)
+
+    @app.get("/api/v1/repos/{name}/skipped", tags=["repos"],
+             summary="Arquivos descartados na indexação de um repo, com o motivo")
+    async def repo_skipped(name: str, request: Request, limit: int = Query(200, ge=1, le=2000),
+                           _: Principal = Depends(require(SEARCH_READ))) -> list[dict[str, Any]]:
+        return await get_service(request).skipped_files(name, limit=limit)
+
+    @app.get("/api/v1/repos/{name}/docs", tags=["docs"], summary="Páginas de documentação ligadas a um repo")
+    async def repo_docs(name: str, request: Request, limit: int = Query(100, ge=1, le=500),
+                        _: Principal = Depends(require(SEARCH_READ))) -> list[dict[str, Any]]:
+        return await get_service(request).linked_docs(name, limit=limit)
+
+    @app.post("/api/v1/docs/links", tags=["docs"], status_code=201,
+              summary="Grava vínculo manual ou de agent entre uma página e um repo (admin)")
+    async def add_doc_link(body: DocLinkIn, request: Request,
+                           principal: Principal = Depends(require(ADMIN))) -> dict[str, Any]:
+        origin = "agent" if principal.kind == "agent" else "manual"
+        return await audited(request, principal, "docs:link", body.model_dump(), get_service(request).link_doc_key(
+            body.doc_repo, body.doc_path, body.repo, reason=body.reason, origin=origin,
+        ))
+
+    @app.delete("/api/v1/docs/links", tags=["docs"], summary="Remove um vínculo gravado (admin)")
+    async def remove_doc_link(request: Request, doc_repo: str = Query(..., max_length=200),
+                              doc_path: str = Query(..., max_length=1000), repo: str = Query(..., max_length=200),
+                              principal: Principal = Depends(require(ADMIN))) -> dict[str, bool]:
+        params = {"doc_repo": doc_repo, "doc_path": doc_path, "repo": repo}
+        removed = await audited(request, principal, "docs:unlink", params,
+                                get_service(request).unlink_doc_key(doc_repo, doc_path, repo))
+        if not removed:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "vínculo não encontrado")
+        return {"removed": True}
 
     @app.post("/api/v1/repos", tags=["repos"], status_code=201)
     async def add_repo(body: RepoIn, request: Request, principal: Principal = Depends(require(ADMIN))) -> dict[str, Any]:

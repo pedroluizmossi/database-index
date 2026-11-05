@@ -24,6 +24,8 @@ import numpy as np
 
 from code_index.domain.models import Hit
 from code_index.domain.search_text import STOPWORDS
+from code_index.infra.doc_link_store import DocLinkStore, links_sql
+from code_index.infra.skip_store import SkipStore
 from code_index.settings import Settings
 
 log = logging.getLogger(__name__)
@@ -79,10 +81,46 @@ class _Params:
         return f"${len(self.values)}"
 
 
-def _filters(p: _Params, repos: Sequence[str] | None, language: str | None, path_glob: str | None) -> str:
+KINDS = ("code", "doc")
+DOC_EXTENSIONS = (".md", ".mdx", ".rst", ".adoc", ".txt")
+
+
+def hit_kind(language: str, path: str) -> str:
+    """'doc' para Markdown/RST/AsciiDoc (README, docs/ de um repo, páginas de wiki); senão 'code'."""
+    return "doc" if language == "markdown" or path.lower().endswith(DOC_EXTENSIONS) else "code"
+
+
+def _doc_condition(p: _Params) -> str:
+    """Mesmo critério de `hit_kind`, em SQL."""
+    exts = p([f"%{e}" for e in DOC_EXTENSIONS])
+    return f"(language = 'markdown' OR lower(path) LIKE ANY({exts}))"
+
+
+def _filters(
+    p: _Params,
+    repos: Sequence[str] | None,
+    language: str | None,
+    path_glob: str | None,
+    *,
+    kind: str | None = None,
+    linked_docs_sql: str | None = None,
+) -> str:
+    """`linked_docs_sql`: subconsulta de vínculos; com ela, o filtro de repos também traz as páginas
+    de documentação ligadas a esses repos."""
     clauses = []
     if repos:
-        clauses.append(f"repo = ANY({p(list(repos))})")
+        r = p(list(repos))
+        if linked_docs_sql:
+            clauses.append(
+                f"(repo = ANY({r}) OR (repo, path) IN (SELECT l.doc_repo, l.doc_path FROM ({linked_docs_sql}) l"
+                f" WHERE l.repo = ANY({r})))"
+            )
+        else:
+            clauses.append(f"repo = ANY({r})")
+    if kind == "doc":
+        clauses.append(_doc_condition(p))
+    elif kind == "code":
+        clauses.append(f"NOT {_doc_condition(p)}")
     if language:
         clauses.append(f"language = {p(language)}")
     if path_glob:
@@ -95,6 +133,7 @@ class SearchCapabilities:
     table: bool            # a tabela de chunks existe (já houve um sync)
     search_columns: bool   # colunas search_symbols/search_terms existem (índice migrado)
     bm25: bool             # índice BM25 (pg_search) existe
+    links: bool = False    # tabelas de documentação (páginas, apelidos, menções) existem
 
     @property
     def keyword_engine(self) -> KeywordEngine:
@@ -112,6 +151,8 @@ class ChunkStore:
         self._table = settings.chunks_table_qualified
         self._caps: SearchCapabilities | None = None
         self._caps_at = 0.0
+        self._links = DocLinkStore(pool, settings)
+        self._skips = SkipStore(pool, settings)
 
     # ------------------------------------------------------------------ capacidades do banco
 
@@ -126,7 +167,8 @@ class ChunkStore:
                       EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = $2 AND indexname = $4) AS has_bm25""",
             self._table, s.pg_schema, s.chunks_table, BM25_INDEX,
         )
-        self._caps = SearchCapabilities(row["has_table"], row["has_cols"], row["has_bm25"])
+        self._caps = SearchCapabilities(row["has_table"], row["has_cols"], row["has_bm25"],
+                                        links=await self._links.available())
         self._caps_at = time.monotonic()
         return self._caps
 
@@ -162,12 +204,18 @@ class ChunkStore:
         repos: Sequence[str] | None = None,
         language: str | None = None,
         path_glob: str | None = None,
+        kind: str | None = None,
+        include_linked_docs: bool = True,
     ) -> list[Hit]:
         """Fusão RRF ponderada: score = Σ peso_fonte / (60 + posição na fonte).
 
         `terms` já vêm tokenizados (domain.search_text.query_terms). `per_source` é quantos
         candidatos cada fonte traz; `limit` é quantos sobram após a fusão. Sem fontes → [].
+        `kind`: 'code' | 'doc' | None. `include_linked_docs`: com `repos`, traz também as páginas
+        de documentação externa ligadas a eles.
         """
+        if kind is not None and kind not in KINDS:
+            raise ValueError(f"kind inválido: {kind} (use code ou doc)")
         caps = await self.capabilities()
         engine = caps.keyword_engine
         use_kw = bool(terms) and kw_weight > 0 and engine != "none"
@@ -177,7 +225,8 @@ class ChunkStore:
 
         p = _Params()
         k = p(per_source)
-        where = _filters(p, repos, language, path_glob)
+        linked = links_sql(self._settings) if (repos and include_linked_docs and caps.links) else None
+        where = _filters(p, repos, language, path_glob, kind=kind, linked_docs_sql=linked)
         t = self._table
         parts: list[str] = []
         weights: list[float] = []
@@ -222,14 +271,44 @@ class ChunkStore:
 
         # Normalizado pelo máximo possível (1º lugar em todas as fontes usadas).
         max_score = sum(weights) / (_RRF_K + 1)
-        return [
+        hits = [
             Hit(
                 repo=r["repo"], path=r["path"], language=r["language"],
                 start_line=r["start_line"], end_line=r["end_line"],
                 score=round(float(r["score"]) / max_score, 4), code=r["code"],
+                kind=hit_kind(r["language"], r["path"]),
             )
             for r in rows
         ]
+        if caps.links:
+            await self._annotate_docs(hits)
+        return hits
+
+    @property
+    def links(self) -> DocLinkStore:
+        return self._links
+
+    @property
+    def skips(self) -> SkipStore:
+        return self._skips
+
+    async def linked_docs(self, repo: str, *, limit: int = 100) -> list[dict]:
+        """Páginas de documentação ligadas a um repo (ver infra/doc_link_store)."""
+        return await self._links.docs_for_repo(repo, limit=limit)
+
+    async def _annotate_docs(self, hits: list[Hit]) -> None:
+        """Páginas de documentação externa: URL original, título e repos ligados."""
+        docs = [(h.repo, h.path) for h in hits if h.kind == "doc"]
+        try:
+            info = await self._links.annotate(docs)
+        except (asyncpg.UndefinedTableError, asyncpg.UndefinedColumnError):
+            self._caps = None
+            return
+        for h in hits:
+            entry = info.get((h.repo, h.path))
+            if entry:
+                h.url, h.title = entry["url"], entry["title"]
+                h.linked_repos = sorted(entry["linked"])
 
     def _keyword_sql(self, engine: KeywordEngine, p: _Params, terms: Sequence[str], where: str, k: str) -> str | None:
         t = self._table

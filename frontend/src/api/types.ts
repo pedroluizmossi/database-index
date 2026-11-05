@@ -25,6 +25,21 @@ export interface Repo {
   error: string | null;
   /** Tamanho do repositório no GitHub, em KB (inclui o histórico do git). */
   size_kb: number | null;
+  /** "code" (repo git) ou "docs" (wiki). */
+  kind: string;
+  /** Arquivos descartados na indexação (acima do limite de tamanho, binários...). */
+  skipped: number;
+}
+
+export interface DocsPreview {
+  name: string;
+  url: string;
+  locale: string;
+  total: number;
+  pages_in_locale: number;
+  roots: { root: string; pages: number }[];
+  pages: { path: string; title: string; url: string; tags: string[]; updated_at: string }[];
+  truncated: boolean;
 }
 
 export interface OrgSummary {
@@ -44,7 +59,16 @@ export interface Hit {
   end_line: number;
   score: number;
   code: string;
+  /** "doc" para Markdown/RST e páginas de wiki; "code" para o resto. */
+  kind: HitKind;
+  /** Página original (documentação externa). */
+  url: string | null;
+  title: string | null;
+  /** Repos ligados à página de documentação. */
+  linked_repos: string[];
 }
+
+export type HitKind = "code" | "doc";
 
 export interface SearchRequest {
   query: string;
@@ -54,6 +78,8 @@ export interface SearchRequest {
   repos: string[] | null;
   language: string | null;
   path_glob: string | null;
+  kind: HitKind | null;
+  include_linked_docs: boolean;
 }
 
 export type Scope = "search:read" | "index:write" | "admin";
@@ -138,4 +164,35 @@ export interface AuditEntry {
   params: Record<string, unknown> | null;
   status: number | null;
   client_ip: string | null;
+}
+
+/** Origem de um vínculo: automática (explicit, tag, url, mention) ou gravada (manual, agent). */
+export type OriginKind = "manual" | "agent" | "explicit" | "tag" | "url" | "mention";
+
+export interface DocLink {
+  repo: string;
+  origins: OriginKind[];
+  reason: string | null;
+  /** Vínculo gravado (manual/agent): pode ser removido pela tela. */
+  removable: boolean;
+}
+
+/** Página indexada da documentação, com os repos ligados (GET /api/v1/docs/overview). */
+export interface DocPageRow {
+  doc_repo: string;
+  doc_path: string;
+  page: string;
+  root: string;
+  title: string | null;
+  url: string | null;
+  links: DocLink[];
+}
+
+/** Página ligada a um repo (GET /api/v1/repos/{name}/docs). */
+export interface RepoDocLink {
+  doc_repo: string;
+  path: string;
+  url: string | null;
+  title: string | null;
+  origins: OriginKind[];
 }

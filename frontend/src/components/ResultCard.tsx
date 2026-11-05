@@ -32,7 +32,7 @@ export function ResultCard({ hit, maxScore, onOpen, onOpenImpl }: ResultCardProp
   }
 
   return (
-    <article className="animate-fade-up overflow-hidden rounded-2xl border border-zinc-200/80 bg-white shadow-sm transition hover:border-indigo-300/70 hover:shadow-lg hover:shadow-indigo-500/5 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-indigo-500/30">
+    <article className="animate-fade-up overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-[0_1px_2px_0_rgb(24_24_27/0.04)] transition-colors hover:border-zinc-300 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-zinc-700">
       <header className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 pt-4 pb-3">
         <Badge tone="accent" className="max-w-full">
           <span className="truncate">{hit.repo}</span>
@@ -41,7 +41,7 @@ export function ResultCard({ hit, maxScore, onOpen, onOpenImpl }: ResultCardProp
           type="button"
           onClick={onOpen}
           title={hit.path}
-          className="min-w-0 truncate font-mono text-[13px] text-zinc-700 underline-offset-4 hover:text-indigo-600 hover:underline dark:text-zinc-300 dark:hover:text-indigo-400"
+          className="min-w-0 truncate font-mono text-[13px] text-zinc-700 underline-offset-4 hover:text-accent-600 hover:underline dark:text-zinc-300 dark:hover:text-accent-400"
         >
           {hit.path}
         </button>
@@ -68,7 +68,7 @@ export function ResultCard({ hit, maxScore, onOpen, onOpenImpl }: ResultCardProp
               href={hit.url}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex min-w-0 items-center gap-1 font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+              className="inline-flex min-w-0 items-center gap-1 font-medium text-accent-600 hover:underline dark:text-accent-400"
             >
               <span className="truncate">{hit.title || hit.url}</span>
               <ExternalLink className="size-3 shrink-0" aria-hidden="true" />
@@ -99,7 +99,7 @@ export function ResultCard({ hit, maxScore, onOpen, onOpenImpl }: ResultCardProp
         </div>
       )}
 
-      <div className="overflow-x-auto border-y border-zinc-100 bg-zinc-50/70 py-2 dark:border-zinc-800 dark:bg-zinc-950/50">
+      <div className="overflow-x-auto border-y border-zinc-100 bg-zinc-50 py-2 dark:border-zinc-800 dark:bg-zinc-950/50">
         <CodeLines lines={lines} collapsedAfter={8} />
       </div>
 
@@ -121,7 +121,7 @@ function ScoreMeter({ percent, score }: { percent: number; score: number }) {
     <span className="flex items-center gap-2" title="Relevância: quanto maior, mais próximo da busca">
       <span className="h-1.5 w-16 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
         <span
-          className="block h-full rounded-full bg-linear-to-r from-indigo-500 to-violet-500"
+          className="block h-full rounded-full bg-accent-600"
           style={{ width: `${percent}%` }}
         />
       </span>

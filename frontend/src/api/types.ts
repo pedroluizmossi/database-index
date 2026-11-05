@@ -191,6 +191,34 @@ export interface OrgDiscovery {
   total: number;
 }
 
+export type SyncPhase = "discover" | "select" | "fetch" | "index" | "finish";
+export type RepoProgressStatus = "queued" | "fetching" | "indexing" | "done" | "error" | "skipped";
+
+export interface RepoProgress {
+  name: string;
+  status: RepoProgressStatus;
+  /** Arquivos que entram na indexação (contagem prévia); null se não deu para contar. */
+  files_total: number | null;
+  files_done: number;
+  /** Arquivos sem mudança (memoizados, não reprocessados). */
+  files_unchanged: number;
+  errors: number;
+  error: string | null;
+  seconds: number | null;
+}
+
+/** Retrato do andamento de um job, gravado pelo servidor enquanto ele roda. */
+export interface SyncProgress {
+  phase: SyncPhase;
+  phase_label: string;
+  repos_total: number;
+  repos_done: number;
+  files_total: number;
+  files_done: number;
+  seconds: number;
+  repos: RepoProgress[];
+}
+
 export interface SyncJob {
   id: string;
   requested_by: string;
@@ -200,6 +228,7 @@ export interface SyncJob {
   finished_at: string | null;
   result: SyncResult | null;
   error: string | null;
+  progress?: SyncProgress | null;
 }
 
 export interface SyncStart {

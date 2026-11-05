@@ -71,7 +71,7 @@ function ToastCard({ item, onClose }: { item: ToastItem; onClose: () => void }) 
     <div
       role={item.tone === "error" ? "alert" : "status"}
       className={cx(
-        "pointer-events-auto flex w-full max-w-sm animate-pop items-start gap-3 rounded-xl border bg-white/95 p-3.5 shadow-xl shadow-zinc-900/10 backdrop-blur dark:bg-zinc-900/95",
+        "pointer-events-auto flex w-full max-w-sm animate-pop items-start gap-3 rounded-lg border bg-white p-3.5 shadow-[0_8px_24px_-8px_rgb(0_0_0/0.2)] dark:bg-zinc-900",
         TONE_STYLES[item.tone],
       )}
     >

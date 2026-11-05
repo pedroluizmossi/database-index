@@ -18,7 +18,8 @@ import contextlib
 import fcntl
 import logging
 import time
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
+from typing import Any
 
 import cocoindex as coco
 
@@ -38,8 +39,14 @@ from ..settings import Settings
 from ..sources.github_org import GitHubOrgSource
 from ..sources.registry import doc_plugin
 from ..sources.base import OWNER_MARKER, is_docs_folder
+from . import progress as progress_mod
+from .progress import SyncProgress
 
 log = logging.getLogger(__name__)
+
+ProgressSink = Callable[[dict[str, Any]], Awaitable[None]]
+# De quanto em quanto tempo o progresso do pipeline é lido e publicado (o job é gravado no banco).
+PROGRESS_INTERVAL_S = 2.0
 
 
 class Indexer:
@@ -78,6 +85,7 @@ class Indexer:
         dry_run: bool = False,
         allow_register: bool = True,
         doc_pages: frozenset[str] | None = None,
+        on_progress: ProgressSink | None = None,
     ) -> SyncResult:
         """Sincroniza e indexa.
 
@@ -88,13 +96,20 @@ class Indexer:
         allow_register: aceita nomes desconhecidos (URL, 'org/repo', diretório) registrando-os
                como repo avulso. Desligado para chamadas remotas sem scope admin.
         doc_pages: só para fontes de documentação: sincroniza apenas estas páginas (caminho sem idioma).
+        on_progress: recebe retratos do andamento (etapa, e por repo: arquivos e trechos processados).
+            Falhas ao publicar não interrompem o sync.
         """
         res = SyncResult()
+        tracker = SyncProgress()
+        publish = _publisher(tracker, on_progress)
         with self._lock():
             orgs = self._config.load_orgs()
             if do_discover and orgs:
+                await publish()
                 await self._discover_all(orgs, res)
 
+            tracker.set_phase("select")
+            await publish()
             rows = await self._load_rows(orgs)
             selected, remaining, rows = await self._select(names, rows, batch, orgs, allow_register)
             res.selected = selected
@@ -102,15 +117,27 @@ class Indexer:
             if dry_run:
                 return res
 
+            tracker.select(selected)
+            tracker.set_phase("fetch")
+            await publish()
             manual = configured_repos(self._config)
             revisions = await self._fetch(
-                selected, rows, orgs, manual, forced=bool(names), pull=pull, res=res, doc_pages=doc_pages
+                selected, rows, orgs, manual, forced=bool(names), pull=pull, res=res, doc_pages=doc_pages,
+                tracker=tracker, publish=publish,
             )
             plan = self._plan(rows, revisions, orgs, manual)
             if not selected:
                 log.info("nenhum repo para sincronizar; aplicando apenas remoções pendentes")
-            pipeline_error = await self._run_pipeline(plan, progress=progress, full=full)
+            await self._count_files(plan, revisions, tracker)
+            tracker.set_phase("index")
+            await publish()
+            pipeline_error = await self._run_pipeline(plan, progress=progress, full=full, tracker=tracker, publish=publish)
+            tracker.set_phase("finish")
+            await publish()
             await self._record(rows, revisions, res, pipeline_error)
+            for name, msg in res.errors.items():
+                tracker.update(name, status="error", error=msg.splitlines()[0][:300] if msg else msg)
+            await publish()
         return res
 
     # --- etapas -------------------------------------------------------------------
@@ -212,10 +239,15 @@ class Indexer:
         pull: bool,
         res: SyncResult,
         doc_pages: frozenset[str] | None = None,
+        tracker: SyncProgress | None = None,
+        publish: Callable[[], Awaitable[None]] | None = None,
     ) -> dict[str, tuple[str | None, str]]:
         """Git sync dos selecionados. Devolve {nome: (commit, revisão)} dos que deram certo."""
         revisions: dict[str, tuple[str | None, str]] = {}
         for name in selected:
+            if tracker is not None and publish is not None:
+                tracker.update(name, status="fetching")
+                await publish()
             row = rows[name]
             repo = self._to_repo(row, orgs, manual)
             try:
@@ -232,10 +264,30 @@ class Indexer:
                 if forced or repo.path is not None:
                     revision += f"#{time.time_ns()}"  # força revarrer o repo (arquivos seguem memoizados)
                 revisions[name] = (commit, revision)
+                if tracker is not None:
+                    tracker.update(name, status="queued")
             except Exception as e:  # noqa: BLE001
                 log.error("git sync falhou para %s: %s", name, e)
                 res.errors[name] = str(e)
+                if tracker is not None:
+                    tracker.update(name, status="error", error=str(e).splitlines()[0][:300] if str(e) else None)
         return revisions
+
+    async def _count_files(
+        self, plan: list[tuple[Repo, str]], revisions: dict[str, tuple[str | None, str]], tracker: SyncProgress
+    ) -> None:
+        """Total de arquivos de cada repo que vai ser indexado (para mostrar "5 de 25")."""
+        from .code_flow import count_repo_files
+
+        for repo, _revision in plan:
+            if repo.name not in revisions:
+                continue
+            try:
+                total = await count_repo_files(repo)
+            except Exception as e:  # noqa: BLE001 - sem total, o progresso só mostra o que já foi feito
+                log.warning("não consegui contar os arquivos de %s: %s", repo.name, e)
+                total = None
+            tracker.update(repo.name, status="indexing", files_total=total)
 
     async def _fetch_docs(self, repo: Repo, row: RepoState, pull: bool, *, only: frozenset[str] | None = None) -> str:
         """Baixa só as páginas novas/alteradas da fonte de documentação. Revisão = hash do manifesto."""
@@ -274,26 +326,46 @@ class Indexer:
         return plan
 
     async def _run_pipeline(
-        self, plan: list[tuple[Repo, str]], *, progress: bool, full: bool
+        self,
+        plan: list[tuple[Repo, str]],
+        *,
+        progress: bool,
+        full: bool,
+        tracker: SyncProgress | None = None,
+        publish: Callable[[], Awaitable[None]] | None = None,
     ) -> str | None:
-        """Roda o pipeline CocoIndex. Devolve a mensagem de erro, ou None se deu certo."""
+        """Roda o pipeline CocoIndex. Devolve a mensagem de erro, ou None se deu certo.
+
+        Enquanto roda (numa thread), lê os contadores por repo e publica o progresso a cada
+        PROGRESS_INTERVAL_S segundos.
+        """
         # import tardio: só carrega o CocoIndex quando indexar
         from .code_flow import build_app
 
         error: str | None = None
+        progress_mod.set_active(tracker)
         try:
-            await asyncio.to_thread(
+            run = asyncio.ensure_future(asyncio.to_thread(
                 build_app(plan).update_blocking,
                 report_to_stdout=progress,
                 full_reprocess=full,
-            )
+            ))
+            while not run.done():
+                await asyncio.wait({run}, timeout=PROGRESS_INTERVAL_S)
+                if tracker is not None and publish is not None:
+                    tracker.refresh()
+                    await publish()
+            run.result()
         except Exception as e:
             log.exception("pipeline falhou")
             error = f"pipeline: {e}"
         finally:
+            progress_mod.set_active(None)
             # Finaliza o lifespan (fecha pool do Postgres e sessões HTTP do LiteLLM);
             # o ambiente é recriado sob demanda no próximo sync (watch/MCP).
             await asyncio.to_thread(coco.stop_blocking)
+        if tracker is not None:
+            tracker.finish_indexing(error)
         return error
 
     async def _record(
@@ -321,6 +393,20 @@ class Indexer:
     @staticmethod
     def _to_repo(row: RepoState, orgs: list[Org], manual: dict[str, Repo]) -> Repo:
         return repo_for_row(row, orgs, manual)
+
+
+def _publisher(tracker: SyncProgress, sink: ProgressSink | None) -> Callable[[], Awaitable[None]]:
+    """Publica o retrato atual; erro ao publicar vira aviso no log, nunca falha do sync."""
+
+    async def publish() -> None:
+        if sink is None:
+            return
+        try:
+            await sink(tracker.snapshot())
+        except Exception as e:  # noqa: BLE001
+            log.warning("não consegui publicar o progresso do sync: %s", e)
+
+    return publish
 
 
 def configured_repos(config: ConfigFile) -> dict[str, Repo]:

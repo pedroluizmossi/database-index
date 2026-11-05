@@ -68,7 +68,7 @@ export function AuditPage() {
       <Panel className="overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full min-w-[860px] text-sm">
-            <thead className="bg-zinc-50/80 text-left text-xs tracking-wide text-zinc-500 uppercase dark:bg-zinc-900 dark:text-zinc-400">
+            <thead className="border-b border-zinc-200 bg-zinc-50 text-left text-xs text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-400">
               <tr>
                 <th className="px-4 py-3 font-medium">Quando</th>
                 <th className="px-4 py-3 font-medium">Quem</th>
@@ -94,7 +94,7 @@ export function AuditPage() {
                 </tr>
               )}
               {entries?.map((e) => (
-                <tr key={e.id} className="align-top hover:bg-zinc-50/80 dark:hover:bg-white/[0.02]">
+                <tr key={e.id} className="align-top transition-colors hover:bg-zinc-50 dark:hover:bg-white/[0.02]">
                   <td className="px-4 py-3 whitespace-nowrap" title={formatDateTime(e.at)}>
                     {timeAgo(e.at)}
                   </td>

@@ -2,7 +2,7 @@ import { useState, type FormEvent } from "react";
 import { ChevronDown, Eye, EyeOff, KeyRound, SearchCode } from "lucide-react";
 import { describeError } from "../api/client";
 import { useAuth } from "../auth/AuthProvider";
-import { Backdrop, Alert, Button, Panel } from "../components/ui";
+import { Alert, Button, Panel } from "../components/ui";
 
 export function LoginPage() {
   const { signInWithGoogle, signInWithToken, notice } = useAuth();
@@ -31,10 +31,9 @@ export function LoginPage() {
 
   return (
     <div className="relative flex min-h-dvh items-center justify-center px-4 py-12">
-      <Backdrop />
       <div className="w-full max-w-md animate-fade-up">
         <div className="mb-8 flex flex-col items-center text-center">
-          <div className="mb-5 flex size-14 items-center justify-center rounded-2xl bg-linear-to-br from-indigo-500 to-violet-600 text-white shadow-xl shadow-indigo-500/30">
+          <div className="mb-5 flex size-14 items-center justify-center rounded-2xl bg-accent-600 text-white">
             <SearchCode className="size-7" aria-hidden="true" />
           </div>
           <h1 className="text-2xl font-semibold tracking-tight">Entrar no code-index</h1>
@@ -74,7 +73,7 @@ export function LoginPage() {
                     autoComplete="off"
                     spellCheck={false}
                     placeholder="cix_…"
-                    className="h-11 w-full rounded-xl border border-zinc-200 bg-white pr-11 pl-4 font-mono text-sm text-zinc-900 shadow-sm outline-none transition placeholder:text-zinc-400 hover:border-zinc-300 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/15 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:border-zinc-600"
+                    className="h-11 w-full rounded-xl border border-zinc-200 bg-white pr-11 pl-4 font-mono text-sm text-zinc-900 shadow-sm outline-none transition placeholder:text-zinc-400 hover:border-zinc-300 focus:border-accent-500 focus:ring-4 focus:ring-accent-500/15 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:border-zinc-600"
                   />
                   <button
                     type="button"
@@ -95,7 +94,7 @@ export function LoginPage() {
                   type="checkbox"
                   checked={remember}
                   onChange={(e) => setRemember(e.target.checked)}
-                  className="size-4 cursor-pointer accent-indigo-600"
+                  className="size-4 cursor-pointer accent-accent-600"
                 />
                 Lembrar neste navegador
               </label>

@@ -501,6 +501,30 @@ Regras:
   pelo texto: só textos novos vão para a Voyage. Mantenha estáveis o nome do app, as ContextKeys, o
   subpath `("repo", nome)` e o schema da tabela.
 
+### Embeddings locais (voyage-4-nano)
+
+O modelo aberto da Voyage roda nesta máquina, num servidor com a mesma forma da API de embeddings da
+Voyage. O rerank continua na API (`RERANK_MODEL`).
+
+```bash
+uv sync --extra local-embed      # torch (CPU) + sentence-transformers
+uv run code-index embed-serve    # 127.0.0.1:8766; baixa o modelo na primeira vez (~700 MB)
+```
+
+```bash
+# .env
+EMBED_MODEL=voyage/voyage-4-nano
+EMBED_DIMENSIONS=1024            # 256, 512, 1024 ou 2048
+EMBED_API_BASE=http://127.0.0.1:8766/v1
+# EMBED_API_KEY=local            # chave do servidor local (a da Voyage nunca é enviada a ele)
+```
+
+- A revisão do modelo é fixa (`LOCAL_EMBED_REVISION`): ele usa `trust_remote_code`, então trocar a revisão
+  exige revisar de novo o código remoto.
+- Em CPU (12 núcleos), a consulta leva ~0,06 s, mas a indexação faz ~0,4 trecho/s. Comece por poucos repos.
+- O servidor precisa estar no ar para indexar **e** para buscar.
+- Trocar de modelo (ida ou volta) reprocessa todo o índice.
+
 ## Desenvolvimento
 
 ```bash

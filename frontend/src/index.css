@@ -7,6 +7,28 @@
   --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
+  /* Acento único (cobalto): ação, seleção, foco e links. Nada decorativo. */
+  --color-accent-50: oklch(0.97 0.014 262);
+  --color-accent-100: oklch(0.94 0.03 262);
+  --color-accent-200: oklch(0.88 0.06 262);
+  --color-accent-300: oklch(0.8 0.1 262);
+  --color-accent-400: oklch(0.71 0.15 262);
+  --color-accent-500: oklch(0.61 0.19 262);
+  --color-accent-600: oklch(0.53 0.2 262);
+  --color-accent-700: oklch(0.46 0.18 262);
+  --color-accent-800: oklch(0.39 0.14 262);
+  --color-accent-900: oklch(0.31 0.1 262);
+  --color-accent-950: oklch(0.23 0.07 262);
+
+  /* Tinta: a barra do topo e as superfícies escuras de comando (mesmo matiz do acento). */
+  --color-ink-100: oklch(0.93 0.012 262);
+  --color-ink-300: oklch(0.79 0.025 262);
+  --color-ink-400: oklch(0.68 0.03 262);
+  --color-ink-700: oklch(0.36 0.035 262);
+  --color-ink-800: oklch(0.28 0.035 262);
+  --color-ink-900: oklch(0.23 0.032 262);
+  --color-ink-950: oklch(0.19 0.03 262);
+
   --animate-fade-up: fade-up 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
   --animate-pop: pop 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
   --animate-slide-in: slide-in 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
@@ -58,6 +80,9 @@
 @layer base {
   html {
     color-scheme: light;
+    /* Reserva o espaço da barra de rolagem: sem isso, o conteúdo centralizado (e o menu)
+       pula para o lado ao trocar entre páginas curtas e longas. */
+    scrollbar-gutter: stable;
   }
   html.dark {
     color-scheme: dark;
@@ -66,7 +91,17 @@
     @apply min-h-dvh bg-zinc-50 text-zinc-900 antialiased dark:bg-zinc-950 dark:text-zinc-100;
   }
   ::selection {
-    background: color-mix(in oklab, var(--color-indigo-500) 30%, transparent);
+    background: color-mix(in oklab, var(--color-accent-500) 28%, transparent);
+  }
+  input,
+  textarea {
+    caret-color: var(--color-accent-600);
+  }
+  * {
+    scrollbar-color: var(--color-zinc-300) transparent;
+  }
+  html.dark * {
+    scrollbar-color: var(--color-zinc-700) transparent;
   }
 }
 

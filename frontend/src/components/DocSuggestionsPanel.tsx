@@ -50,7 +50,7 @@ export function DocSuggestionsPanel({ admin, onChanged }: { admin: boolean; onCh
     <Panel className="p-4">
       <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="flex items-center gap-2 font-semibold">
-          <Sparkles className="size-4 text-indigo-500" aria-hidden="true" />
+          <Sparkles className="size-4 text-accent-500" aria-hidden="true" />
           Sugestões de vínculo ({items.length})
         </h2>
         <p className="text-xs text-zinc-500 dark:text-zinc-400">
@@ -65,7 +65,7 @@ export function DocSuggestionsPanel({ admin, onChanged }: { admin: boolean; onCh
               <div className="min-w-0 flex-1 space-y-1 text-sm">
                 <div className="flex flex-wrap items-center gap-2">
                   {s.url ? (
-                    <a href={s.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 font-medium text-indigo-600 hover:underline dark:text-indigo-400">
+                    <a href={s.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 font-medium text-accent-600 hover:underline dark:text-accent-400">
                       {s.title ?? s.doc_path}
                       <ExternalLink className="size-3" aria-hidden="true" />
                     </a>

@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 from ..domain.auth import ADMIN, Principal
 from ..domain.models import SyncResult
+from ..indexing.orchestrator import ProgressSink
 from ..infra.job_store import JobRecord
 from .enrich import EnrichMixin
 from .apis import ApisMixin
@@ -32,6 +33,7 @@ class SyncMixin(ApisMixin, EnrichMixin):
         dry_run: bool = False,
         allow_register: bool = True,
         doc_pages: frozenset[str] | None = None,
+        on_progress: ProgressSink | None = None,
     ) -> SyncResult:
         """Indexa os nomes informados, ou um lote automático.
 
@@ -49,6 +51,7 @@ class SyncMixin(ApisMixin, EnrichMixin):
             dry_run=dry_run,
             allow_register=allow_register,
             doc_pages=doc_pages,
+            on_progress=on_progress,
         )
         if not dry_run:
             await self._ensure_search_indexes()
@@ -108,11 +111,22 @@ class SyncMixin(ApisMixin, EnrichMixin):
         doc_pages: frozenset[str] | None = None,
     ) -> None:
         status, result, error = "failed", None, None
+        last: list[dict[str, Any]] = []
+
+        async def save_progress(snapshot: dict[str, Any]) -> None:
+            # Só grava quando algo mudou além do relógio (evita escrever no banco a cada leitura).
+            key = {k: v for k, v in snapshot.items() if k != "seconds"}
+            key["repos"] = [{k: v for k, v in r.items() if k != "seconds"} for r in snapshot["repos"]]
+            if last and last[0] == key:
+                return
+            last[:] = [key]
+            await self._jobs.update_progress(job_id, snapshot)
+
         try:
             res = await self.sync(
                 names, batch=batch, do_discover=do_discover, pull=pull, progress=False,
                 allow_register=principal is None or principal.has(ADMIN),
-                doc_pages=doc_pages,
+                doc_pages=doc_pages, on_progress=save_progress,
             )
             status, result = "done", res.to_dict()
             if res.selected and not res.indexed and res.errors:

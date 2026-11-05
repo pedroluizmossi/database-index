@@ -105,9 +105,9 @@ export function SearchPage() {
 
         <form
           onSubmit={runSearch}
-          className="group mx-auto mt-8 flex items-center gap-2 rounded-2xl border border-zinc-200 bg-white p-2 shadow-xl shadow-zinc-900/5 transition focus-within:border-indigo-500 focus-within:ring-4 focus-within:ring-indigo-500/15 dark:border-zinc-800 dark:bg-zinc-900"
+          className="group mx-auto mt-8 flex items-center gap-2 rounded-xl border border-zinc-300 bg-white p-2 shadow-[0_2px_8px_-2px_rgb(24_24_27/0.08)] transition focus-within:border-accent-500 focus-within:ring-4 focus-within:ring-accent-500/15 dark:border-zinc-800 dark:bg-zinc-900"
         >
-          <Search className="ml-3 size-5 shrink-0 text-zinc-400 transition group-focus-within:text-indigo-500" aria-hidden="true" />
+          <Search className="ml-3 size-5 shrink-0 text-zinc-400 transition group-focus-within:text-accent-500" aria-hidden="true" />
           <input
             ref={inputRef}
             type="search"
@@ -178,7 +178,7 @@ export function SearchPage() {
             </Field>
           </div>
 
-          <div className="flex items-center justify-between gap-4 border-t border-zinc-200/80 pt-4 dark:border-zinc-800">
+          <div className="flex items-center justify-between gap-4 border-t border-zinc-200 pt-4 dark:border-zinc-800">
             <div>
               <p className="text-sm font-medium">Reordenar com rerank</p>
               <p className="text-xs text-zinc-500 dark:text-zinc-400">
@@ -266,7 +266,7 @@ function RepoMatches({ matches, onFilter }: { matches: RepoMatch[]; onFilter: (r
   const [card, setCard] = useState<string | null>(null);
   return (
     <Panel className="mb-4 p-4">
-      <p className="mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase dark:text-zinc-400">
+      <p className="mb-2 text-sm font-semibold text-zinc-700 dark:text-zinc-200">
         Repos que tratam do assunto
       </p>
       <ul className="space-y-2.5">
@@ -277,10 +277,10 @@ function RepoMatches({ matches, onFilter }: { matches: RepoMatch[]; onFilter: (r
                 {m.repo.split("__").pop()}
               </span>
               {m.kind && <Badge>{m.kind}</Badge>}
-              <button type="button" onClick={() => onFilter(m.repo)} className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400">
+              <button type="button" onClick={() => onFilter(m.repo)} className="text-xs font-medium text-accent-600 hover:underline dark:text-accent-400">
                 Filtrar a busca
               </button>
-              <button type="button" onClick={() => setCard(m.repo)} className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400">
+              <button type="button" onClick={() => setCard(m.repo)} className="text-xs font-medium text-accent-600 hover:underline dark:text-accent-400">
                 Cartão
               </button>
             </div>

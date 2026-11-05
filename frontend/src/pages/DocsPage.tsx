@@ -82,11 +82,11 @@ export function DocsPage({ onXray }: { onXray: (target: XrayTarget) => void }) {
   }
 
   return (
-    <section className="mx-auto max-w-6xl space-y-6 px-4 py-8 sm:px-6">
+    <section className="space-y-8">
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Documentação</h1>
-          <p className="text-sm text-zinc-500 dark:text-zinc-400">Páginas indexadas e os repos ligados a cada uma.</p>
+          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">Páginas indexadas e os repos ligados a cada uma.</p>
         </div>
         {rows && (
           <p className="text-sm text-zinc-500 tabular-nums dark:text-zinc-400">
@@ -128,7 +128,7 @@ export function DocsPage({ onXray }: { onXray: (target: XrayTarget) => void }) {
       {rows === null && !error && (
         <div className="space-y-3">
           {[0, 1, 2].map((i) => (
-            <Skeleton key={i} className="h-24 w-full rounded-2xl" />
+            <Skeleton key={i} className="h-24 w-full rounded-xl" />
           ))}
         </div>
       )}
@@ -148,7 +148,7 @@ export function DocsPage({ onXray }: { onXray: (target: XrayTarget) => void }) {
         {visible.map((row) => (
           <li
             key={`${row.doc_repo}|${row.doc_path}`}
-            className="space-y-3 rounded-2xl border border-zinc-200/80 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900"
+            className="space-y-3 rounded-xl border border-zinc-200 bg-white p-4 shadow-[0_1px_2px_0_rgb(24_24_27/0.04)] dark:border-zinc-800 dark:bg-zinc-900"
           >
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
@@ -157,7 +157,7 @@ export function DocsPage({ onXray }: { onXray: (target: XrayTarget) => void }) {
                     href={row.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                    className="inline-flex items-center gap-1 font-medium text-accent-600 hover:underline dark:text-accent-400"
                   >
                     <span className="truncate">{row.title ?? row.page}</span>
                     <ExternalLink className="size-3.5 shrink-0" aria-hidden="true" />

@@ -27,6 +27,22 @@ uv sync
 cp repos.example.toml repos.toml   # opcional: ou use `code-index repo add` / `org add`
 ```
 
+### Servidor no Docker (opcional)
+
+O serviço `app` do compose (perfil `app`) roda `code-index serve` em `127.0.0.1:8765`, com a interface web
+já construída. Ele lê os segredos do `.env` e usa o banco do serviço `postgres` (o `POSTGRES_URL` do `.env`
+é ignorado).
+
+```bash
+docker compose --profile app up -d --build      # banco + servidor
+docker compose --profile app exec app code-index token list   # CLI dentro do container
+```
+
+A pasta do projeto é montada no container **no mesmo caminho do host**: `.repos/`, `.cocoindex/` e
+`repos.toml` são os mesmos do `uv run`, sem reprocessar nada. Rode o compose da raiz do projeto. Não há `gh`
+na imagem: para repos privados, defina `GITHUB_TOKEN` no `.env`. Não rode `serve` no host ao mesmo tempo
+(mesma porta).
+
 ## Uso
 
 ### Repos avulsos e indexação manual por nome

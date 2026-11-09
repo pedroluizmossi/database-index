@@ -17,5 +17,34 @@ services:
       interval: 5s
       retries: 10
 
+  # API + MCP + interface web. Opcional (perfil `app`): `docker compose up -d` continua subindo só o banco.
+  #   docker compose --profile app up -d --build
+  # Lê os segredos do .env. A pasta do projeto é montada no MESMO caminho do host, para que os clones
+  # (.repos/), o estado do CocoIndex (.cocoindex/) e o repos.toml sirvam ao container e ao `uv run` local sem
+  # reprocessar nada. Rode o compose a partir da raiz do projeto.
+  app:
+    build: .
+    image: code-index-app:latest
+    profiles: ["app"]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    user: "${UID:-1000}:${GID:-1000}"   # arquivos criados em .repos/.cocoindex ficam com o seu usuário
+    env_file: .env
+    environment:
+      POSTGRES_URL: postgres://cocoindex:cocoindex@postgres:5432/cocoindex
+      CODE_INDEX_HOME: ${PWD}
+      HOME: /tmp
+    volumes:
+      - .:${PWD}
+    ports:
+      - "127.0.0.1:${CODE_INDEX_HTTP_PORT:-8765}:8765"
+    command: ["code-index", "serve", "--host", "0.0.0.0", "--port", "8765"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/healthz')"]
+      interval: 10s
+      retries: 5
+
 volumes:
   pgdata:

@@ -1,4 +1,4 @@
-"""Tokens, sessões Google e auditoria."""
+"""Tokens, sessões de pessoas (login Google/Microsoft) e auditoria."""
 
 from __future__ import annotations
 
@@ -11,21 +11,25 @@ from typing import Any
 from ..domain.auth import ADMIN, Principal, check_can_issue, scopes_for_user, validate_scopes
 from ..infra.auth_store import TokenInfo
 
-from .base import ServiceBase
+from .oauth import OAuthMixin
 
 log = logging.getLogger(__name__)
 
 
-class AuthMixin(ServiceBase):
+class AuthMixin(OAuthMixin):
     async def authenticate(self, token: str) -> Principal | None:
         """Principal de um token (agent ou sessão); None se inválido, expirado ou revogado."""
         return await self._tokens.authenticate(token)
 
-    async def start_session(self, email: str) -> tuple[str, TokenInfo]:
-        """Sessão de uma pessoa já autenticada pelo Google. Scopes vêm da lista de admins."""
+    async def start_session(
+        self, email: str, provider: str = "google", *, display_name: str | None = None,
+    ) -> tuple[str, TokenInfo]:
+        """Sessão de uma pessoa já autenticada no navegador (Google ou Microsoft). Scopes vêm da lista de admins.
+        Registra a pessoa em `users` (primeiro login) ou atualiza nome e data do último login."""
+        await self._users.record_login(email, display_name)
         scopes = scopes_for_user(email, self.settings.admin_emails)
         return await self._tokens.create(
-            kind="session", name="google-session", owner_email=email, scopes=scopes,
+            kind="session", name=f"{provider}-session", owner_email=email, scopes=scopes,
             ttl=timedelta(hours=self.settings.session_ttl_hours),
         )
 
@@ -45,7 +49,7 @@ class AuthMixin(ServiceBase):
         """Emite um token de agent. Retorna (valor — mostrar uma única vez, metadados).
 
         issuer=None: operador local (CLI no servidor), que informa `owner_email`.
-        Caso contrário, só sessões Google emitem, e só com scopes que já possuem.
+        Caso contrário, só sessões de pessoas (login no navegador) emitem, e só com scopes que já possuem.
         """
         if not name.strip():
             raise ValueError("informe um nome para o token")
@@ -74,11 +78,14 @@ class AuthMixin(ServiceBase):
 
     async def revoke_token(self, principal: Principal | None, token_id: str) -> None:
         info = await self._tokens.get(token_id)
-        if info is None or info.kind != "agent":
+        if info is None or info.kind not in ("agent", "oauth"):
             raise ValueError(f"token não encontrado: {token_id}")
         if principal is not None and not principal.has(ADMIN) and info.owner_email != principal.subject:
             raise PermissionError("só o dono do token ou um admin pode revogá-lo")
-        await self._tokens.revoke(token_id)
+        if info.kind == "oauth":  # desconecta o cliente MCP: o refresh token cai junto
+            await self.revoke_oauth_access(token_id)
+        else:
+            await self._tokens.revoke(token_id)
 
     async def recent_audit(self, *, limit: int = 100, actor: str | None = None) -> list[dict[str, Any]]:
         return await self._audit.recent(limit=limit, actor=actor)

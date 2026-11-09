@@ -6,7 +6,7 @@ import type { Me } from "../api/types";
 const STORAGE_KEY = "cix_token";
 
 /**
- * Sessão ativa. `token` é null quando a pessoa entrou com o Google: nesse caso o servidor guarda
+ * Sessão ativa. `token` é null quando a pessoa entrou pelo navegador (Google ou Microsoft): o servidor guarda
  * a sessão num cookie HttpOnly, que o JavaScript desta página não consegue ler.
  * Quando há `token`, é uma API key colada na tela de login (uso de agents/CLI).
  */
@@ -21,8 +21,8 @@ interface AuthValue {
   booting: boolean;
   /** Motivo de estar deslogada (sessão expirou, chave salva inválida...). */
   notice: string | null;
-  /** Vai para o login do Google (fluxo com redirecionamento). */
-  signInWithGoogle: () => void;
+  /** Vai para o login do provedor (`google`, `microsoft`), com redirecionamento. */
+  signInWith: (provider: string) => void;
   /** Entra com uma API key colada. `remember` guarda a chave neste navegador. */
   signInWithToken: (token: string, remember: boolean) => Promise<void>;
   signOut: (reason?: string) => void;
@@ -49,7 +49,7 @@ function writeStored(token: string, remember: boolean): void {
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
-  // Sempre verifica ao abrir: pode haver cookie do Google, chave salva, ou nada.
+  // Sempre verifica ao abrir: pode haver cookie de sessão, chave salva, ou nada.
   const [booting, setBooting] = useState(true);
   const [notice, setNotice] = useState<string | null>(null);
   // Ref para o handler de 401 saber, sem depender de re-render, se havia sessão.
@@ -60,17 +60,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [session]);
 
   const signOut = useCallback((reason?: string) => {
-    const wasGoogle = sessionRef.current !== null && sessionRef.current.token === null;
+    const wasBrowser = sessionRef.current !== null && sessionRef.current.token === null;
     clearStored();
     setSessionToken(null);
     sessionRef.current = null;
     setSession(null);
     setNotice(reason ?? null);
-    if (wasGoogle) void api.logout().catch(() => undefined); // encerra a sessão no servidor
+    if (wasBrowser) void api.logout().catch(() => undefined); // encerra a sessão no servidor
   }, []);
 
-  const signInWithGoogle = useCallback(() => {
-    window.location.assign("/auth/login");
+  const signInWith = useCallback((provider: string) => {
+    window.location.assign(`/auth/login?provider=${encodeURIComponent(provider)}`);
   }, []);
 
   const signInWithToken = useCallback(async (token: string, remember: boolean) => {
@@ -89,7 +89,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => onUnauthorized(null);
   }, [signOut]);
 
-  // Ao abrir: chave salva (se houver) ou cookie do Google.
+  // Ao abrir: chave salva (se houver) ou cookie de sessão.
   useEffect(() => {
     const stored = readStored();
     const check = stored ? api.me(stored.token) : api.me();
@@ -115,8 +115,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo(
-    () => ({ session, booting, notice, signInWithGoogle, signInWithToken, signOut }),
-    [session, booting, notice, signInWithGoogle, signInWithToken, signOut],
+    () => ({ session, booting, notice, signInWith, signInWithToken, signOut }),
+    [session, booting, notice, signInWith, signInWithToken, signOut],
   );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

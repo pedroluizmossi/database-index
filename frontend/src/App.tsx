@@ -4,6 +4,9 @@ import { useAuth } from "./auth/AuthProvider";
 import { AppShell, tabsFor, type Tab } from "./components/AppShell";
 import { Spinner } from "./components/ui";
 import { IndexProvider } from "./data/IndexProvider";
+import { PrefsProvider } from "./data/PrefsProvider";
+import { canWrite } from "./lib/capabilities";
+import { SettingsPage } from "./pages/SettingsPage";
 import { LoginPage } from "./pages/LoginPage";
 import { AuditPage } from "./pages/AuditPage";
 import { DocsPage } from "./pages/DocsPage";
@@ -26,13 +29,15 @@ export default function App() {
   if (!session) return <LoginPage />;
 
   return (
-    <IndexProvider>
-      <Workspace />
-    </IndexProvider>
+    <PrefsProvider>
+      <IndexProvider>
+        <Workspace />
+      </IndexProvider>
+    </PrefsProvider>
   );
 }
 
-const TAB_IDS: Tab[] = ["search", "repos", "docs", "apis", "xray", "tokens", "audit"];
+const TAB_IDS: Tab[] = ["search", "repos", "docs", "apis", "xray", "tokens", "audit", "settings"];
 
 function Workspace() {
   const { session } = useAuth();
@@ -42,7 +47,9 @@ function Workspace() {
   const [tab, setTab] = useState<Tab>(() => (TAB_IDS.includes(fromHash) ? fromHash : "search"));
   const [xrayTarget, setXrayTarget] = useState<XrayTarget | null>(null);
   // Uma aba só aparece se a sessão tem permissão; senão volta para a busca.
-  const current = tabs.some((t) => t.id === tab) ? tab : "search";
+  // As configurações não são uma aba da barra: abrem pelo ícone ao lado do nome, só com login no navegador.
+  const allowed = tab === "settings" ? canWrite(session) : tabs.some((t) => t.id === tab);
+  const current = allowed ? tab : "search";
 
   function changeTab(next: Tab) {
     setTab(next);
@@ -62,6 +69,7 @@ function Workspace() {
     xray: <XrayPage initial={xrayTarget} />,
     tokens: <TokensPage />,
     audit: <AuditPage />,
+    settings: <SettingsPage />,
   }[current];
 
   return (

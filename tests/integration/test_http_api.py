@@ -233,6 +233,48 @@ def test_tokens_so_por_sessao_google_e_com_csrf(server: Server) -> None:
     assert client(server, novo["token"]).get("/api/v1/me").status_code == 401
 
 
+def test_configuracoes_da_pessoa(server: Server) -> None:
+    origin = {"Origin": server.url}
+    c = httpx.Client(base_url=server.url, cookies={"cix_session": server.tokens["sessao-dev"]}, timeout=30)
+    inicial = c.get("/api/v1/me/settings").json()
+    assert inicial["email"] == USER_EMAIL and inicial["changed"] == []
+    assert inicial["settings"]["ui.theme"] == "system" and {i["key"] for i in inicial["schema"]} >= {"ui.theme"}
+    # grava só com sessão + CSRF; token de agent (mesmo do dono) lê, mas não altera
+    assert c.patch("/api/v1/me/settings", json={"settings": {"ui.theme": "dark"}}).status_code == 403
+    assert client(server, "leitor").patch("/api/v1/me/settings", json={"settings": {"ui.theme": "dark"}}).status_code == 403
+    r = c.patch("/api/v1/me/settings", json={"settings": {"ui.theme": "dark"}}, headers=origin)
+    assert r.status_code == 200, r.text
+    assert r.json()["settings"]["ui.theme"] == "dark" and r.json()["changed"] == ["ui.theme"]
+    assert client(server, "leitor").get("/api/v1/me/settings").json()["settings"]["ui.theme"] == "dark"
+    # inválido não grava nada; cada pessoa tem as suas
+    assert c.patch("/api/v1/me/settings", json={"settings": {"ui.theme": "roxo"}}, headers=origin).status_code == 400
+    assert c.patch("/api/v1/me/settings", json={"settings": {"nao.existe": 1}}, headers=origin).status_code == 400
+    assert client(server, "admin-bot").get("/api/v1/me/settings").json()["settings"]["ui.theme"] == "system"
+    # null volta ao padrão
+    r = c.patch("/api/v1/me/settings", json={"settings": {"ui.theme": None}}, headers=origin)
+    assert r.json()["settings"]["ui.theme"] == "system" and r.json()["changed"] == []
+
+
+def test_configuracoes_pelo_operador_local(int_settings: Settings, fake_llm: Any) -> None:
+    settings = int_settings.model_copy(update={"auth_secret": SecretStr("s" * 48)})
+
+    async def scenario() -> None:
+        async with open_service(settings) as svc:
+            with pytest.raises(ValueError):  # só quem já fez login
+                await svc.update_user_settings(None, {"ui.theme": "dark"}, email="ninguem@example.com")
+            await svc.start_session("Ana@Example.com", display_name="Ana")
+            info = await svc.update_user_settings(None, {"ui.results_per_page": 16}, email="ana@example.com")
+            assert info["settings"]["ui.results_per_page"] == 16 and info["display_name"] == "Ana"
+            with pytest.raises(ValueError):
+                await svc.update_user_settings(None, {"ui.results_per_page": 999}, email="ana@example.com")
+            users = {u["email"]: u for u in await svc.list_users()}
+            assert users["ana@example.com"]["changed"] == 1
+            info = await svc.update_user_settings(None, {"ui.results_per_page": None}, email="ana@example.com")
+            assert info["changed"] == [] and (await svc.user_settings(None, email="ana@example.com"))["settings"]["ui.results_per_page"] == 8
+
+    asyncio.run(scenario())
+
+
 def test_rate_limit_de_busca(server: Server) -> None:
     c = client(server, "leitor")
     codes = [c.post("/api/v1/search", json={"query": "ola mundo", "mode": "keyword"}).status_code for _ in range(4)]
@@ -455,3 +497,204 @@ def test_callback_escapa_texto_vindo_de_fora(server: Server) -> None:
     assert r.status_code == 400
     assert "<script>alert(1)</script>" not in r.text
     assert "&lt;script&gt;" in r.text
+
+
+# ------------------------------------------------------------------ OAuth do MCP (login no navegador)
+
+REDIRECT = "http://127.0.0.1:5555/callback"
+
+
+def _pkce() -> tuple[str, str]:
+    import base64
+    import hashlib
+    import secrets
+
+    verifier = secrets.token_urlsafe(48)
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    return verifier, challenge
+
+
+def _register(server: Server, **extra: Any) -> dict[str, Any]:
+    body = {"redirect_uris": [REDIRECT], "token_endpoint_auth_method": "none", "client_name": "Claude Code",
+            "grant_types": ["authorization_code", "refresh_token"], "response_types": ["code"], **extra}
+    r = client(server).post("/register", json=body)
+    assert r.status_code == 201, r.text
+    return dict(r.json())
+
+
+def _authorize(server: Server, client_id: str, challenge: str, session: str = "sessao-dev",
+               decision: str = "allow") -> httpx.Response:
+    """/authorize (SDK) → /auth/authorize (consentimento) → POST da decisão. Devolve o redirect final."""
+    c = client(server)
+    r = c.get("/authorize", params={
+        "response_type": "code", "client_id": client_id, "redirect_uri": REDIRECT, "code_challenge": challenge,
+        "code_challenge_method": "S256", "state": "st-1", "resource": f"{server.url}/mcp",
+    })
+    assert r.status_code == 302, r.text
+    consent = r.headers["location"]
+    assert consent.startswith(f"{server.url}/auth/authorize?req=")
+    cookies = {"cix_session": server.tokens[session]}
+    page = httpx.get(consent, cookies=cookies, timeout=30)
+    assert page.status_code == 200 and "Permitir" in page.text
+    req = consent.split("req=", 1)[1]
+    return httpx.post(f"{server.url}/auth/authorize", data={"req": req, "decision": decision}, cookies=cookies,
+                      headers={"Origin": server.url}, timeout=30)
+
+
+def _code_from(resp: httpx.Response) -> str:
+    assert resp.status_code == 303, resp.text
+    loc = httpx.URL(resp.headers["location"])
+    assert str(loc).startswith(REDIRECT) and loc.params["state"] == "st-1"
+    return loc.params["code"]
+
+
+def _token(server: Server, **form: str) -> httpx.Response:
+    return client(server).post("/token", data=form)
+
+
+def test_oauth_metadados_para_descoberta(server: Server) -> None:
+    hdrs = {"Accept": "application/json, text/event-stream"}
+    r = client(server, **hdrs).post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "ping"})
+    assert r.status_code == 401 and "oauth-protected-resource" in r.headers["www-authenticate"]
+    prm = client(server).get("/.well-known/oauth-protected-resource/mcp").json()
+    assert prm["authorization_servers"] == [server.url] or prm["authorization_servers"] == [server.url + "/"]
+    meta = client(server).get("/.well-known/oauth-authorization-server").json()
+    assert meta["registration_endpoint"].endswith("/register") and meta["code_challenge_methods_supported"] == ["S256"]
+    assert meta["scopes_supported"] == ["search:read"]
+
+
+def test_oauth_registro_so_com_redirect_local(server: Server) -> None:
+    r = client(server).post("/register", json={"redirect_uris": ["https://evil.example/cb"],
+                                               "token_endpoint_auth_method": "none"})
+    assert r.status_code == 400 and r.json()["error"] == "invalid_redirect_uri"
+    r = client(server).post("/register", json={"redirect_uris": [REDIRECT], "scope": "admin"})
+    assert r.status_code == 400  # só search:read por OAuth
+
+
+def test_oauth_fluxo_completo_com_refresh_e_revogacao(server: Server) -> None:
+    reg = _register(server, client_name="Claude <script>")
+    verifier, challenge = _pkce()
+
+    # sem sessão: o consentimento manda para o login, preservando o pedido
+    r = client(server).get("/authorize", params={
+        "response_type": "code", "client_id": reg["client_id"], "redirect_uri": REDIRECT,
+        "code_challenge": challenge, "code_challenge_method": "S256", "state": "st-1"})
+    r2 = client(server).get(r.headers["location"])
+    assert r2.status_code == 303 and r2.headers["location"].startswith("/auth/login?next=%2Fauth%2Fauthorize")
+    # pedido adulterado não vale
+    assert client(server).get("/auth/authorize", params={"req": "x.y.z"}).status_code == 400
+
+    # consentimento escapa o nome do cliente e exige a nossa origem (CSRF)
+    consent = client(server).get("/authorize", params={
+        "response_type": "code", "client_id": reg["client_id"], "redirect_uri": REDIRECT,
+        "code_challenge": challenge, "code_challenge_method": "S256", "state": "st-1"}).headers["location"]
+    page = httpx.get(consent, cookies={"cix_session": server.tokens["sessao-dev"]}, timeout=30)
+    assert "Claude &lt;script&gt;" in page.text and "<script>" not in page.text and "dev@example.com" in page.text
+    assert page.headers["x-frame-options"] == "DENY"
+    no_origin = httpx.post(f"{server.url}/auth/authorize", data={"req": consent.split("req=")[1], "decision": "allow"},
+                           cookies={"cix_session": server.tokens["sessao-dev"]}, timeout=30)
+    assert no_origin.status_code == 403
+    # um token de agent (Bearer) não aprova nada: só o cookie de sessão
+    as_agent = httpx.post(f"{server.url}/auth/authorize", data={"req": consent.split("req=")[1], "decision": "allow"},
+                          headers={"Origin": server.url, "Authorization": f"Bearer {server.tokens['admin-bot']}"},
+                          timeout=30)
+    assert as_agent.status_code == 303 and "/auth/login" in as_agent.headers["location"]
+
+    code = _code_from(_authorize(server, reg["client_id"], challenge))
+    base = {"client_id": reg["client_id"], "redirect_uri": REDIRECT}
+    assert _token(server, grant_type="authorization_code", code=code, code_verifier="errado" * 8,
+                  **base).status_code == 400  # PKCE
+    r = _token(server, grant_type="authorization_code", code=code, code_verifier=verifier, **base)
+    assert r.status_code == 200, r.text
+    tok = r.json()
+    assert tok["access_token"].startswith("cix_") and tok["refresh_token"].startswith("cixr_")
+    assert tok["scope"] == "search:read" and tok["token_type"].lower() == "bearer"
+    # código é de uso único
+    assert _token(server, grant_type="authorization_code", code=code, code_verifier=verifier,
+                  **base).json()["error"] == "invalid_grant"
+
+    me = client(server, tok["access_token"]).get("/api/v1/me").json()
+    assert (me["kind"], me["scopes"], me["subject"]) == ("oauth", ["search:read"], USER_EMAIL)
+    server.tokens["oauth-1"] = tok["access_token"]
+    tools, *_ = asyncio.run(_mcp(server, "oauth-1"))
+    assert "search_code" in tools
+    # o refresh token não serve como Bearer
+    assert client(server, tok["refresh_token"]).get("/api/v1/me").status_code == 401
+    # token OAuth não emite token
+    assert client(server, tok["access_token"]).post("/api/v1/tokens", json={"name": "x"}).status_code == 403
+
+    # refresh rotaciona: o access token antigo cai
+    r = _token(server, grant_type="refresh_token", refresh_token=tok["refresh_token"], client_id=reg["client_id"])
+    assert r.status_code == 200, r.text
+    tok2 = r.json()
+    assert tok2["refresh_token"] != tok["refresh_token"]
+    assert client(server, tok["access_token"]).get("/api/v1/me").status_code == 401
+    assert client(server, tok2["access_token"]).get("/api/v1/me").status_code == 200
+    # reuso do refresh antigo (vazado) revoga a família inteira
+    r = _token(server, grant_type="refresh_token", refresh_token=tok["refresh_token"], client_id=reg["client_id"])
+    assert r.status_code == 400
+    assert client(server, tok2["access_token"]).get("/api/v1/me").status_code == 401
+    assert _token(server, grant_type="refresh_token", refresh_token=tok2["refresh_token"],
+                  client_id=reg["client_id"]).status_code == 400
+
+
+def test_oauth_pessoa_desconecta_o_cliente(server: Server) -> None:
+    reg = _register(server)
+    verifier, challenge = _pkce()
+    code = _code_from(_authorize(server, reg["client_id"], challenge))
+    tok = _token(server, grant_type="authorization_code", code=code, code_verifier=verifier,
+                 client_id=reg["client_id"], redirect_uri=REDIRECT).json()
+    cookie = {"cix_session": server.tokens["sessao-dev"]}
+    c = httpx.Client(base_url=server.url, cookies=cookie, timeout=30)
+    listed = [t for t in c.get("/api/v1/tokens").json() if t["kind"] == "oauth" and t["active"]]
+    assert [t["name"] for t in listed] == ["Claude Code"]
+    assert c.delete(f"/api/v1/tokens/{listed[0]['id']}", headers={"Origin": server.url}).status_code == 200
+    assert client(server, tok["access_token"]).get("/api/v1/me").status_code == 401
+    assert _token(server, grant_type="refresh_token", refresh_token=tok["refresh_token"],
+                  client_id=reg["client_id"]).status_code == 400  # o refresh caiu junto
+
+
+def test_oauth_negar_e_revogacao_pelo_cliente(server: Server) -> None:
+    reg = _register(server)
+    _, challenge = _pkce()
+    denied = _authorize(server, reg["client_id"], challenge, decision="deny")
+    assert denied.status_code == 303 and "error=access_denied" in denied.headers["location"]
+
+    verifier, challenge = _pkce()
+    code = _code_from(_authorize(server, reg["client_id"], challenge, session="sessao-admin"))
+    tok = _token(server, grant_type="authorization_code", code=code, code_verifier=verifier,
+                 client_id=reg["client_id"], redirect_uri=REDIRECT).json()
+    assert tok["scope"] == "search:read"  # admin também só lê por OAuth
+    # o SDK exige o campo client_secret mesmo de cliente público (vazio)
+    revoke = {"client_id": reg["client_id"], "client_secret": ""}
+    assert client(server).post("/revoke", data={"token": tok["refresh_token"], **revoke}).status_code == 200
+    assert client(server, tok["access_token"]).get("/api/v1/me").status_code == 401
+    # revogar pelo access token também derruba o refresh
+    verifier, challenge = _pkce()
+    code = _code_from(_authorize(server, reg["client_id"], challenge))
+    tok = _token(server, grant_type="authorization_code", code=code, code_verifier=verifier,
+                 client_id=reg["client_id"], redirect_uri=REDIRECT).json()
+    assert client(server).post("/revoke", data={"token": tok["access_token"], **revoke}).status_code == 200
+    assert client(server, tok["access_token"]).get("/api/v1/me").status_code == 401
+    assert _token(server, grant_type="refresh_token", refresh_token=tok["refresh_token"],
+                  client_id=reg["client_id"]).status_code == 400
+    # outro cliente não revoga token alheio
+    other = _register(server)
+    verifier, challenge = _pkce()
+    code = _code_from(_authorize(server, reg["client_id"], challenge))
+    tok = _token(server, grant_type="authorization_code", code=code, code_verifier=verifier,
+                 client_id=reg["client_id"], redirect_uri=REDIRECT).json()
+    client(server).post("/revoke", data={"token": tok["access_token"], "client_id": other["client_id"],
+                                         "client_secret": ""})
+    assert client(server, tok["access_token"]).get("/api/v1/me").status_code == 200
+
+
+def test_oauth_cliente_confidencial_precisa_do_segredo(server: Server) -> None:
+    reg = _register(server, token_endpoint_auth_method="client_secret_post")
+    assert reg["client_secret"]
+    verifier, challenge = _pkce()
+    code = _code_from(_authorize(server, reg["client_id"], challenge))
+    base = {"grant_type": "authorization_code", "code": code, "code_verifier": verifier,
+            "client_id": reg["client_id"], "redirect_uri": REDIRECT}
+    assert _token(server, **base, client_secret="errado").status_code == 401
+    assert _token(server, **base, client_secret=reg["client_secret"]).status_code == 200

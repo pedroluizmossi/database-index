@@ -1,0 +1,21 @@
+# Segredos e estado local nunca entram na imagem (o compose monta o que precisa)
+.env
+repos.toml
+.repos/
+.cocoindex/
+.code-index.lock
+.backups/
+
+.git/
+.venv/
+**/__pycache__/
+*.pyc
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.claude/
+.impeccable/
+frontend/node_modules/
+frontend/dist/
+tests/
+evals/

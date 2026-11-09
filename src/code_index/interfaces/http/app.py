@@ -1,10 +1,11 @@
-"""API HTTP (REST em /api/v1, login Google em /auth, MCP em /mcp), num único processo.
+"""API HTTP (REST em /api/v1, login Google/Microsoft em /auth, MCP em /mcp), num único processo.
 
 Autorização por scope (ver domain/auth.py):
   search:read  GET repos/orgs, busca, leitura de arquivo, MCP
   index:write  sync (job em background)
   admin        gerenciar repos/orgs, auditoria; tokens de outros usuários
-Tokens só são emitidos por pessoas logadas via Google (cookie de sessão).
+Tokens só são emitidos por pessoas logadas no navegador (cookie de sessão): na interface (tokens de agent)
+ou pelo OAuth do MCP (/authorize do SDK → /auth/authorize aqui: login e consentimento → código → /token).
 """
 
 from __future__ import annotations
@@ -18,24 +19,29 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from html import escape
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from mcp.server.auth.provider import construct_redirect_uri
 from fastapi.staticfiles import StaticFiles
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ...domain.relations import origins_payload
 from ...domain.auth import ADMIN, INDEX_WRITE, SEARCH_READ, Principal
-from ...infra.google_oidc import GoogleOIDC, LoginError
+from ...infra.login import configured_providers, open_provider
+from ...infra.oidc import LoginError, OIDCProvider
 from ...services import CodeIndexService, open_service
 from ...settings import Settings
 from .mcp import build_mcp, transport_security
+from .mcp_oauth import load_pending, pending_signer
 from .security import (
     SESSION_COOKIE,
     RateLimiter,
+    check_csrf,
     client_ip,
     enforce_rate_limit,
     current_principal,
@@ -51,33 +57,110 @@ _PAGE_CSS = (
     "font:16px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;background:#fafafa;color:#18181b}"
     "main{max-width:440px;background:#fff;border:1px solid #e4e4e7;border-radius:16px;padding:28px}"
     "h1{font-size:20px;margin:0 0 8px}p{margin:8px 0;color:#52525b}"
-    "a{color:#4f46e5;font-weight:500}"
+    "a{color:#4f46e5;font-weight:500}code{font-size:14px}"
+    ".btn{display:block;box-sizing:border-box;width:100%;margin:10px 0;padding:11px 16px;border-radius:10px;"
+    "border:1px solid #d4d4d8;background:#fff;color:#18181b;font:inherit;font-weight:500;text-align:center;"
+    "text-decoration:none;cursor:pointer}.btn.primary{background:#4f46e5;border-color:#4f46e5;color:#fff}"
     "@media (prefers-color-scheme:dark){body{background:#09090b;color:#fafafa}"
-    "main{background:#18181b;border-color:#27272a}p{color:#a1a1aa}}"
+    "main{background:#18181b;border-color:#27272a}p{color:#a1a1aa}"
+    ".btn{background:#27272a;border-color:#3f3f46;color:#fafafa}.btn.primary{background:#4f46e5;color:#fff}}"
 )
 
 
-def _login_page(status_code: int, title: str, message: str, *, retry: bool = True) -> HTMLResponse:
-    """Página de erro do login. Todo texto passa por escape: nada vindo do Google vira HTML."""
-    retry_link = '<a href="/auth/login">Tentar de novo</a> · ' if retry else ""
+def _html_page(status_code: int, title: str, inner_html: str) -> HTMLResponse:
+    """Página simples do servidor (login, consentimento). `inner_html` já deve vir com o texto escapado.
+
+    Sem `form-action` na CSP: depois do consentimento o navegador segue o redirect para o cliente MCP
+    (ex.: http://localhost:PORTA), e o Chrome aplica `form-action` também ao redirect."""
     body = (
         '<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         f"<title>{escape(title)}</title><style>{_PAGE_CSS}</style></head><body><main>"
-        f"<h1>{escape(title)}</h1><p>{escape(message)}</p>"
-        f'<p>{retry_link}<a href="/ui/">Voltar para a interface</a></p>'
-        "</main></body></html>"
+        f"<h1>{escape(title)}</h1>{inner_html}</main></body></html>"
     )
     return HTMLResponse(
         body,
         status_code=status_code,
-        headers={"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'"},
+        headers={
+            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; "
+                                       "frame-ancestors 'none'",
+            "X-Frame-Options": "DENY",
+            "Cache-Control": "no-store",
+        },
     )
+
+
+def _login_page(status_code: int, title: str, message: str, *, retry: bool = True) -> HTMLResponse:
+    """Página de erro do login. Todo texto passa por escape: nada vindo de fora vira HTML."""
+    retry_link = '<a href="/auth/login">Tentar de novo</a> · ' if retry else ""
+    return _html_page(
+        status_code, title,
+        f"<p>{escape(message)}</p><p>{retry_link}<a href=\"/ui/\">Voltar para a interface</a></p>",
+    )
+
+
+def _chooser_page(providers: list[type[OIDCProvider]], next_path: str | None) -> HTMLResponse:
+    """Escolha do provedor quando há mais de um (Google e Microsoft)."""
+    links = []
+    for p in providers:
+        query = urlencode({"provider": p.name, **({"next": next_path} if next_path else {})})
+        links.append(f'<a class="btn" href="/auth/login?{escape(query)}">Entrar com {escape(p.label)}</a>')
+    return _html_page(200, "Entrar no code-index", "<p>Escolha a sua conta:</p>" + "".join(links))
+
+
+def _consent_page(*, client_name: str, redirect_uri: str, email: str, req: str) -> HTMLResponse:
+    """Consentimento do OAuth do MCP. O nome do cliente vem do próprio cliente (não confiável): só escapado."""
+    target = urlsplit(redirect_uri)
+    switch = urlencode({"next": f"/auth/authorize?req={req}"})
+    return _html_page(
+        200, "Autorizar acesso",
+        f"<p><strong>{escape(client_name)}</strong> quer acesso de <strong>leitura</strong> ao code-index "
+        f"(buscar e ler o código e a documentação indexados) em nome de <strong>{escape(email)}</strong>.</p>"
+        f"<p>Depois de aprovar, você volta para <code>{escape(target.scheme)}://{escape(target.netloc)}</code>. "
+        "Se não foi você que iniciou esta conexão, negue.</p>"
+        '<form method="post" action="/auth/authorize">'
+        f'<input type="hidden" name="req" value="{escape(req)}">'
+        '<button class="btn primary" name="decision" value="allow">Permitir</button>'
+        '<button class="btn" name="decision" value="deny">Negar</button></form>'
+        f'<p><a href="/auth/login?{escape(switch)}">Usar outra conta</a></p>',
+    )
+
+
+def _safe_next(value: str | None) -> str | None:
+    """Destino depois do login: só a página de consentimento do OAuth (evita open redirect)."""
+    if value and value.startswith("/auth/authorize?req=") and "//" not in value and "\\" not in value:
+        return value
+    return None
+
+
+class RegisterRateLimit:
+    """Limite por IP no registro de clientes OAuth (/register é aberto, pelo RFC 7591). ASGI puro, para não
+    interferir nas respostas do MCP."""
+
+    def __init__(self, app: ASGIApp, limiter: RateLimiter, per_hour: int = 20) -> None:
+        self.app, self.limiter, self.per_hour = app, limiter, per_hour
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and scope["method"] == "POST" and scope["path"] == "/register":
+            ip = (scope.get("client") or ("?",))[0]
+            retry = self.limiter.hit("oauth-register", ip, limit=self.per_hour, window=3600.0)
+            if retry is not None:
+                resp = JSONResponse(
+                    {"error": "temporarily_unavailable", "error_description": "muitos registros; tente mais tarde"},
+                    status_code=429, headers={"Retry-After": str(int(retry) + 1)},
+                )
+                await resp(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
 LOGIN_MAX_AGE = 600
 UI_DIR = Path(__file__).resolve().parents[4] / "frontend" / "dist"  # build de `pnpm build` em frontend/
 
 
 # ------------------------------------------------------------------ modelos de entrada
+
+
+class UserSettingsIn(BaseModel):
+    settings: dict[str, Any] = Field(description="chave → valor; null volta ao padrão", max_length=50)
 
 
 class RepoIn(BaseModel):
@@ -224,7 +307,7 @@ def create_app(settings: Settings) -> FastAPI:
         title="code-index",
         version="1",
         description="Índice de código (CocoIndex + Voyage + pgvector). Autentique com Bearer token "
-        "ou faça login em /auth/login.",
+        "ou faça login em /auth/login (Google ou Microsoft).",
         lifespan=lifespan,
     )
     app.state.settings = settings
@@ -235,8 +318,10 @@ def create_app(settings: Settings) -> FastAPI:
     if settings.http_host in ("127.0.0.1", "localhost", "::1"):
         hostnames |= {"127.0.0.1", "localhost", "::1", "testserver"}
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=sorted(hostnames))
+    app.add_middleware(RegisterRateLimit, limiter=limiter)
 
     signer = URLSafeTimedSerializer(secret, salt="code-index-login")
+    oauth_signer = pending_signer(settings)
 
     async def audited(request: Request, principal: Principal | None, action: str, params: dict[str, Any] | None,
                       fn: Any) -> Any:
@@ -256,16 +341,30 @@ def create_app(settings: Settings) -> FastAPI:
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.get("/auth/login", tags=["auth"], summary="Login com Google (redireciona)")
-    async def login() -> Response:
+    @app.get("/auth/providers", tags=["auth"], summary="Provedores de login ativos (Google, Microsoft)")
+    async def login_providers() -> list[dict[str, str]]:
+        return [{"name": p.name, "label": p.label} for p in configured_providers(settings)]
+
+    @app.get("/auth/login", tags=["auth"], summary="Login no navegador (Google ou Microsoft; redireciona)")
+    async def login(provider: str = "", next_path: str = Query("", alias="next")) -> Response:
+        nxt = _safe_next(next_path)
+        if not provider:
+            available = configured_providers(settings)
+            if not available:
+                return _login_page(503, "Login indisponível", "Nenhum login configurado neste servidor: defina "
+                                   "GOOGLE_CLIENT_ID/SECRET e/ou AZURE_TENANT_ID/CLIENT_ID/SECRET.", retry=False)
+            if len(available) > 1:
+                return _chooser_page(available, nxt)
+            provider = available[0].name
         try:
-            oidc = GoogleOIDC(settings)
+            oidc = open_provider(settings, provider)
         except RuntimeError as e:
             return _login_page(503, "Login indisponível", str(e), retry=False)
         start = oidc.start()
         resp = RedirectResponse(start.url, status_code=302)
         resp.set_cookie(
-            LOGIN_COOKIE, signer.dumps({"s": start.state, "n": start.nonce, "v": start.code_verifier}),
+            LOGIN_COOKIE,
+            signer.dumps({"s": start.state, "n": start.nonce, "v": start.code_verifier, "p": oidc.name, "x": nxt}),
             max_age=LOGIN_MAX_AGE, httponly=True, secure=settings.secure_cookies, samesite="lax", path="/auth",
         )
         return resp
@@ -274,29 +373,94 @@ def create_app(settings: Settings) -> FastAPI:
     async def callback(request: Request, code: str = "", state: str = "", error: str = "") -> Response:
         svc = get_service(request)
         if error:
-            return _login_page(400, "Login cancelado", f"O Google não concluiu o login ({error}).")
+            return _login_page(400, "Login cancelado", f"O provedor de login não concluiu o login ({error}).")
         try:
             data = signer.loads(request.cookies.get(LOGIN_COOKIE, ""), max_age=LOGIN_MAX_AGE)
         except BadSignature:
             return _login_page(400, "Login expirou", "A sessão de login venceu ou não foi iniciada aqui.")
         if not code or not secrets.compare_digest(state, data["s"]):
-            return _login_page(400, "Login recusado", "A resposta do Google não corresponde a este login.")
+            return _login_page(400, "Login recusado", "A resposta do provedor não corresponde a este login.")
         try:
-            identity = await GoogleOIDC(settings).finish(code=code, code_verifier=data["v"], nonce=data["n"])
+            oidc = open_provider(settings, data.get("p", "google"))
+            identity = await oidc.finish(code=code, code_verifier=data["v"], nonce=data["n"])
+        except RuntimeError as e:
+            return _login_page(503, "Login indisponível", str(e), retry=False)
         except LoginError as e:
-            await svc.audit(None, "auth:login", params={"error": str(e)}, status=403, client_ip=client_ip(request))
+            await svc.audit(None, "auth:login", params={"provider": data.get("p"), "error": str(e)}, status=403,
+                            client_ip=client_ip(request))
             return _login_page(403, "Acesso negado", str(e), retry=False)
-        token, info = await svc.start_session(identity.email)
-        await svc.audit(None, "auth:login", params={"email": identity.email, "scopes": list(info.scopes)},
+        token, info = await svc.start_session(identity.email, identity.provider, display_name=identity.name)
+        await svc.audit(None, "auth:login",
+                        params={"email": identity.email, "provider": identity.provider, "scopes": list(info.scopes)},
                         status=200, client_ip=client_ip(request))
-        # Volta para a interface web se ela estiver construída; senão, para a documentação da API.
-        resp = RedirectResponse("/ui/" if UI_DIR.is_dir() else "/docs", status_code=302)
+        # Volta para o consentimento do OAuth (se o login veio de lá), para a interface web se ela estiver
+        # construída ou, senão, para a documentação da API.
+        target = _safe_next(data.get("x")) or ("/ui/" if UI_DIR.is_dir() else "/docs")
+        resp = RedirectResponse(target, status_code=302)
         resp.delete_cookie(LOGIN_COOKIE, path="/auth")
         resp.set_cookie(
             SESSION_COOKIE, token, max_age=settings.session_ttl_hours * 3600, httponly=True,
             secure=settings.secure_cookies, samesite="lax", path="/",
         )
         return resp
+
+    # ---------------------------------------------------------- OAuth do MCP: login + consentimento
+
+    async def session_principal(request: Request) -> Principal | None:
+        """Pessoa logada no navegador (só o cookie de sessão vale aqui, nunca um Bearer)."""
+        token = request.cookies.get(SESSION_COOKIE)
+        principal = await get_service(request).authenticate(token) if token else None
+        return principal if principal is not None and principal.kind == "session" else None
+
+    def to_login(req: str) -> RedirectResponse:
+        return RedirectResponse("/auth/login?" + urlencode({"next": f"/auth/authorize?req={req}"}), status_code=303)
+
+    expired_request = ("Autorização expirou", "O pedido de acesso venceu ou foi alterado. "
+                       "Conecte o cliente MCP de novo.")
+
+    @app.get("/auth/authorize", tags=["auth"], include_in_schema=False)
+    async def oauth_consent(request: Request, req: str = "") -> Response:
+        pending = load_pending(oauth_signer, req)
+        if pending is None:
+            return _login_page(400, *expired_request, retry=False)
+        principal = await session_principal(request)
+        if principal is None:
+            return to_login(req)
+        client = await get_service(request).get_oauth_client(pending["client_id"])
+        if client is None:
+            return _login_page(400, *expired_request, retry=False)
+        name = str(client[0].get("client_name") or "Um cliente MCP")
+        return _consent_page(client_name=name, redirect_uri=pending["redirect_uri"], email=principal.subject, req=req)
+
+    @app.post("/auth/authorize", tags=["auth"], include_in_schema=False)
+    async def oauth_decide(request: Request) -> Response:
+        check_csrf(request, settings)  # formulário da nossa própria origem
+        form = await request.form()
+        req, decision = str(form.get("req", "")), str(form.get("decision", ""))
+        pending = load_pending(oauth_signer, req)
+        if pending is None:
+            return _login_page(400, *expired_request, retry=False)
+        principal = await session_principal(request)
+        if principal is None:
+            return to_login(req)
+        svc = get_service(request)
+        redirect_uri, state, client_id = pending["redirect_uri"], pending.get("state"), pending["client_id"]
+        if decision != "allow":
+            await svc.audit(principal, "oauth:authorize", params={"client_id": client_id, "decision": "deny"},
+                            status=403, client_ip=client_ip(request))
+            return RedirectResponse(construct_redirect_uri(redirect_uri, error="access_denied", state=state),
+                                    status_code=303)
+        try:
+            code = await svc.issue_oauth_code(
+                principal, client_id=client_id, scopes=pending.get("scopes"),
+                code_challenge=pending["code_challenge"], redirect_uri=redirect_uri,
+                redirect_uri_explicit=bool(pending.get("redirect_uri_explicit")), resource=pending.get("resource"),
+            )
+        except (ValueError, PermissionError) as e:
+            return _login_page(403, "Acesso negado", str(e), retry=False)
+        await svc.audit(principal, "oauth:authorize", params={"client_id": client_id, "decision": "allow"},
+                        status=200, client_ip=client_ip(request))
+        return RedirectResponse(construct_redirect_uri(redirect_uri, code=code, state=state), status_code=303)
 
     @app.post("/auth/logout", tags=["auth"], summary="Encerra a sessão")
     async def logout(request: Request, principal: Principal = Depends(current_principal)) -> Response:
@@ -311,6 +475,18 @@ def create_app(settings: Settings) -> FastAPI:
     async def me(principal: Principal = Depends(require(SEARCH_READ))) -> dict[str, Any]:
         return {"subject": principal.subject, "kind": principal.kind, "scopes": sorted(principal.scopes),
                 "token_name": principal.token_name}
+
+    @app.get("/api/v1/me/settings", tags=["auth"], summary="Minhas configurações (valores, padrões e schema)")
+    async def my_settings(request: Request, principal: Principal = Depends(require(SEARCH_READ))) -> dict[str, Any]:
+        return await get_service(request).user_settings(principal)
+
+    @app.patch("/api/v1/me/settings", tags=["auth"],
+               summary="Altera minhas configurações (só com login no navegador; null volta ao padrão)")
+    async def update_my_settings(body: UserSettingsIn, request: Request,
+                                 principal: Principal = Depends(require(SEARCH_READ))) -> dict[str, Any]:
+        result: dict[str, Any] = await audited(request, principal, "settings:update", {"keys": sorted(body.settings)},
+                                               get_service(request).update_user_settings(principal, body.settings))
+        return result
 
     # ---------------------------------------------------------- consulta
 
@@ -649,7 +825,7 @@ def create_app(settings: Settings) -> FastAPI:
         return [t.to_dict() for t in tokens]
 
     @app.post("/api/v1/tokens", tags=["tokens"], status_code=201,
-              summary="Emite token de agent (só via login Google; valor exibido UMA vez)")
+              summary="Emite token de agent (só com login no navegador; valor exibido UMA vez)")
     async def create_token(body: TokenIn, request: Request,
                            principal: Principal = Depends(require(SEARCH_READ))) -> dict[str, Any]:
         token, info = await audited(request, principal, "token:create", body.model_dump(),

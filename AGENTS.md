@@ -8,8 +8,9 @@ veja o README.md.
 Indexador de código. Repositórios git/GitHub → CocoIndex 1.x (chunks com tree-sitter) →
 embeddings `voyage/voyage-code-4` via LiteLLM → Postgres + pgvector. A busca é híbrida (vetor +
 full-text, RRF) com rerank (`voyage/rerank-2.5`). Tudo é exposto por um servidor HTTP: API REST em
-`/api/v1` e MCP (Streamable HTTP) em `/mcp`, com login Google para pessoas e tokens `cix_...`
-para agents. Não existe MCP via stdio.
+`/api/v1` e MCP (Streamable HTTP) em `/mcp`, com login Google e/ou Microsoft (Entra ID) para pessoas,
+tokens `cix_...` para agents e OAuth para clientes MCP (o navegador abre, a pessoa aprova, o cliente recebe
+o token). Não existe MCP via stdio.
 
 Stack: Python 3.12, `uv`, asyncpg, FastAPI, SDK `mcp` 2.x, pydantic-settings. Mensagens, docstrings
 e textos ao usuário em **português**.
@@ -35,13 +36,13 @@ O executável `code-index` só existe no ambiente do projeto: use `uv run`.
 | Pasta/arquivo | Responsabilidade |
 |---|---|
 | `settings.py` | `Settings` (env/.env). `get_settings()`, `use_settings()` (testes), `bootstrap()` (efeitos de runtime) |
-| `domain/` | **Puro, sem I/O**: `models`, `file_patterns` (o que indexar/excluir), `policies` (lote, nomes), `auth` (scopes), `search_text` (tokenização de código para busca, pesos da fusão), `doc_links` (apelidos de repos via manifestos, menções das páginas), `repo_card` (fatos: SDL/PDL/catalog-info; schema, validação e texto da tarefa do cartão), `api_impl` (operação SDL → `<op>Handler`), `doc_task` (tarefa páginas da wiki → repos), `relations` (chaves de entidade, tipos de relação, **registro único de origens**), `documents` (tipos de documento), `ownership` (dono no DDD: catálogo do SDL, inferência sem LLM, resolução por origem, escopo da busca) |
-| `infra/` | Mundo externo: `db` (pool, migrations, extensões), `repo_store`, `chunk_store` (busca: motor bm25/fts/fts-legacy detectado no banco), `symbol_store`, `relation_store` (**único** ponto que lê/grava relações; view `effective_relations`), `document_store` (catálogo `documents`: tipo, atributos, páginas ignoradas), `job_store`, `enrich_store` (cartões e fila de tarefas `next`/`submit`), `auth_store`, `config_file` (repos.toml), `git`, `github`, `grep` (ripgrep), `google_oidc`, `llm` |
+| `domain/` | **Puro, sem I/O**: `models`, `file_patterns` (o que indexar/excluir), `policies` (lote, nomes), `auth` (scopes), `search_text` (tokenização de código para busca, pesos da fusão), `doc_links` (apelidos de repos via manifestos, menções das páginas), `repo_card` (fatos: SDL/PDL/catalog-info; schema, validação e texto da tarefa do cartão), `api_impl` (operação SDL → `<op>Handler`), `doc_task` (tarefa páginas da wiki → repos), `relations` (chaves de entidade, tipos de relação, **registro único de origens**), `documents` (tipos de documento), `ownership` (dono no DDD: catálogo do SDL, inferência sem LLM, resolução por origem, escopo da busca), `preferences` (**registro único** das configs por pessoa: padrão, validação, resolução) |
+| `infra/` | Mundo externo: `db` (pool, migrations, extensões), `repo_store`, `chunk_store` (busca: motor bm25/fts/fts-legacy detectado no banco), `symbol_store`, `relation_store` (**único** ponto que lê/grava relações; view `effective_relations`), `document_store` (catálogo `documents`: tipo, atributos, páginas ignoradas), `job_store`, `enrich_store` (cartões e fila de tarefas `next`/`submit`), `auth_store`, `user_store` (pessoas e as configs que elas mudaram), `oauth_store` (clientes, códigos e refresh tokens do OAuth do MCP), `config_file` (repos.toml), `git`, `github`, `grep` (ripgrep), `oidc` (base) + `google_oidc`/`entra_oidc` (provedores de login; registro em `login`), `llm` |
 | `sources/` | Contratos em `base.py`: `RepoSource` (descoberta de repos: `github_org`), `DocSourcePlugin` (fonte de documentação: `fetch`, `documents`, `preview`, `linkers`) e `Linker`. Plugins: `wikijs`, `openapi_s3`; registro em `registry.py` |
 | `indexing/` | `content` (máscara de segredos/skip/binários), `context` (linhas inteiras + cabeçalho do embedding), `code_flow` (app CocoIndex), `orchestrator` (sync em etapas), `enrich` (coleta do material do cartão, sem LLM), `linkers` (linkers do núcleo + `rebuild_relations`) |
 | `retrieval/` | `search` (híbrida + rerank), `files` (leitura com máscara) |
-| `services/` | Casos de uso: **único** ponto usado pelas interfaces (`CodeIndexService`, `open_service`). Um módulo por área: `repos`, `apis` (OpenAPI), `wiki`, `docs`, `search`, `sync`, `enrich`, `auth`, `ownership` (domínio/serviço); `base` tem as dependências e utilitários comuns |
-| `interfaces/` | `cli.py` e `http/` (`app.py` FastAPI, `mcp.py`, `security.py`): só parsing e formatação |
+| `services/` | Casos de uso: **único** ponto usado pelas interfaces (`CodeIndexService`, `open_service`). Um módulo por área: `repos`, `apis` (OpenAPI), `wiki`, `docs`, `search`, `sync`, `enrich`, `auth`, `oauth` (OAuth do MCP), `users` (pessoas e preferências), `ownership` (domínio/serviço); `base` tem as dependências e utilitários comuns |
+| `interfaces/` | `cli.py` e `http/` (`app.py` FastAPI, `mcp.py`, `mcp_oauth.py`, `security.py`): só parsing e formatação |
 
 Testes: `tests/unit/` (rápidos) e `tests/integration/` (marcados `integration`).
 
@@ -65,6 +66,8 @@ Testes: `tests/unit/` (rápidos) e `tests/integration/` (marcados `integration`)
   `Linker` (núcleo em `indexing/linkers.py`, ou da fonte no plugin) que devolve `Relation`s; ele é dono das
   suas origens e é recalculado no fim de cada sync (`rebuild_relations`, sem custo). Origem nova entra em
   `domain/relations.ORIGINS` (rótulo, se é contestável): a API e a UI leem de lá.
+- **Config por pessoa = uma entrada em `domain/preferences.PREFS`** (sem migration; o banco guarda só o que a
+  pessoa mudou). Preferência nunca concede acesso, e só sessão de navegador grava (`PATCH /api/v1/me/settings`).
 - Leitura de vínculo só pela view `effective_relations` (via `RelationStore`): ela aplica status, remoções
   aprovadas e repos/páginas que saíram.
 
@@ -91,8 +94,8 @@ Testes: `tests/unit/` (rápidos) e `tests/integration/` (marcados `integration`)
 
 - Tokens: só o HMAC-SHA256 (com `CODE_INDEX_AUTH_SECRET`) vai para o banco. Nunca logar, auditar ou
   devolver o valor, exceto uma vez na criação.
-- Só sessões Google emitem tokens, e só com scopes que já possuem. Um token nunca emite outro
-  (`domain/auth.check_can_issue`).
+- Só sessões de pessoas (login no navegador, Google ou Microsoft) emitem tokens, e só com scopes que já possuem. Um token nunca emite outro
+  (`domain/auth.check_can_issue`). Vale também para tokens OAuth (kind `oauth`).
 - Scopes: `search:read` (leitura/MCP), `index:write` (sync, que custa dinheiro), `admin` (implica todos).
   Toda rota nova declara o scope via `require(...)`. Toda tool MCP nova passa por `run_tool`.
 - Sync via API só registra repo desconhecido para admin (`allow_register`). O MCP não indexa.
@@ -101,6 +104,14 @@ Testes: `tests/unit/` (rápidos) e `tests/integration/` (marcados `integration`)
   Vale também para páginas de wiki. `WIKIJS_TOKEN` fica só no `.env`, nunca no `repos.toml`.
 - Login Google: valida assinatura, `aud`, `iss`, `nonce`, `email_verified` e allowlist
   (`GOOGLE_ALLOWED_EMAILS`/admins, ou domínio via claim `hd`). Sem allowlist, ninguém entra.
+- Login Microsoft: um único tenant (GUID; `iss` e `tid` exatos), recusa guests (`idp` de fora) e allowlist
+  (`AZURE_ALLOWED_EMAILS`/admins ou `AZURE_ALLOWED_DOMAIN`). O e-mail do Entra não é verificado: nunca troque
+  para `common`/`organizations` nem aceite o e-mail sem o tenant. Provedor novo = subclasse de
+  `infra/oidc.OIDCProvider` registrada em `infra/login.py`.
+- OAuth do MCP (`domain/oauth.py`, `services/oauth.py`, `interfaces/http/mcp_oauth.py`): redirect_uri só
+  loopback ou prefixos de `CODE_INDEX_OAUTH_REDIRECT_URIS`; consentimento a cada autorização, só com cookie de
+  sessão (nunca Bearer) e com CSRF; token OAuth só `search:read`; código de uso único; refresh rotacionado, e
+  reuso revoga a família. Códigos e refresh tokens só como HMAC; client_secret cifrado.
 - Mantenha: CSRF (Origin) para cookie, TrustedHost/DNS rebinding, rate limit, auditoria sem segredos.
 
 ## Não mexa sem pedido explícito

@@ -729,6 +729,60 @@ async def _cmd_token_revoke(a: argparse.Namespace, settings: Settings) -> None:
     print(f"token {a.id} revogado.")
 
 
+async def _cmd_user_list(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        users = await svc.list_users()
+    if not users:
+        print("ninguém fez login ainda.")
+    for u in users:
+        last = f"{u['last_login_at'].astimezone():%Y-%m-%d %H:%M}" if u["last_login_at"] else "nunca"
+        print(f"{u['email']:<40} {u['display_name'] or '-':<30} último login {last}  configs alteradas: {u['changed']}")
+
+
+def _print_user_settings(info: dict[str, Any]) -> None:
+    name = f" ({info['display_name']})" if info["display_name"] else ""
+    print(f"{info['email']}{name}")
+    changed = set(info["changed"])
+    for item in info["schema"]:
+        key = item["key"]
+        value = json.dumps(info["settings"][key], ensure_ascii=False)
+        origin = "alterada" if key in changed else "padrão"
+        print(f"  {key:<28} {value:<14} {origin:<9} {item['label']}")
+
+
+async def _cmd_user_settings(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        _print_user_settings(await svc.user_settings(None, email=a.email))
+
+
+def _parse_setting(raw: str) -> tuple[str, Any]:
+    """'chave=valor'. O valor é lido como JSON (10, true, "dark"); se não for JSON, vale como texto."""
+    key, sep, value = raw.partition("=")
+    if not sep or not key.strip():
+        raise ValueError(f"use chave=valor: {raw}")
+    try:
+        return key.strip(), json.loads(value)
+    except ValueError:
+        return key.strip(), value
+
+
+async def _cmd_user_set(a: argparse.Namespace, settings: Settings) -> None:
+    changes = dict(_parse_setting(raw) for raw in a.settings)
+    if any(v is None for v in changes.values()):
+        raise ValueError("para voltar ao padrão, use 'user unset'")
+    async with open_service(settings) as svc:
+        info = await svc.update_user_settings(None, changes, email=a.email)
+        await svc.audit(None, "settings:update:local", params={"email": a.email, "keys": sorted(changes)})
+    _print_user_settings(info)
+
+
+async def _cmd_user_unset(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        info = await svc.update_user_settings(None, dict.fromkeys(a.keys), email=a.email)
+        await svc.audit(None, "settings:update:local", params={"email": a.email, "keys": sorted(a.keys)})
+    _print_user_settings(info)
+
+
 def main() -> None:
     settings = bootstrap()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -1059,6 +1113,22 @@ def main() -> None:
     t = tk.add_parser("revoke", help="revoga um token pelo id")
     t.add_argument("id")
     t.set_defaults(fn=_cmd_token_revoke)
+
+    # pessoas e preferências (operador local)
+    us = sub.add_parser("user", help="pessoas que já fizeram login e suas configurações").add_subparsers(required=True)
+    u = us.add_parser("list", help="lista as pessoas")
+    u.set_defaults(fn=_cmd_user_list)
+    u = us.add_parser("settings", help="configurações de uma pessoa (valor atual e se foi alterada)")
+    u.add_argument("email")
+    u.set_defaults(fn=_cmd_user_settings)
+    u = us.add_parser("set", help="altera configurações de uma pessoa")
+    u.add_argument("email")
+    u.add_argument("settings", nargs="+", metavar="chave=valor", help="ex.: ui.theme=dark ui.results_per_page=16")
+    u.set_defaults(fn=_cmd_user_set)
+    u = us.add_parser("unset", help="volta configurações de uma pessoa ao padrão")
+    u.add_argument("email")
+    u.add_argument("keys", nargs="+", metavar="chave")
+    u.set_defaults(fn=_cmd_user_unset)
 
     a = p.parse_args()
     fn: CommandFn = a.fn

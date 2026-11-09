@@ -92,14 +92,17 @@ class TokenStore:
         owner_email: str,
         scopes: Iterable[str],
         ttl: timedelta | None,
+        oauth_client_id: str | None = None,
     ) -> tuple[str, TokenInfo]:
         """Cria um token. Retorna (valor em claro — mostrar UMA vez, metadados)."""
         token = generate_token()
         expires = datetime.now(timezone.utc) + ttl if ttl else None
         row = await self._pool.fetchrow(
-            f"""INSERT INTO {self._t} (kind, name, owner_email, token_hash, token_prefix, scopes, expires_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING {_COLS}""",
+            f"""INSERT INTO {self._t}
+                    (kind, name, owner_email, token_hash, token_prefix, scopes, expires_at, oauth_client_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING {_COLS}""",
             kind, name, owner_email.lower(), hash_token(token, self._secret()), token[:10], list(scopes), expires,
+            oauth_client_id,
         )
         return token, _info(row)
 
@@ -108,7 +111,7 @@ class TokenStore:
         if not token.startswith(TOKEN_PREFIX) or len(token) > 200:
             return None
         row = await self._pool.fetchrow(
-            f"""SELECT {_COLS} FROM {self._t}
+            f"""SELECT {_COLS}, oauth_client_id FROM {self._t}
                 WHERE token_hash = $1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())""",
             hash_token(token, self._secret()),
         )
@@ -119,11 +122,11 @@ class TokenStore:
             await self._pool.execute(f"UPDATE {self._t} SET last_used_at = now() WHERE id = $1::uuid", info.id)
         return Principal(
             subject=info.owner_email, kind=info.kind, scopes=effective_scopes(info.scopes),
-            token_id=info.id, token_name=info.name,
+            token_id=info.id, token_name=info.name, oauth_client_id=row["oauth_client_id"],
         )
 
     async def list(self, *, owner_email: str | None = None, include_inactive: bool = False) -> list[TokenInfo]:
-        where, args = ["kind = 'agent'"], []
+        where, args = ["kind IN ('agent', 'oauth')"], []
         if owner_email:
             args.append(owner_email.lower())
             where.append(f"owner_email = ${len(args)}")
@@ -151,9 +154,11 @@ class TokenStore:
         return res.endswith(" 1")
 
     async def purge_expired_sessions(self) -> int:
-        """Remove sessões vencidas há mais de 1 dia (tokens de agent ficam para histórico)."""
+        """Remove sessões e tokens OAuth vencidos há mais de 1 dia (os de agent ficam para histórico).
+
+        Tokens OAuth são de vida curta e renovados pelo refresh: sem isto, a tabela cresceria a cada hora."""
         res = await self._pool.execute(
-            f"DELETE FROM {self._t} WHERE kind = 'session' AND expires_at < now() - interval '1 day'"
+            f"DELETE FROM {self._t} WHERE kind IN ('session', 'oauth') AND expires_at < now() - interval '1 day'"
         )
         return int(res.split()[-1])
 

@@ -3,6 +3,7 @@ import type {
   AuditEntry,
   XrayData,
   Hit,
+  LoginProvider,
   Me,
   NewToken,
   OrgDiscovery,
@@ -24,6 +25,8 @@ import type {
   SyncStart,
   TokenInfo,
   TokenRequest,
+  PrefValue,
+  UserSettings,
 } from "./types";
 
 /** Caminho de arquivo: `repo/dir/arquivo.ext`, com cada parte codificada. */
@@ -43,6 +46,11 @@ export const api = {
     postJson<SyncStart>("/api/v1/openapi/index", { domain, services }),
   // leitura
   me: (token?: string) => getJson<Me>("/api/v1/me", { token }),
+  mySettings: () => getJson<UserSettings>("/api/v1/me/settings"),
+  /** `null` volta a config ao padrão. Só com login no navegador. */
+  updateMySettings: (settings: Record<string, PrefValue | null>) =>
+    sendJson<UserSettings>("PATCH", "/api/v1/me/settings", { body: { settings } }),
+  loginProviders: () => getJson<LoginProvider[]>("/auth/providers"),
   repos: () => getJson<Repo[]>("/api/v1/repos"),
   orgs: () => getJson<OrgSummary[]>("/api/v1/orgs"),
   search: (body: SearchRequest) => postJson<Hit[]>("/api/v1/search", body),
@@ -90,7 +98,7 @@ export const api = {
   clearOwner: (body: { repos: string[]; path?: string | null }) =>
     postJson<{ cleared: number; entities: string[] }>("/api/v1/ownership/clear", body),
 
-  // tokens (emitir: sessão Google; listar/revogar: dono ou admin)
+  // tokens (emitir: sessão do navegador; listar/revogar: dono ou admin)
   tokens: (includeInactive = false) =>
     getJson<TokenInfo[]>("/api/v1/tokens", { query: { include_inactive: includeInactive } }),
   createToken: (body: TokenRequest) => postJson<NewToken>("/api/v1/tokens", body),

@@ -346,13 +346,13 @@ A qualidade dos candidatos depende dos cartões: rode a fila de cartões antes d
 
 `code-index serve` sobe num único processo:
 - a API REST em `/api/v1` (documentação interativa em `/docs`);
-- o login Google em `/auth`;
-- o MCP (Streamable HTTP) em `/mcp`.
+- o login no navegador (Google e/ou Microsoft) em `/auth`;
+- o MCP (Streamable HTTP) em `/mcp`, com OAuth: o cliente MCP abre o navegador e recebe o token sozinho.
 
 Não existe mais MCP via stdio.
 
 ```bash
-# .env: CODE_INDEX_AUTH_SECRET (obrigatório), GOOGLE_CLIENT_ID/SECRET, CODE_INDEX_ADMIN_EMAILS, CODE_INDEX_PUBLIC_URL
+# .env: CODE_INDEX_AUTH_SECRET (obrigatório), GOOGLE_* e/ou AZURE_*, CODE_INDEX_ADMIN_EMAILS, CODE_INDEX_PUBLIC_URL
 uv run code-index serve                      # escuta em 127.0.0.1:8765; ponha um proxy com TLS na frente
 ```
 
@@ -377,8 +377,13 @@ Entre com uma API key (`cix_...`). A página só chama `/api/v1` com essa chave.
 
 | Quem | Como entra | Scopes |
 |---|---|---|
-| Pessoa autorizada (e-mail em `GOOGLE_ALLOWED_EMAILS`/admins, ou domínio Workspace em `GOOGLE_ALLOWED_DOMAIN`) | `GET /auth/login` (Google OIDC + PKCE; valida assinatura, `nonce` e `email_verified`) → cookie de sessão | `search:read`; admins: todos |
+| Pessoa autorizada pelo Google (e-mail em `GOOGLE_ALLOWED_EMAILS`/admins, ou domínio Workspace em `GOOGLE_ALLOWED_DOMAIN`) | `GET /auth/login?provider=google` (OIDC + PKCE; valida assinatura, `nonce` e `email_verified`) → cookie de sessão | `search:read`; admins: todos |
+| Pessoa autorizada pela Microsoft (tenant `AZURE_TENANT_ID`; e-mail em `AZURE_ALLOWED_EMAILS`/admins, ou `AZURE_ALLOWED_DOMAIN`) | `GET /auth/login?provider=microsoft` (OIDC + PKCE; valida assinatura, `nonce`, `iss` e `tid` do tenant; recusa guests) → cookie de sessão | `search:read`; admins: todos |
+| Cliente MCP conectado por OAuth | o cliente abre o navegador → login → consentimento → token `cix_` (kind `oauth`) + refresh token | só `search:read` |
 | Agent / automação | `Authorization: Bearer cix_...` | os do token |
+
+Com Google e Microsoft configurados, `/auth/login` mostra a escolha. A pessoa é identificada pelo e-mail: a
+mesma pessoa vê os mesmos tokens entrando por qualquer um dos dois.
 
 **Scopes:**
 - `search:read`: busca, leitura de arquivos e listagens, inclusive todo o MCP;
@@ -388,8 +393,8 @@ Entre com uma API key (`cix_...`). A página só chama `/api/v1` com essa chave.
 **Tokens de agent:**
 - O valor é mostrado só uma vez. No banco fica apenas o HMAC-SHA256 com `CODE_INDEX_AUTH_SECRET`.
 - Têm validade (padrão de 90 dias) e podem ser revogados.
-- **Só pessoas logadas pelo Google emitem tokens** (`POST /api/v1/tokens`), e só com scopes que elas já têm.
-  Um token nunca emite outro.
+- **Só pessoas logadas no navegador emitem tokens** (`POST /api/v1/tokens`), e só com scopes que elas já têm.
+  Um token (de agent ou OAuth) nunca emite outro.
 - O primeiro token (bootstrap) é emitido pelo operador no servidor:
   ```bash
   uv run code-index token create "claude-code" --owner voce@gmail.com            # search:read
@@ -421,12 +426,28 @@ Entre com uma API key (`cix_...`). A página só chama `/api/v1` com essa chave.
 | `GET /api/v1/repos` · `GET /api/v1/orgs` | search:read |
 | `POST /api/v1/sync` (job em background) · `GET /api/v1/sync/jobs` · `GET /api/v1/sync/jobs/{id}` | index:write |
 | `POST/DELETE /api/v1/repos…` · `POST/PATCH/DELETE /api/v1/orgs…` · `GET /api/v1/audit` | admin |
-| `GET/POST/DELETE /api/v1/tokens` | sessão Google (emitir); dono ou admin (revogar) |
+| `GET/POST/DELETE /api/v1/tokens` | sessão do navegador (emitir); dono ou admin (revogar, inclusive clientes OAuth) |
+| `GET /auth/providers` | público: provedores de login ativos |
 
 ### MCP no Claude Code
 
-Os tokens de agent servem para o MCP. O `.mcp.json` deste projeto lê `CODE_INDEX_URL` e `CODE_INDEX_TOKEN`
-do ambiente. Para usar em qualquer projeto:
+**Com login no navegador (OAuth, recomendado):** adicione o servidor sem token. O cliente descobre o login
+(`/.well-known/oauth-protected-resource/mcp`), se registra, abre o navegador e, depois de você entrar com
+Google ou Microsoft e clicar em *Permitir*, recebe o token e o renova sozinho.
+
+```bash
+claude mcp add --scope user --transport http code-index https://<host>/mcp
+# no Claude Code: /mcp → code-index → Authenticate
+```
+
+O token OAuth só lê (`search:read`), vale `CODE_INDEX_OAUTH_ACCESS_TTL_HOURS` (8 h) e é renovado pelo refresh
+token (`CODE_INDEX_OAUTH_REFRESH_TTL_DAYS`, 30 dias), que é trocado a cada uso: o reuso de um refresh antigo
+derruba a conexão inteira. Para desconectar um cliente, revogue-o na aba *Tokens* (aparece como "conectado via
+OAuth"). Clientes cujo retorno não é `http://localhost`/`127.0.0.1` (ex.: conectores web) precisam do prefixo
+em `CODE_INDEX_OAUTH_REDIRECT_URIS`.
+
+**Com token colado:** os tokens de agent também servem para o MCP. O `.mcp.json` deste projeto lê
+`CODE_INDEX_URL` e `CODE_INDEX_TOKEN` do ambiente. Para usar em qualquer projeto:
 
 ```bash
 claude mcp add --scope user --transport http code-index https://<host>/mcp \
@@ -455,6 +476,25 @@ sync fica na API e na interface, que mostram a prévia e pedem confirmação.
    Sem nenhuma dessas configurações, ninguém entra.
 
 Depois do login, o `/docs` funciona como painel: as chamadas usam o cookie de sessão.
+
+### Login Microsoft (Entra ID): configuração
+
+Funciona junto com o Google (os dois botões aparecem) ou sozinho.
+
+1. No portal do Azure, em *Microsoft Entra ID → App registrations → New registration*: contas *somente
+   deste diretório* (single tenant); plataforma *Web*; redirect URI `<CODE_INDEX_PUBLIC_URL>/auth/callback`
+   (o mesmo do Google). A Microsoft só aceita `http` em endereço local: para testar na máquina, use
+   `http://localhost:8765/auth/callback` e `CODE_INDEX_PUBLIC_URL=http://localhost:8765`.
+2. Em *Certificates & secrets*, crie um client secret. Anote o *Application (client) ID* e o
+   *Directory (tenant) ID* (um GUID).
+3. Em *API permissions*, mantenha `openid`, `email` e `profile` (Microsoft Graph, delegadas).
+4. No `.env`: `AZURE_TENANT_ID` (o GUID, nunca `common`/`organizations`), `AZURE_CLIENT_ID`,
+   `AZURE_CLIENT_SECRET` e quem pode entrar: `AZURE_ALLOWED_DOMAIN` (ex.: `empresa.com.br`) e/ou
+   `AZURE_ALLOWED_EMAILS`. `CODE_INDEX_ADMIN_EMAILS` vale para os dois provedores.
+
+Por que a regra é mais estrita que a do Google: no Entra o e-mail não tem `email_verified` e pode ser editado
+pelo administrador de qualquer tenant ("nOAuth"). Por isso só um tenant é aceito (`iss` e `tid` exatos) e
+contas convidadas (guest) são recusadas.
 
 ## Arquitetura
 

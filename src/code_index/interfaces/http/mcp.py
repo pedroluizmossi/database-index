@@ -2,6 +2,8 @@
 
 - Toda requisição exige `Authorization: Bearer cix_...` com scope `search:read`
   (o SDK do MCP responde 401/403 antes de chegar às tools).
+- O token vem colado (agent, emitido na interface) ou do OAuth: o cliente MCP abre o navegador, a pessoa
+  entra com Google ou Microsoft e aprova (servidor de autorização em mcp_oauth.py, metadados em /.well-known).
 - O MCP só lê: indexar fica na API e na interface, com confirmação.
 - Proteção contra DNS rebinding: só aceita os hosts/origens configurados.
 - Cada chamada de tool passa pelo rate limit e vai para a auditoria (sem o conteúdo retornado).
@@ -16,15 +18,16 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from mcp.server.auth.middleware.auth_context import get_access_token
-from mcp.server.auth.provider import AccessToken
-from mcp.server.auth.settings import AuthSettings
+from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 
 from ...domain.auth import SEARCH_READ, Principal
+from ...domain.oauth import OAUTH_SCOPES
 from ...services import CodeIndexService
 from ...settings import Settings
+from .mcp_oauth import CodeIndexOAuthProvider
 from .mcp_guide import GUIDE, INSTRUCTIONS, investigation_prompt
 from .security import RateLimiter, enforce_rate_limit, origin_of
 
@@ -54,25 +57,6 @@ def _compact_hit(hit: dict) -> dict:
     if len(code) > MCP_CODE_MAX_CHARS:
         out["code"] = code[:MCP_CODE_MAX_CHARS] + f"\n… (trecho cortado: {len(code)} caracteres; leia com read_file_lines)"
     return out
-
-
-class ServiceTokenVerifier:
-    """Valida os tokens `cix_` no banco (mesma regra da API REST)."""
-
-    def __init__(self, get_service: ServiceGetter) -> None:
-        self._get_service = get_service
-
-    async def verify_token(self, token: str) -> AccessToken | None:
-        principal = await self._get_service().authenticate(token)
-        if principal is None:
-            return None
-        return AccessToken(
-            token=token,
-            client_id=principal.token_name or principal.kind,
-            scopes=sorted(principal.scopes),
-            subject=principal.subject,
-            claims={"kind": principal.kind, "token_id": principal.token_id, "token_name": principal.token_name},
-        )
 
 
 def _current_principal() -> Principal:
@@ -106,12 +90,17 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
     server: MCPServer[Any] = MCPServer(
         name="code-index",
         instructions=INSTRUCTIONS,
-        token_verifier=ServiceTokenVerifier(get_service),
+        # Servidor de autorização OAuth: valida também os tokens `cix_` colados (load_access_token).
+        auth_server_provider=CodeIndexOAuthProvider(settings, get_service),
         auth=AuthSettings(
             issuer_url=base,  # type: ignore[arg-type]
             resource_server_url=f"{base}/mcp",  # type: ignore[arg-type]
             required_scopes=[SEARCH_READ],
-            validate_token_resource=False,  # tokens opacos nossos; validação feita no verifier
+            validate_token_resource=False,  # tokens opacos nossos; validação feita no provider
+            client_registration_options=ClientRegistrationOptions(
+                enabled=True, valid_scopes=list(OAUTH_SCOPES), default_scopes=list(OAUTH_SCOPES),
+            ),
+            revocation_options=RevocationOptions(enabled=True),
         ),
     )
 

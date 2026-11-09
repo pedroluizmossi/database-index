@@ -27,8 +27,10 @@ from ..infra.git import GitClient, resolve_github_token
 from ..infra.github import GitHubClient
 from ..infra.grep import Grep
 from ..infra.job_store import JobStore
+from ..infra.oauth_store import OAuthStore
 from ..infra.repo_store import RepoStore
 from ..infra.symbol_store import SymbolStore
+from ..infra.user_store import UserStore
 from ..retrieval.search import Searcher
 from ..settings import Settings, get_settings
 from .apis import ApisMixin
@@ -36,17 +38,19 @@ from .auth import AuthMixin
 from .base import ServiceBase
 from .docs import DocsMixin
 from .enrich import EnrichMixin
+from .oauth import OAuthMixin
 from .ownership import OwnershipMixin
 from .repos import ReposMixin
 from .search import SearchMixin
 from .sync import SyncMixin
+from .users import UsersMixin
 from .wiki import WikiMixin
 
 log = logging.getLogger(__name__)
 
 
 class CodeIndexService(SyncMixin, ReposMixin, DocsMixin, WikiMixin, SearchMixin, ApisMixin, EnrichMixin, AuthMixin,
-                       OwnershipMixin, ServiceBase):
+                       OAuthMixin, OwnershipMixin, UsersMixin, ServiceBase):
     """Casos de uso do índice. Construído por `open_service()`, que cuida do ciclo de vida.
     Cada área fica num módulo deste pacote; as interfaces só conhecem esta classe."""
 
@@ -90,6 +94,8 @@ async def open_service(settings: Settings | None = None) -> AsyncIterator[CodeIn
                 enrich=EnrichStore(pool, settings),
                 documents=documents,
                 relations=relations,
+                oauth=OAuthStore(pool, settings),
+                users=UserStore(pool, settings),
             )
             await svc._ensure_search_indexes()
             await svc.ensure_relations()

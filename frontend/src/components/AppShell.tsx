@@ -1,13 +1,14 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { BookOpen, Braces, Database, KeyRound, LogOut, Moon, Network, ScrollText, Search, SearchCode, Sun, type LucideIcon } from "lucide-react";
+import { BookOpen, Braces, Database, KeyRound, LogOut, Moon, Network, ScrollText, Search, SearchCode, Settings, Sun, type LucideIcon } from "lucide-react";
 import { useAuth } from "../auth/AuthProvider";
 import { canWrite, hasScope } from "../lib/capabilities";
 import type { Session } from "../auth/AuthProvider";
 import type { Me } from "../api/types";
 import { applyTheme, readTheme, saveTheme, systemPrefersDark, watchSystemTheme, type Theme } from "../lib/theme";
+import { usePrefs } from "../data/PrefsProvider";
 import { cx } from "../lib/utils";
 
-export type Tab = "search" | "repos" | "docs" | "apis" | "xray" | "tokens" | "audit";
+export type Tab = "search" | "repos" | "docs" | "apis" | "xray" | "tokens" | "audit" | "settings";
 
 interface TabDef {
   id: Tab;
@@ -15,7 +16,7 @@ interface TabDef {
   icon: LucideIcon;
 }
 
-/** Abas visíveis para a sessão: tokens só com login Google; auditoria só para admin. */
+/** Abas visíveis para a sessão: tokens só com login no navegador; auditoria só para admin. */
 export function tabsFor(session: Session | null): TabDef[] {
   const tabs: TabDef[] = [
     { id: "search", label: "Busca", icon: Search },
@@ -56,7 +57,7 @@ export function AppShell({
           <TabList tabs={tabs} tab={tab} onTab={onTab} className="hidden self-stretch lg:flex" />
           <div className="ml-auto flex shrink-0 items-center gap-1">
             <ThemeToggle />
-            <UserMenu />
+            <UserMenu settingsOpen={tab === "settings"} onSettings={() => onTab("settings")} />
           </div>
         </div>
         {/* Telas estreitas: as abas descem para uma segunda linha rolável, sempre com rótulo. */}
@@ -133,7 +134,12 @@ function Brand() {
 }
 
 function ThemeToggle() {
+  const { session } = useAuth();
+  const { info, update } = usePrefs();
   const [theme, setTheme] = useState<Theme>(() => readTheme());
+  // A tela de configurações também muda o tema: acompanha o valor salvo.
+  const saved = info?.settings["ui.theme"];
+  useEffect(() => setTheme(readTheme()), [saved]);
   const [systemDark, setSystemDark] = useState(() => systemPrefersDark());
 
   useEffect(
@@ -151,6 +157,8 @@ function ThemeToggle() {
     const next: Theme = dark ? "light" : "dark";
     saveTheme(next);
     setTheme(next);
+    // Com login no navegador, a escolha fica na conta (vale em outros navegadores); senão, só neste.
+    if (canWrite(session)) void update({ "ui.theme": next }).catch(() => undefined);
   }
 
   const label = dark ? "Usar tema claro" : "Usar tema escuro";
@@ -168,7 +176,7 @@ function accessLabel(me: Me): string {
   return "leitura";
 }
 
-function UserMenu() {
+function UserMenu({ settingsOpen, onSettings }: { settingsOpen: boolean; onSettings: () => void }) {
   const { session, signOut } = useAuth();
   if (!session) return null;
   const { me } = session;
@@ -182,6 +190,18 @@ function UserMenu() {
           {accessLabel(me)}
         </span>
       </div>
+      {canWrite(session) && (
+        <button
+          type="button"
+          aria-label="Configurações"
+          title="Configurações"
+          aria-current={settingsOpen ? "page" : undefined}
+          onClick={onSettings}
+          className={cx(barIconButton, settingsOpen && "bg-white/10 text-white")}
+        >
+          <Settings className="size-4" />
+        </button>
+      )}
       <button type="button" aria-label="Sair" title="Sair" onClick={() => signOut()} className={barIconButton}>
         <LogOut className="size-4" />
       </button>

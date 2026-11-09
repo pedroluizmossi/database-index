@@ -1,7 +1,7 @@
 """Autenticação/autorização das requisições HTTP.
 
 - Credencial: `Authorization: Bearer cix_...` (agents) ou cookie de sessão `cix_session`
-  (pessoas logadas pelo Google). Token na URL nunca é aceito.
+  (pessoas logadas pelo navegador: Google ou Microsoft). Token na URL nunca é aceito.
 - Cookie + método que altera estado exige `Origin`/`Referer` da própria aplicação (CSRF).
 - Rate limit em memória por principal (janela deslizante), por categoria.
 """
@@ -69,7 +69,7 @@ def _bearer(request: Request) -> str | None:
     return value.strip() if scheme.lower() == "bearer" and value.strip() else None
 
 
-def _check_csrf(request: Request, settings: Settings) -> None:
+def check_csrf(request: Request, settings: Settings) -> None:
     """Requisições autenticadas por cookie que mudam estado precisam vir da nossa origem."""
     if request.method not in _UNSAFE_METHODS:
         return
@@ -100,7 +100,7 @@ async def optional_principal(
             headers={"WWW-Authenticate": "Bearer"},
         )
     if via_cookie:
-        _check_csrf(request, settings)
+        check_csrf(request, settings)
     request.state.principal = principal
     return principal
 
@@ -108,7 +108,7 @@ async def optional_principal(
 async def current_principal(principal: Principal | None = Depends(optional_principal)) -> Principal:
     if principal is None:
         raise HTTPException(
-            status.HTTP_401_UNAUTHORIZED, "autenticação necessária (Bearer token ou login Google em /auth/login)",
+            status.HTTP_401_UNAUTHORIZED, "autenticação necessária (Bearer token ou login em /auth/login)",
             headers={"WWW-Authenticate": "Bearer"},
         )
     return principal

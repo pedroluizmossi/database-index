@@ -14,7 +14,7 @@ export class ApiError extends Error {
 type Query = Record<string, string | number | boolean | null | undefined>;
 
 interface RequestOptions {
-  method?: "GET" | "POST" | "PUT" | "DELETE";
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
   query?: Query;
   /** Token explícito (usado no login, antes da sessão existir). */
@@ -50,7 +50,7 @@ async function send(path: string, options: RequestOptions = {}): Promise<Respons
       method: options.method ?? "GET",
       headers,
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
-      credentials: "same-origin", // envia o cookie de sessão do login Google
+      credentials: "same-origin", // envia o cookie de sessão do login no navegador
       cache: "no-store",
     });
   } catch {
@@ -59,7 +59,7 @@ async function send(path: string, options: RequestOptions = {}): Promise<Respons
 
   if (!res.ok) {
     const message = await errorMessage(res);
-    // 401 numa chamada de sessão (token colado ou cookie do Google). Chamadas com token explícito
+    // 401 numa chamada de sessão (token colado ou cookie de sessão). Chamadas com token explícito
     // (tentativa de login) não derrubam sessão alguma.
     if (res.status === 401 && !options.token) unauthorizedHandler?.();
     throw new ApiError(res.status, message, res.headers.get("Retry-After"));
@@ -79,7 +79,7 @@ export async function postJson<T>(path: string, body: unknown): Promise<T> {
 
 /** Requisição com corpo JSON opcional e método explícito (POST/PUT/DELETE). */
 export async function sendJson<T>(
-  method: "POST" | "PUT" | "DELETE",
+  method: "POST" | "PUT" | "PATCH" | "DELETE",
   path: string,
   options: Omit<RequestOptions, "method"> = {},
 ): Promise<T> {

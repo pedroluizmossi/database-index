@@ -23,9 +23,11 @@ from ..infra.enrich_store import EnrichStore
 from ..infra.git import GitClient
 from ..infra.grep import Grep
 from ..infra.job_store import JobStore
+from ..infra.oauth_store import OAuthStore
 from ..infra.relation_store import RelationStore
 from ..infra.repo_store import RepoStore
 from ..infra.symbol_store import SymbolStore
+from ..infra.user_store import UserStore
 from ..retrieval.search import Searcher
 from ..settings import Settings
 
@@ -58,6 +60,8 @@ class ServiceBase:
         enrich: EnrichStore,
         documents: DocumentStore,
         relations: RelationStore,
+        oauth: OAuthStore,
+        users: UserStore,
     ) -> None:
         self.settings = settings
         self._repos = repos
@@ -74,6 +78,8 @@ class ServiceBase:
         self._enrich = enrich
         self._documents = documents
         self._relations = relations
+        self._oauth = oauth
+        self._users = users
         self._job_lock = asyncio.Lock()  # checagem + criação de job, sem corrida entre requisições
         self._job_tasks: set[asyncio.Task[None]] = set()
         self._owner_cache: Any = None  # dono no DDD resolvido (services/ownership.py); limpo ao recalcular relações

@@ -1,16 +1,27 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { ChevronDown, Eye, EyeOff, KeyRound, SearchCode } from "lucide-react";
 import { describeError } from "../api/client";
+import { api } from "../api/endpoints";
+import type { LoginProvider } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { Alert, Button, Panel } from "../components/ui";
 
 export function LoginPage() {
-  const { signInWithGoogle, signInWithToken, notice } = useAuth();
+  const { signInWith, signInWithToken, notice } = useAuth();
+  // Provedores ativos no servidor (Google, Microsoft ou os dois). null = ainda carregando.
+  const [providers, setProviders] = useState<LoginProvider[] | null>(null);
   const [token, setToken] = useState("");
   const [remember, setRemember] = useState(false);
   const [reveal, setReveal] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api
+      .loginProviders()
+      .then(setProviders)
+      .catch(() => setProviders([]));
+  }, []);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -45,10 +56,23 @@ export function LoginPage() {
         <Panel className="space-y-6 p-6 sm:p-8">
           {message && <Alert>{message}</Alert>}
 
-          <Button type="button" onClick={signInWithGoogle} className="h-12 w-full gap-3 text-[15px]" variant="secondary">
-            <GoogleMark />
-            Entrar com Google
-          </Button>
+          {providers?.map((p) => (
+            <Button
+              key={p.name}
+              type="button"
+              onClick={() => signInWith(p.name)}
+              className="h-12 w-full gap-3 text-[15px]"
+              variant="secondary"
+            >
+              {p.name === "google" ? <GoogleMark /> : p.name === "microsoft" ? <MicrosoftMark /> : null}
+              Entrar com {p.label}
+            </Button>
+          ))}
+          {providers?.length === 0 && (
+            <p className="text-center text-sm text-zinc-500 dark:text-zinc-400">
+              Login no navegador não está configurado neste servidor. Use uma API key.
+            </p>
+          )}
 
           <details className="group rounded-xl border border-zinc-200 dark:border-zinc-800">
             <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm font-medium text-zinc-600 dark:text-zinc-300">
@@ -117,6 +141,17 @@ function GoogleMark() {
       <path fill="#34A853" d="M12 24c3.2 0 6-1.1 7.9-2.9l-3.9-3c-1.1.7-2.5 1.2-4 1.2-3.1 0-5.7-2.1-6.6-4.9H1.4v3.1C3.4 21.3 7.4 24 12 24z" />
       <path fill="#FBBC05" d="M5.4 14.4c-.2-.7-.4-1.5-.4-2.4s.1-1.6.4-2.4V6.5H1.4C.5 8.2 0 10 0 12s.5 3.8 1.4 5.5l4-3.1z" />
       <path fill="#EA4335" d="M12 4.8c1.7 0 3.3.6 4.5 1.8l3.4-3.4C17.9 1.2 15.2 0 12 0 7.4 0 3.4 2.7 1.4 6.5l4 3.1C6.3 6.9 8.9 4.8 12 4.8z" />
+    </svg>
+  );
+}
+
+function MicrosoftMark() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-5" aria-hidden="true">
+      <path fill="#F25022" d="M1 1h10.5v10.5H1z" />
+      <path fill="#7FBA00" d="M12.5 1H23v10.5H12.5z" />
+      <path fill="#00A4EF" d="M1 12.5h10.5V23H1z" />
+      <path fill="#FFB900" d="M12.5 12.5H23V23H12.5z" />
     </svg>
   );
 }

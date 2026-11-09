@@ -17,7 +17,7 @@ const SCOPES: { value: Scope; label: string; hint: string }[] = [
   { value: "admin", label: "admin", hint: "gerenciar repos, orgs e auditoria" },
 ];
 
-/** Tokens de agent. Emitir exige login com Google (o servidor também recusa token para emitir token). */
+/** Tokens de agent e clientes MCP conectados via OAuth. Emitir exige login no navegador (o servidor também recusa token para emitir token). */
 export function TokensPage() {
   const { session } = useAuth();
   const { push } = useToast();
@@ -45,8 +45,8 @@ export function TokensPage() {
     return (
       <EmptyState
         icon={ShieldOff}
-        title="Tokens são gerenciados com login Google"
-        text="Entre com a sua conta Google para criar e revogar tokens. Uma API key colada na tela não pode emitir tokens."
+        title="Tokens são gerenciados com login no navegador"
+        text="Entre com a sua conta Google ou Microsoft para criar e revogar tokens. Uma API key colada na tela não pode emitir tokens."
       />
     );
   }
@@ -99,7 +99,10 @@ export function TokensPage() {
               {tokens?.map((t) => (
                 <tr key={t.id} className="transition-colors hover:bg-zinc-50 dark:hover:bg-white/[0.02]">
                   <td className="px-4 py-3">
-                    <p className="font-medium">{t.name}</p>
+                    <p className="font-medium">
+                      {t.name}
+                      {t.kind === "oauth" && <span className="ml-2 text-xs font-normal text-zinc-500">conectado via OAuth</span>}
+                    </p>
                     <p className="font-mono text-xs text-zinc-500">{t.prefix}…</p>
                   </td>
                   <td className="px-4 py-3">

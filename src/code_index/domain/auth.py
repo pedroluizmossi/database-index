@@ -5,9 +5,14 @@ Scopes:
   index:write  — sync/reindex (gera custo na Voyage)              (automações específicas)
   admin        — gerenciar orgs/repos/tokens; implica os demais   (pessoas listadas como admin)
 
+Tipos de token:
+  session — pessoa logada no navegador (Google ou Microsoft), cookie HttpOnly
+  agent   — emitido por uma pessoa na interface/CLI para um agent (Claude, Codex, Kiro...)
+  oauth   — emitido a um cliente MCP pelo fluxo OAuth, após login e consentimento no navegador
+
 Regras de emissão de token:
-  - só pessoas logadas via Google (kind="session") emitem tokens; um token de agent nunca
-    emite outro token (evita escalada e cadeia de credenciais);
+  - só pessoas logadas no navegador (kind="session") emitem tokens; um token de agent ou OAuth
+    nunca emite outro token (evita escalada e cadeia de credenciais);
   - ninguém concede um scope que não tem.
 """
 
@@ -22,7 +27,7 @@ INDEX_WRITE = "index:write"
 ADMIN = "admin"
 ALL_SCOPES = (SEARCH_READ, INDEX_WRITE, ADMIN)
 
-TokenKind = Literal["agent", "session"]
+TokenKind = Literal["agent", "session", "oauth"]
 
 
 def validate_scopes(scopes: Iterable[str]) -> tuple[str, ...]:
@@ -42,7 +47,7 @@ def effective_scopes(scopes: Iterable[str]) -> frozenset[str]:
 
 
 def scopes_for_user(email: str, admin_emails: Iterable[str]) -> tuple[str, ...]:
-    """Scopes de uma pessoa logada via Google: admins listados têm tudo; demais, só leitura."""
+    """Scopes de uma pessoa logada no navegador: admins listados têm tudo; demais, só leitura."""
     admins = {e.lower() for e in admin_emails}
     return (ADMIN, INDEX_WRITE, SEARCH_READ) if email.lower() in admins else (SEARCH_READ,)
 
@@ -56,6 +61,7 @@ class Principal:
     scopes: frozenset[str]       # já efetivos (admin expandido)
     token_id: str | None = None
     token_name: str | None = None
+    oauth_client_id: str | None = None   # só tokens OAuth: o cliente MCP que recebeu o token
 
     def has(self, scope: str) -> bool:
         return scope in self.scopes
@@ -70,7 +76,7 @@ def check_can_issue(issuer: Principal, requested: Iterable[str]) -> tuple[str, .
     """Valida a emissão de um token de agent por `issuer`. Retorna os scopes normalizados."""
     scopes = validate_scopes(requested)
     if issuer.kind != "session":
-        raise PermissionError("tokens de agent não podem emitir outros tokens; faça login com o Google")
+        raise PermissionError("tokens de agent não podem emitir outros tokens; faça login no navegador")
     missing = [s for s in scopes if s not in issuer.scopes]
     if missing:
         raise PermissionError(f"você não tem os scopes: {', '.join(missing)}")

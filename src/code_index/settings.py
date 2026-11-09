@@ -101,7 +101,23 @@ class Settings(BaseSettings):
         default_factory=list, validation_alias="GOOGLE_ALLOWED_EMAILS"
     )
     google_allowed_domain: str | None = Field(None, validation_alias="GOOGLE_ALLOWED_DOMAIN")
-    admin_emails: Annotated[list[str], NoDecode] = Field(default_factory=list, validation_alias="CODE_INDEX_ADMIN_EMAILS")
+    # Login Microsoft (Entra ID), ao lado do Google. Um único tenant (GUID); contas convidadas não entram.
+    azure_tenant_id: str | None = Field(None, validation_alias="AZURE_TENANT_ID")
+    azure_client_id: str | None = Field(None, validation_alias="AZURE_CLIENT_ID")
+    azure_client_secret: SecretStr | None = Field(None, validation_alias="AZURE_CLIENT_SECRET")
+    azure_allowed_emails: Annotated[list[str], NoDecode] = Field(
+        default_factory=list, validation_alias="AZURE_ALLOWED_EMAILS"
+    )
+    azure_allowed_domain: str | None = Field(None, validation_alias="AZURE_ALLOWED_DOMAIN")
+    # OAuth do MCP (o servidor emite tokens para clientes MCP após o login no navegador)
+    oauth_access_ttl_hours: int = Field(8, validation_alias="CODE_INDEX_OAUTH_ACCESS_TTL_HOURS")
+    oauth_refresh_ttl_days: int = Field(30, validation_alias="CODE_INDEX_OAUTH_REFRESH_TTL_DAYS")
+    # redirect_uri aceitos no registro de clientes OAuth, além de http://localhost/127.0.0.1 (sempre aceitos).
+    # Prefixos exatos, ex.: https://claude.ai/api/mcp/auth_callback
+    oauth_redirect_uris: Annotated[list[str], NoDecode] = Field(
+        default_factory=list, validation_alias="CODE_INDEX_OAUTH_REDIRECT_URIS"
+    )
+    admin_emails:Annotated[list[str], NoDecode] = Field(default_factory=list, validation_alias="CODE_INDEX_ADMIN_EMAILS")
     session_ttl_hours: int = Field(12, validation_alias="CODE_INDEX_SESSION_TTL_HOURS")
     token_ttl_days: int = Field(90, validation_alias="CODE_INDEX_TOKEN_TTL_DAYS")
 
@@ -110,7 +126,8 @@ class Settings(BaseSettings):
     rate_limit_search_per_min: int = Field(30, validation_alias="CODE_INDEX_RATE_SEARCH_PER_MIN")
     rate_limit_sync_per_hour: int = Field(6, validation_alias="CODE_INDEX_RATE_SYNC_PER_HOUR")
 
-    @field_validator("admin_emails", "allowed_hosts", "google_allowed_emails", mode="before")
+    @field_validator("admin_emails", "allowed_hosts", "google_allowed_emails", "azure_allowed_emails",
+                     "oauth_redirect_uris", mode="before")
     @classmethod
     def _split_csv(cls, v: object) -> object:
         """Aceita lista JSON ou texto separado por vírgula (ex.: `a@x.com,b@x.com`)."""
@@ -144,8 +161,13 @@ class Settings(BaseSettings):
 
     @property
     def login_emails(self) -> frozenset[str]:
-        """E-mails autorizados a logar explicitamente (lista + admins)."""
+        """E-mails autorizados a logar pelo Google explicitamente (lista + admins)."""
         return frozenset(e.lower() for e in [*self.google_allowed_emails, *self.admin_emails])
+
+    @property
+    def azure_login_emails(self) -> frozenset[str]:
+        """E-mails autorizados a logar pela Microsoft explicitamente (lista + admins)."""
+        return frozenset(e.lower() for e in [*self.azure_allowed_emails, *self.admin_emails])
 
     @property
     def secure_cookies(self) -> bool:

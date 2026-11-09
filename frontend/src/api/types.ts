@@ -5,9 +5,40 @@ export type SearchMode = "hybrid" | "semantic" | "keyword";
 
 export interface Me {
   subject: string;
-  kind: "agent" | "session";
+  kind: "agent" | "session" | "oauth";
   scopes: string[];
   token_name: string | null;
+}
+
+export type PrefValue = string | number | boolean;
+
+/** Uma config do registro do servidor (domain/preferences.py): a tela monta o formulário a partir daqui. */
+export interface PrefSchema {
+  key: string;
+  label: string;
+  type: "choice" | "int" | "bool" | "text";
+  default: PrefValue;
+  applies_to: "ui" | "search";
+  choices?: { value: string; label: string }[];
+  minimum?: number;
+  maximum?: number;
+}
+
+/** GET/PATCH /api/v1/me/settings: valores já resolvidos (padrão → escolha da pessoa). */
+export interface UserSettings {
+  email: string;
+  display_name: string | null;
+  last_login_at: string | null;
+  settings: Record<string, PrefValue>;
+  /** Chaves que a pessoa alterou (as demais estão no padrão). */
+  changed: string[];
+  schema: PrefSchema[];
+}
+
+/** Provedor de login ativo no servidor (GET /auth/providers). */
+export interface LoginProvider {
+  name: string;
+  label: string;
 }
 
 export interface Repo {
@@ -284,7 +315,7 @@ export interface RepoInput {
 
 export interface TokenInfo {
   id: string;
-  kind: "agent" | "session";
+  kind: "agent" | "session" | "oauth";
   name: string;
   owner_email: string;
   prefix: string;

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Search, SearchX, Sparkles } from "lucide-react";
 import { ApiError, describeError } from "../api/client";
 import { api } from "../api/endpoints";
+import { usePref } from "../data/PrefsProvider";
 import type { Hit, HitKind, RepoMatch, SearchMode } from "../api/types";
 import { RepoCardDialog } from "../components/RepoCardDialog";
 import { useToast } from "../components/Toaster";
@@ -42,7 +43,9 @@ export function SearchPage() {
   const [language, setLanguage] = useState("");
   const [pathGlob, setPathGlob] = useState("");
   const [kind, setKind] = useState<"" | HitKind>("");
-  const [topK, setTopK] = useState(8);
+  const defaultTopK = usePref<number>("ui.results_per_page", 8);
+  const [topK, setTopK] = useState(defaultTopK);
+  const topKOptions = useMemo(() => [...new Set([...TOP_K, defaultTopK])].sort((a, b) => a - b), [defaultTopK]);
   const [rerank, setRerank] = useState(true);
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<Results | null>(null);
@@ -169,7 +172,7 @@ export function SearchPage() {
             </Field>
             <Field label="Resultados">
               <Select value={String(topK)} onChange={(v) => setTopK(Number(v))}>
-                {TOP_K.map((k) => (
+                {topKOptions.map((k) => (
                   <option key={k} value={k}>
                     {k}
                   </option>

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from code_index.domain.repo_card import parse_payload
 from code_index.domain.file_summary import (
     CUT_NOTE, MARK, batch, excerpt, render_summary_task, symbol_terms, text_terms, validate_summaries,
 )
@@ -63,3 +64,11 @@ def test_termos_tokenizados_como_o_indice() -> None:
     txt = text_terms("Detecta o navegador.", ["Quais versões são suportadas?"], ["compatibilidade"])
     assert {"suportadas", "compatibilidade"} <= set(txt.split()) and "suportadas" not in sym
     assert MARK not in symbol_terms(f"texto com {MARK} no meio do resumo", ["a"]).split()
+
+
+def test_entrega_com_texto_em_volta_do_json() -> None:
+    assert parse_payload('Aqui está:\n```json\n{"files": []}\n```\nPronto.') == {"files": []}
+    assert parse_payload('{"files": []}') == {"files": []}
+    import pytest
+    with pytest.raises(ValueError, match="JSON inválido"):
+        parse_payload("não consegui resumir")

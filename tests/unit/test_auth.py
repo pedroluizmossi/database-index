@@ -5,7 +5,8 @@ from __future__ import annotations
 import pytest
 
 from code_index.domain.auth import (
-    ADMIN, INDEX_WRITE, SEARCH_READ, Principal, check_can_issue, effective_scopes, scopes_for_user, validate_scopes,
+    ADMIN, ENRICH_WRITE, INDEX_WRITE, SEARCH_READ, Principal, check_can_issue, effective_scopes, scopes_for_user,
+    validate_scopes,
 )
 from code_index.interfaces.http.security import RateLimiter
 
@@ -15,12 +16,13 @@ def session(*scopes: str) -> Principal:
 
 
 def test_admin_implica_todos_os_scopes() -> None:
-    assert effective_scopes([ADMIN]) == {ADMIN, INDEX_WRITE, SEARCH_READ}
+    assert effective_scopes([ADMIN]) == {ADMIN, INDEX_WRITE, ENRICH_WRITE, SEARCH_READ}
     assert effective_scopes([SEARCH_READ]) == {SEARCH_READ}
 
 
 def test_scopes_de_usuario_google() -> None:
-    assert set(scopes_for_user("Chefe@Example.com", ["chefe@example.com"])) == {ADMIN, INDEX_WRITE, SEARCH_READ}
+    assert set(scopes_for_user("Chefe@Example.com", ["chefe@example.com"])) == {
+        ADMIN, INDEX_WRITE, ENRICH_WRITE, SEARCH_READ}
     assert scopes_for_user("dev@example.com", ["chefe@example.com"]) == (SEARCH_READ,)
 
 

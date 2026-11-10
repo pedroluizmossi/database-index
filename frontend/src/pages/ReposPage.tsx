@@ -29,6 +29,7 @@ import { useToast } from "../components/Toaster";
 import { Dialog } from "../components/Dialog";
 import { RepoDocsDialog } from "../components/RepoDocsDialog";
 import { RepoCardDialog } from "../components/RepoCardDialog";
+import { RepoSummariesLink } from "../components/summaries";
 import { OwnerDialog } from "../components/OwnerDialog";
 import { ORIGIN_HINT, ORIGIN_LABEL, ownerMatches, validOwner } from "../lib/ownership";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -1486,6 +1487,7 @@ function RepoLinks({ repo, onXray }: { repo: Repo; onXray: (target: XrayTarget) 
     <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1">
       <RepoDocsButton repo={repo} />
       <RepoCardButton repo={repo} />
+      <RepoSummariesLink repo={repo.name} className={repoLinkClass} />
       <button type="button" aria-label={`Raio X de ${repoShortName(repo.name, repo.org)}`} onClick={() => onXray({ kind: "repo", id: repo.name })} className={repoLinkClass}>
         <Network className="size-3.5" aria-hidden="true" />
         Raio X

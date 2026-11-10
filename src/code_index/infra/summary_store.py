@@ -149,10 +149,75 @@ class SummaryStore:
         files, fresh, stale = int(row["files"]), int(row["fresh"]), int(row["stale"])
         return {"files": files, "fresh": fresh, "stale": stale, "missing": files - fresh - stale}
 
-    async def get(self, repo: str, path: str) -> dict[str, Any] | None:
-        row = await self._pool.fetchrow(
-            f"SELECT repo, path, summary, questions, keywords, agent, created_at FROM {self._summaries} "
-            "WHERE repo = $1 AND path = $2", repo, path)
-        if row is None:
-            return None
+    @staticmethod
+    def _row(row: asyncpg.Record) -> dict[str, Any]:
         return {**dict(row), "questions": json.loads(row["questions"]), "keywords": json.loads(row["keywords"])}
+
+    async def get(self, repo: str, path: str) -> dict[str, Any] | None:
+        """Resumo de um arquivo, com `stale` = o arquivo mudou no índice desde que o resumo foi escrito."""
+        try:
+            row = await self._pool.fetchrow(
+                f"""SELECT s.repo, s.path, s.summary, s.questions, s.keywords, s.agent, s.created_at,
+                           s.content_hash IS DISTINCT FROM (
+                               SELECT md5(string_agg(md5(c.code), '' ORDER BY c.start_line)) FROM {self._chunks} c
+                               WHERE c.repo = s.repo AND c.path = s.path) AS stale
+                    FROM {self._summaries} s WHERE s.repo = $1 AND s.path = $2""", repo, path)
+        except asyncpg.UndefinedTableError:
+            return None
+        return self._row(row) if row else None
+
+    async def get_many(self, files: list[tuple[str, str]]) -> dict[tuple[str, str], dict[str, Any]]:
+        """Resumo e palavras-chave de vários arquivos de uma vez (para anotar resultados de busca)."""
+        if not files:
+            return {}
+        try:
+            rows = await self._pool.fetch(
+                f"""SELECT s.repo, s.path, s.summary, s.keywords FROM {self._summaries} s
+                    JOIN unnest($1::text[], $2::text[]) AS f(repo, path) ON f.repo = s.repo AND f.path = s.path""",
+                [f[0] for f in files], [f[1] for f in files])
+        except asyncpg.UndefinedTableError:
+            return {}
+        return {(r["repo"], r["path"]): {"summary": r["summary"], "keywords": json.loads(r["keywords"])} for r in rows}
+
+    async def list_repo(self, repo: str, *, limit: int = 2000) -> list[dict[str, Any]]:
+        """Resumos de um repo, por caminho."""
+        rows = await self._pool.fetch(
+            f"""SELECT repo, path, summary, questions, keywords, agent, created_at FROM {self._summaries}
+                WHERE repo = $1 ORDER BY path LIMIT $2""", repo, limit)
+        return [self._row(r) for r in rows]
+
+    async def repo_files(self, repo: str) -> list[dict[str, Any]]:
+        """Arquivos indexados de um repo (todas as linguagens), com o resumo de cada um quando existe.
+        `summarizable`: linguagem que entra na fila de resumos; `stale`: o arquivo mudou depois do resumo."""
+        try:
+            rows = await self._pool.fetch(
+                f"""SELECT f.path, f.language, f.chunks, f.lines, s.summary, s.keywords,
+                           s.path IS NOT NULL AND s.content_hash <> f.hash AS stale
+                    FROM (SELECT c.path, min(c.language) AS language, count(*) AS chunks, max(c.end_line) AS lines,
+                                 md5(string_agg(md5(c.code), '' ORDER BY c.start_line)) AS hash
+                          FROM {self._chunks} c WHERE c.repo = $1 GROUP BY c.path) f
+                    LEFT JOIN {self._summaries} s ON s.repo = $1 AND s.path = f.path
+                    ORDER BY f.path""", repo)
+        except asyncpg.UndefinedTableError:
+            return []
+        return [{"path": r["path"], "language": r["language"], "chunks": int(r["chunks"]), "lines": int(r["lines"]),
+                 "summarizable": r["language"] in SUMMARY_LANGUAGES, "summary": r["summary"],
+                 "keywords": json.loads(r["keywords"]) if r["keywords"] else [], "stale": bool(r["stale"])}
+                for r in rows]
+
+    async def coverage(self) -> list[dict[str, Any]]:
+        """Por repo: arquivos de código indexados, com resumo em dia e com resumo desatualizado."""
+        try:
+            rows = await self._pool.fetch(
+                f"""SELECT f.repo, count(*) AS files,
+                           count(*) FILTER (WHERE s.content_hash = f.hash) AS fresh,
+                           count(*) FILTER (WHERE s.path IS NOT NULL AND s.content_hash <> f.hash) AS stale
+                    FROM ({self._files_sql()}) f
+                    LEFT JOIN {self._summaries} s ON s.repo = f.repo AND s.path = f.path
+                    GROUP BY f.repo ORDER BY f.repo""",
+                list(SUMMARY_LANGUAGES), None,
+            )
+        except asyncpg.UndefinedTableError:
+            return []
+        return [{"repo": r["repo"], "files": int(r["files"]), "fresh": int(r["fresh"]), "stale": int(r["stale"])}
+                for r in rows]

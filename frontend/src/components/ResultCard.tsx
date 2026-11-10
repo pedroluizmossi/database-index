@@ -3,6 +3,7 @@ import { BookOpen, Check, Copy, ExternalLink, FileText } from "lucide-react";
 import type { Hit } from "../api/types";
 import { Badge, Button, IconButton } from "./ui";
 import { CodeLines, type CodeLine } from "./CodeLines";
+import { HitSummary } from "./summaries";
 
 interface ResultCardProps {
   hit: Hit;
@@ -98,6 +99,8 @@ export function ResultCard({ hit, maxScore, onOpen, onOpenImpl }: ResultCardProp
           })}
         </div>
       )}
+
+      {hit.summary && <HitSummary summary={hit.summary} keywords={hit.summary_keywords ?? []} />}
 
       <div className="overflow-x-auto border-y border-zinc-100 bg-zinc-50 py-2 dark:border-zinc-800 dark:bg-zinc-950/50">
         <CodeLines lines={lines} collapsedAfter={8} />

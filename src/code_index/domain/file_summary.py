@@ -20,8 +20,8 @@ from .search_text import code_terms
 # Linguagens resumidas (as do piloto). Configuração, marcação e documentação ficam de fora.
 SUMMARY_LANGUAGES = ("java", "typescript", "python", "go", "javascript", "lua", "csharp", "dart", "tsx")
 FILE_BATCH = 10            # arquivos por tarefa
-FILE_CHARS = 6000          # início de cada arquivo que vai para o agent
-BATCH_CHARS = 36000        # soma do lote
+FILE_CHARS = 25_000        # início de cada arquivo que vai para o agent
+BATCH_CHARS = 100_000      # soma do lote (uns 30 mil tokens); arquivos grandes saem em lotes menores
 SUMMARY_MIN, SUMMARY_MAX = 20, 600
 QUESTIONS = 3
 QUESTION_MAX = 200

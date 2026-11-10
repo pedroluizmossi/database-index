@@ -1,7 +1,7 @@
 """Fixtures de integração: Postgres do docker-compose em schema isolado e embeddings/rerank falsos.
 
 Isolamento: tudo fica em `tmp_path` e no schema `code_index_test`, que é apagado no teardown.
-Nunca tocamos no schema `code_index`, em `.repos/`, `.cocoindex/` ou no `repos.toml` do projeto.
+Nunca tocamos no schema `code_index`, em `.repos/` ou em `.cocoindex/` do projeto.
 Nenhuma chamada à Voyage: `litellm.aembedding` e `litellm.arerank` são substituídos por funções locais.
 """
 
@@ -76,7 +76,6 @@ def int_settings(tmp_path, monkeypatch, pg_url, clean_env) -> Iterator[Settings]
         database_url=pg_url,
         pg_schema=TEST_SCHEMA,
         github_token="token-falso-de-teste",  # evita rodar `gh auth token`
-        repos_file=base / "repos.toml",
         repos_dir=base / "repos",
         cocoindex_db=base / "cocoindex-db",
         lock_file=base / "code-index.lock",

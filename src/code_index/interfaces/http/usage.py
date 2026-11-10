@@ -2,7 +2,7 @@
 
 ASGI puro (não mexe nas respostas): mede tempo, status, tamanho da resposta e o consumo da Voyage, e grava
 via `CodeIndexService.record_usage`. A ação é o template da rota ("POST /api/v1/search"), não o caminho
-cru. Rotas que passam por `audited` (app.py) deixam os parâmetros e a contagem de itens em `request.state`;
+cru. Rotas que passam por `audited` (deps.py) deixam os parâmetros e a contagem de itens em `request.state`;
 nas demais, os parâmetros são os da query string. O MCP registra o próprio uso em mcp.py.
 """
 

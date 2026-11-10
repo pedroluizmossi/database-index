@@ -53,7 +53,7 @@ class Linker(Protocol):
 
 
 class DocSourcePlugin(Protocol):
-    type: str                  # valor de `type` no [[docs]] do repos.toml
+    type: str                  # valor de `type` da fonte de documentação (DocSource.type)
     label: str
 
     async def fetch(self, source: DocSource, dest: Path, settings: Settings, *,

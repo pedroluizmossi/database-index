@@ -4,7 +4,7 @@ Lado do repo — apelidos (aliases), de fontes que existem em qualquer stack:
   nome do repo (org__repo, repo, repo sem prefixo curto), package.json, pom.xml, pyproject.toml,
   setup.cfg, go.mod, Cargo.toml, settings.gradle e catalog-info.yaml (Backstage).
 Lado da página — menções:
-  regra explícita do repos.toml (caminho → repos), tags da página, links para o GitHub e termos do texto.
+  regra explícita da fonte (`links`: caminho → repos), tags da página, links para o GitHub e termos do texto.
 O vínculo é o cruzamento (linker `alias` em indexing/linkers.py, gravado em `relations`). Termos do texto só casam com
 apelidos FORTES: nomes curtos/genéricos ("email") ligariam páginas demais; esses só valem por tag ou regra.
 """

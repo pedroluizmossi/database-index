@@ -17,7 +17,7 @@ from ..indexing.linkers import rebuild_relations
 from ..indexing.orchestrator import Indexer, configured_repos
 from ..infra.auth_store import AuditStore, TokenStore
 from ..infra.chunk_store import ChunkStore
-from ..infra.config_file import ConfigFile
+from ..infra.config_store import ConfigStore
 from ..infra.document_store import DocumentStore
 from ..infra.enrich_store import EnrichStore
 from ..infra.git import GitClient
@@ -49,7 +49,7 @@ class ServiceBase:
         *,
         repos: RepoStore,
         chunks: ChunkStore,
-        config: ConfigFile,
+        config: ConfigStore,
         git: GitClient,
         indexer: Indexer,
         searcher: Searcher,
@@ -89,12 +89,12 @@ class ServiceBase:
 
     # ------------------------------------------------------------ repos e fontes
 
-    def _local_path(self, repo: str) -> Path:
+    async def _local_path(self, repo: str) -> Path:
         try:
             validate_name(repo)
         except ValueError:
             raise ValueError(f"repositório desconhecido: {repo}") from None
-        configured = configured_repos(self._config).get(repo)
+        configured = (await configured_repos(self._config)).get(repo)
         if configured is not None:
             return configured.local_path(self.settings.repos_dir)
         return self.settings.repos_dir / repo
@@ -116,8 +116,8 @@ class ServiceBase:
     def _code_repo_names(rows: dict[str, RepoState]) -> list[str]:
         return [r.name for r in rows.values() if r.kind == "code" and not r.ignored]
 
-    def _doc_source(self, name: str) -> DocSource:
-        source = next((d for d in self._config.load_docs() if d.name == name or d.repo_name == name), None)
+    async def _doc_source(self, name: str) -> DocSource:
+        source = next((d for d in await self._config.docs() if d.name == name or d.repo_name == name), None)
         if source is None:
             raise ValueError(f"fonte de documentação não encontrada: {name}")
         return source
@@ -136,14 +136,14 @@ class ServiceBase:
         `only`: nomes de linkers a rodar (sem recalcular o catálogo de documentos)."""
         self._owner_cache = None
         try:
-            return await rebuild_relations(self._chunks.pool, self.settings, self._config.load_docs(), only=only)
+            return await rebuild_relations(self._chunks.pool, self.settings, await self._config.docs(), only=only)
         finally:
             self._owner_cache = None  # uma requisição concorrente pode ter repovoado o cache durante o rebuild
 
     async def ensure_relations(self) -> None:
         """Primeiro uso (banco novo ou recém-migrado): calcula documentos e relações derivadas se ainda não
         existem e já há o que ligar. Barato quando já calculado (uma consulta)."""
-        sources = self._config.load_docs()
+        sources = await self._config.docs()
         present = [s for s in sources if (self.settings.repos_dir / s.repo_name).is_dir()]
         if await self._relations.has_derived() and not (present and not await self._documents.has_present()):
             return

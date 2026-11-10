@@ -12,7 +12,7 @@ from code_index.settings import Settings
 # Variáveis lidas pelo Settings. Removidas nos testes para não vazar do .env ou do shell.
 SETTINGS_ENV = (
     "CODE_INDEX_HOME", "POSTGRES_URL", "EMBED_MODEL", "EMBED_DIMENSIONS", "EMBED_MAX_INFLIGHT",
-    "RERANK_MODEL", "RERANK_CANDIDATES", "GITHUB_TOKEN", "GH_TOKEN", "CODE_INDEX_REPOS",
+    "RERANK_MODEL", "RERANK_CANDIDATES", "GITHUB_TOKEN", "GH_TOKEN",
     "CODE_INDEX_REPOS_DIR", "COCOINDEX_DB", "CODE_INDEX_BATCH",
     "CODE_INDEX_HTTP_HOST", "CODE_INDEX_HTTP_PORT", "CODE_INDEX_PUBLIC_URL", "CODE_INDEX_ALLOWED_HOSTS",
     "CODE_INDEX_AUTH_SECRET", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_ALLOWED_DOMAIN", "GOOGLE_ALLOWED_EMAILS",
@@ -38,7 +38,6 @@ def make_settings(tmp_path, clean_env) -> Callable[..., Settings]:
         values: dict = {
             "_env_file": None,
             "base_dir": base,
-            "repos_file": base / "repos.toml",
             "repos_dir": base / ".repos",
             "cocoindex_db": base / ".cocoindex",
             "lock_file": base / ".code-index.lock",

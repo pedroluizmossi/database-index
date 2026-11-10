@@ -39,10 +39,9 @@ def test_defaults_sao_os_valores_do_projeto(make_settings, tmp_path: Path) -> No
 def test_caminhos_relativos_sao_resolvidos_a_partir_de_base_dir(make_settings, tmp_path: Path) -> None:
     base = tmp_path / "projeto"
     base.mkdir()
-    s = make_settings(base_dir=base, repos_file="cfg/repos.toml", repos_dir="clones", cocoindex_db=".db")
+    s = make_settings(base_dir=base, repos_dir="clones", cocoindex_db=".db")
 
     assert s.base_dir == base.resolve()
-    assert s.repos_file == (base / "cfg" / "repos.toml").resolve()
     assert s.repos_dir == (base / "clones").resolve()
     assert s.cocoindex_db == (base / ".db").resolve()
     assert s.lock_file == (base / ".code-index.lock").resolve()
@@ -78,7 +77,6 @@ def test_aliases_de_ambiente_sao_lidos(make_settings, tmp_path: Path, monkeypatc
     monkeypatch.setenv("EMBED_MAX_INFLIGHT", "2")
     monkeypatch.setenv("RERANK_MODEL", "")
     monkeypatch.setenv("RERANK_CANDIDATES", "7")
-    monkeypatch.setenv("CODE_INDEX_REPOS", "cfg/r.toml")
     monkeypatch.setenv("CODE_INDEX_REPOS_DIR", "clones")
     monkeypatch.setenv("COCOINDEX_DB", "estado")
     monkeypatch.setenv("CODE_INDEX_BATCH", "3")
@@ -92,7 +90,6 @@ def test_aliases_de_ambiente_sao_lidos(make_settings, tmp_path: Path, monkeypatc
     assert s.embed_max_inflight == 2
     assert s.rerank_model == ""
     assert s.rerank_candidates == 7
-    assert s.repos_file == (tmp_path / "cfg" / "r.toml").resolve()
     assert s.repos_dir == (tmp_path / "clones").resolve()
     assert s.cocoindex_db == (tmp_path / "estado").resolve()
     assert s.default_batch == 3

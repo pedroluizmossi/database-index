@@ -113,7 +113,7 @@ class SearchMixin(OwnershipMixin):
 
         Aceita o nome como nas outras consultas: 'org__repo', 'org/repo' ou só 'repo'."""
         repo = (await self._resolve_repos([repo]) or [repo])[0]
-        root = await asyncio.to_thread(self._local_path, repo)
+        root = await self._local_path(repo)
         return await asyncio.to_thread(retrieval_files.read_file, root, repo, path, start_line, end_line)
 
     @staticmethod
@@ -180,15 +180,17 @@ class SearchMixin(OwnershipMixin):
         hits = await self._symbols.find(
             name, kind=kind, repos=await self._resolve_repos(repos), language=language, limit=limit
         )
-        return await asyncio.to_thread(self._fix_annotated_lines, hits)
+        roots = {h.repo: await self._local_path(h.repo) for h in hits if h.signature.startswith("@")}
+        return await asyncio.to_thread(self._fix_annotated_lines, hits, roots)
 
-    def _fix_annotated_lines(self, hits: list[SymbolHit]) -> list[SymbolHit]:
+    @staticmethod
+    def _fix_annotated_lines(hits: list[SymbolHit], roots: dict[str, Path]) -> list[SymbolHit]:
         """Classes anotadas: o índice guarda a linha da 1ª anotação (`@Service`). Acha a linha da
         declaração no clone, sem reindexar. Se não achar, mantém o que veio do índice."""
         out = []
         for h in hits:
             if h.signature.startswith("@"):
-                found = retrieval_files.declaration_line(self._local_path(h.repo), h.path, h.line, h.name)
+                found = retrieval_files.declaration_line(roots[h.repo], h.path, h.line, h.name)
                 if found:
                     h = replace(h, line=found[0], signature=found[1])
             out.append(h)
@@ -207,8 +209,8 @@ class SearchMixin(OwnershipMixin):
         """Texto exato ou regex nos clones locais, com os filtros de arquivo do índice e segredos mascarados."""
         wanted = await self._resolve_repos(repos)
         rows = await self._repos.all_rows()
-        orgs = self._config.load_orgs()
-        manual = configured_repos(self._config)
+        orgs = await self._config.orgs()
+        manual = await configured_repos(self._config)
         targets: list[GrepTarget] = []
         for row in rows.values():
             if row.ignored or (wanted is not None and row.name not in wanted):

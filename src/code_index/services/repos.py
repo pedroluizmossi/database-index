@@ -30,7 +30,7 @@ class ReposMixin(OwnershipMixin):
         include: Sequence[str] | None = None,
         extra_exclude: Sequence[str] | None = None,
     ) -> Repo:
-        """Adiciona um repo avulso (URL git, 'org/repo' do GitHub ou diretório local) ao repos.toml."""
+        """Adiciona um repo avulso (URL git, 'org/repo' do GitHub ou diretório local) à configuração."""
         url, path = normalize_source(source)
         if url is not None:
             default_name = name_from_url(url)
@@ -39,10 +39,9 @@ class ReposMixin(OwnershipMixin):
         else:
             raise ValueError(f"repositório desconhecido: {source}")
         name = name or default_name
-        repos = self._config.load_repos()
-        if any(r.name == name for r in repos):
+        if any(r.name == name for r in await self._config.repos()):
             raise ValueError(f"já existe um repo chamado {name!r}")
-        if any(d.repo_name == name for d in self._config.load_docs()):
+        if any(d.repo_name == name for d in await self._config.docs()):
             raise ValueError(f"nome reservado por uma fonte de documentação: {name!r}")
         kwargs: dict[str, Any] = {}
         if include:
@@ -50,17 +49,16 @@ class ReposMixin(OwnershipMixin):
         if extra_exclude:
             kwargs["extra_exclude"] = tuple(extra_exclude)
         repo = Repo(name=name, url=url, path=path, branch=branch, **kwargs)
-        repos.append(repo)
-        self._config.save(repos=repos)
+        if not await self._config.add(repo):
+            raise ValueError(f"já existe um repo chamado {name!r}")
         return repo
 
     async def remove_repo(self, name: str, *, keep_clone: bool = False) -> Literal["removed", "ignored"]:
         """Remove um repo avulso; um repo de org é apenas marcado como ignorado."""
-        repos = self._config.load_repos()
-        manual = next((r for r in repos if r.name == name), None)
+        manual = next((r for r in await self._config.repos() if r.name == name), None)
         if manual is not None:
             with self._indexer.exclusive():  # o sync em andamento pode estar lendo este clone
-                self._config.save(repos=[r for r in repos if r.name != name])
+                await self._config.delete("repo", name)
                 await self._repos.delete([name])
                 if not keep_clone:
                     await asyncio.to_thread(self._git.remove_clone, manual)
@@ -133,9 +131,8 @@ class ReposMixin(OwnershipMixin):
         extra_exclude: Sequence[str] = (),
     ) -> dict:
         """Adiciona uma org e descobre seus repos (não indexa). Valida o acesso antes de salvar."""
-        orgs = self._config.load_orgs()
-        if any(o.name == name for o in orgs):
-            raise ValueError(f"org já configurada: {name} (edite o repos.toml para mudar filtros)")
+        if any(o.name == name for o in await self._config.orgs()):
+            raise ValueError(f"org já configurada: {name} (use `org set` para mudar filtros)")
         org = Org(
             name=name,
             match=tuple(match),
@@ -147,7 +144,8 @@ class ReposMixin(OwnershipMixin):
             extra_exclude=tuple(extra_exclude),
         )
         stats = (await self._indexer.discover([org]))[org.name]  # valida acesso antes de salvar
-        self._config.save(orgs=orgs + [org])
+        if not await self._config.add(org):
+            raise ValueError(f"org já configurada: {name} (use `org set` para mudar filtros)")
         return stats
 
     async def set_org(
@@ -163,8 +161,7 @@ class ReposMixin(OwnershipMixin):
 
         Lista vazia limpa o filtro; `max_size_mb=0` remove o limite.
         """
-        orgs = self._config.load_orgs()
-        org = next((o for o in orgs if o.name == name), None)
+        org = next((o for o in await self._config.orgs() if o.name == name), None)
         if org is None:
             raise ValueError(f"org não configurada: {name}")
         changes: dict[str, Any] = {}
@@ -176,19 +173,19 @@ class ReposMixin(OwnershipMixin):
         if not changes:
             raise ValueError("nada a alterar (use --languages, --match, --skip ou --max-size-mb)")
         new = replace(org, **changes)
-        self._config.save(orgs=[new if o.name == name else o for o in orgs])
+        await self._config.put(new)
         return (await self._indexer.discover([new]))[new.name]
 
     # ------------------------------------------------------------ fontes de documentação
 
     async def remove_org(self, name: str, *, keep_clones: bool = False) -> int:
         """Remove uma org: apaga seus repos do estado (e, por padrão, os clones). Retorna quantos repos saíram."""
-        orgs = self._config.load_orgs()
+        orgs = await self._config.orgs()
         if not any(o.name == name for o in orgs):
             raise ValueError(f"org não configurada: {name}")
         remaining = [o for o in orgs if o.name != name]
         with self._indexer.exclusive():  # o sync em andamento pode estar lendo estes clones
-            self._config.save(orgs=remaining)
+            await self._config.delete("org", name)
             removed = await self._repos.prune_orgs([o.name for o in remaining])
             if not keep_clones:
                 for repo_name in removed:
@@ -199,7 +196,7 @@ class ReposMixin(OwnershipMixin):
 
     async def refresh_orgs(self, name: str | None = None) -> dict[str, dict]:
         """Redescobre os repos das orgs (todas, ou só a informada)."""
-        orgs = [o for o in self._config.load_orgs() if not name or o.name == name]
+        orgs = [o for o in await self._config.orgs() if not name or o.name == name]
         if not orgs:
             raise ValueError("nenhuma org configurada" + (f" com nome {name}" if name else ""))
         return await self._indexer.discover(orgs)
@@ -208,7 +205,7 @@ class ReposMixin(OwnershipMixin):
         """Por org: total e contagem por status, desatualizados, filtros ativos e linguagens."""
         rows = await self.list_repos()
         out: list[dict] = []
-        for org in self._config.load_orgs():
+        for org in await self._config.orgs():
             mine = [r for r in rows if r.org == org.name]
             by_status = Counter(r.status for r in mine)
             filters = {

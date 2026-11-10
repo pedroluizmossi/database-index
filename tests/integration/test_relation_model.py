@@ -75,7 +75,7 @@ async def test_fonte_nova_so_com_plugin(int_settings: Settings, tmp_path: Path, 
 
     async with open_service(int_settings) as svc:
         await svc.add_repo(str(front), name="email-front")
-        svc._config.save(docs=[DocSource(name="notas", url=str(notas), type="pasta")])
+        await svc._config.put(DocSource(name="notas", url=str(notas), type="pasta"))
         assert (await svc.docs_preview("notas"))["total"] == 2
         res = await svc.sync(None, batch=None, do_discover=False, progress=False)
         assert res.errors == {} and "docs__notas" in res.indexed

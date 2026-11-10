@@ -4,7 +4,7 @@ Indexador de código para repositórios git/GitHub usando [CocoIndex](https://co
 embeddings **Voyage Code 4** (via LiteLLM) e **Postgres + pgvector**. Consulta por CLI ou MCP.
 
 ```
-repos.toml ──git clone/fetch──▶ .repos/<nome> ──CocoIndex──▶ chunks (tree-sitter)
+config (banco) ──git clone/fetch──▶ .repos/<nome> ──CocoIndex──▶ chunks (tree-sitter)
                                                    │
                                                    ▼
                      voyage-code-4 (input_type=document) ──▶ pgvector (HNSW) + índice full-text (GIN)
@@ -13,7 +13,7 @@ repos.toml ──git clone/fetch──▶ .repos/<nome> ──CocoIndex──▶
 ```
 
 - **Incremental**: após um `git pull`, só arquivos alterados são reprocessados e só chunks novos
-  geram chamadas à API da Voyage. Remover um repo do `repos.toml` apaga suas linhas no próximo sync.
+  geram chamadas à API da Voyage. Remover um repo (`repo remove`) apaga suas linhas no próximo sync.
 - **Busca híbrida**: vetor (semântica) + full-text (identificadores), combinados por Reciprocal Rank Fusion.
 - **Repositórios privados**: usa `GITHUB_TOKEN` ou, se ausente, `gh auth token`. O token só vai no
   header HTTP do comando git; nunca é gravado em `.git/config`.
@@ -24,8 +24,13 @@ repos.toml ──git clone/fetch──▶ .repos/<nome> ──CocoIndex──▶
 docker compose up -d          # Postgres 17 + pgvector em localhost:5432
 cp .env.example .env          # preencha VOYAGE_API_KEY
 uv sync
-cp repos.example.toml repos.toml   # opcional: ou use `code-index repo add` / `org add`
 ```
+
+### Configuração (orgs, repos avulsos, fontes de documentação)
+
+Fica no banco (tabela `config_entries`), e não em arquivo: CLI, API e interface web gravam no mesmo lugar, e
+o worker vê a mudança sem reiniciar. Cadastre com `repo add`, `org add`, `docs add`/`wiki add` ou pela interface.
+Repos que saírem da configuração somem do índice no próximo sync.
 
 ### Servidor no Docker (opcional)
 
@@ -38,8 +43,8 @@ docker compose --profile app up -d --build      # banco + servidor
 docker compose --profile app exec app code-index token list   # CLI dentro do container
 ```
 
-A pasta do projeto é montada no container **no mesmo caminho do host**: `.repos/`, `.cocoindex/` e
-`repos.toml` são os mesmos do `uv run`, sem reprocessar nada. Rode o compose da raiz do projeto. Não há `gh`
+A pasta do projeto é montada no container **no mesmo caminho do host**: `.repos/` e `.cocoindex/` são os mesmos
+do `uv run`, sem reprocessar nada. Rode o compose da raiz do projeto. Não há `gh`
 na imagem: para repos privados, defina `GITHUB_TOKEN` no `.env`. Não rode `serve` no host ao mesmo tempo
 (mesma porta).
 
@@ -112,7 +117,7 @@ constante (camelCase, PascalCase, com `_`/`.`/`-`), chaves de i18n, números e t
 mascarados. A mesma máscara vale para `show` e para a tool `read_file_lines` do MCP. Editar `indexing/content.py` faz o próximo
 `sync` reaplicar as regras a todos os repos, reembedando só os trechos que mudaram.
 
-Use `--exclude` em `repo add` ou `org add` para somar padrões (`extra_exclude` no `repos.toml`).
+Use `--exclude` em `repo add` ou `org add` para somar padrões (`extra_exclude` na configuração).
 
 Arquivos descartados na indexação (acima do limite de tamanho ou binários) ficam registrados com o motivo:
 
@@ -225,7 +230,7 @@ uv run code-index docs unignore wiki Rascunhos/Velho
 
 **Escolher as páginas pela interface.** Em Documentação → Fontes, o admin abre **Escolher páginas**: a árvore
 da wiki (só a lista, nada é baixado) mostra o que está na seleção, o que já está no índice, o que entra e o que sai.
-Ao salvar, o servidor converte a escolha em `include`/`exclude` no `repos.toml` (`PUT /api/v1/docs/{nome}/selection`;
+Ao salvar, o servidor converte a escolha em `include`/`exclude` da fonte (`PUT /api/v1/docs/{nome}/selection`;
 a prévia das regras sai com `dry_run`) e confere que as regras reproduzem exatamente a escolha. Pasta marcada
 inteira vira `Pasta` + `Pasta/**`, então páginas criadas nela depois também entram; seções novas na raiz da wiki
 nunca entram sozinhas. Salvar não indexa: o custo só vem no próximo sync da fonte (botão **Indexar…**, com prévia).
@@ -626,14 +631,15 @@ src/code_index/
                      relations (chaves, tipos, origens), documents (tipos), repo_card, api_impl, doc_task
   infra/             mundo externo: db (pool + migrations sql/NNN_*.sql), repo_store, chunk_store (busca),
                      relation_store (relações), document_store (catálogo de documentos), enrich_store,
-                     symbol_store, auth_store, config_file (repos.toml), git, github, grep, llm
+                     symbol_store, auth_store, config_store (configuração das fontes), git, github, grep, llm
   sources/           base.py (contratos RepoSource, DocSourcePlugin, Linker), registry.py (plugins),
                      github_org, wikijs, openapi_s3
   indexing/          content (máscara/skip), code_flow (app CocoIndex), orchestrator (sync em etapas),
                      linkers (núcleo + rebuild_relations), enrich (material do cartão)
   retrieval/         search (híbrida + rerank), files (leitura com máscara)
   services/          casos de uso, um módulo por área: ÚNICO ponto usado pelas interfaces
-  interfaces/        cli.py e http/ (app FastAPI, mcp em /mcp, security): só parsing/formatação
+  interfaces/        cli/ (um módulo por grupo de comandos) e http/ (app.py monta; routes/ um APIRouter por área;
+                     mcp em /mcp, security): só parsing/formatação
 ```
 
 **Modelo de dados.** Toda fonte vira arquivos `.md` e passa pelo mesmo pipeline (chunks, embedding,

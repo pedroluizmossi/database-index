@@ -29,8 +29,7 @@ class WikiMixin(ServiceBase):
         """Cadastra uma wiki (Wiki.js), validando acesso à lista e ao conteúdo de uma página."""
         from ..sources.wikijs import WikiJsClient, WikiJsError, selected_pages
 
-        docs = self._config.load_docs()
-        if any(d.name == name for d in docs):
+        if any(d.name == name for d in await self._config.docs()):
             raise ValueError(f"fonte de documentação já existe: {name}")
         if not url.startswith(("https://", "http://")):
             raise ValueError("url da wiki deve começar com https://")
@@ -38,7 +37,7 @@ class WikiMixin(ServiceBase):
             name=name, url=url.rstrip("/"), locale=locale, include=tuple(include), exclude=tuple(exclude),
             links=tuple(DocLinkRule(path=p, repos=tuple(r)) for p, r in links),
         )
-        if any(r.name == source.repo_name for r in self._config.load_repos()):
+        if any(r.name == source.repo_name for r in await self._config.repos()):
             raise ValueError(f"fonte de documentação conflita com repo: {source.repo_name}")
         if source.repo_name in await self._repos.all_rows():
             raise ValueError(f"fonte de documentação conflita com repo existente: {source.repo_name}")
@@ -51,7 +50,8 @@ class WikiMixin(ServiceBase):
             raise WikiJsError("nenhuma página acessível para validar read:source; publique uma página antes de cadastrar")
         await client.get_page(pages[0].id)
         selected = selected_pages(source, pages)
-        self._config.save(docs=docs + [source])
+        if not await self._config.add(source):
+            raise ValueError(f"fonte de documentação já existe: {name}")
         return {"name": source.repo_name, "pages": len(selected), "pages_in_locale": len(pages)}
 
     async def index_doc_pages(self, name: str, pages: Sequence[str]) -> SyncResult:
@@ -62,7 +62,7 @@ class WikiMixin(ServiceBase):
         """
         from ..sources.wikijs import WikiJsClient, selected_pages
 
-        source = self._doc_source(name)
+        source = await self._doc_source(name)
         if source.type != "wikijs":
             raise ValueError("indexação por página só existe para wikis")
         wanted = {p.strip().strip("/") for p in pages if p.strip().strip("/")}
@@ -83,8 +83,8 @@ class WikiMixin(ServiceBase):
 
     # ------------------------------------------------------------ escolha das páginas (sem custo)
 
-    def _wiki_source(self, name: str) -> DocSource:
-        source = self._doc_source(name)
+    async def _wiki_source(self, name: str) -> DocSource:
+        source = await self._doc_source(name)
         if source.type != WIKI_TYPE:
             raise ValueError(f"escolha de páginas só existe para wikis; {source.name} é {source.type}")
         return source
@@ -100,7 +100,7 @@ class WikiMixin(ServiceBase):
         atual, as que já estão no índice e as que estão fora da busca."""
         from ..sources.wikijs import selected_pages
 
-        source = self._wiki_source(name)
+        source = await self._wiki_source(name)
         pages = sorted(await self._wiki_pages(source), key=lambda p: p.path.lower())
         chosen = {p.path for p in selected_pages(source, pages)}
         state = await self._documents.source_paths(source.repo_name)
@@ -119,7 +119,7 @@ class WikiMixin(ServiceBase):
         saíram são apagadas do índice) no próximo sync da fonte."""
         from ..sources.wikijs import selected_pages, selection_rules
 
-        source = self._wiki_source(name)
+        source = await self._wiki_source(name)
         listed = await self._wiki_pages(source)
         known = {p.path for p in listed}
         chosen = {p.strip().strip("/") for p in pages if p.strip().strip("/")}
@@ -134,7 +134,7 @@ class WikiMixin(ServiceBase):
         before = {p.path for p in selected_pages(source, listed)}
         changed = (include, exclude) != (source.include, source.exclude)
         if changed and not dry_run:
-            self._config.save(docs=[updated if d.name == source.name else d for d in self._config.load_docs()])
+            await self._config.put(updated)
         return {"name": source.repo_name, "include": list(include), "exclude": list(exclude),
                 "previous": {"include": list(source.include), "exclude": list(source.exclude)},
                 "selected": len(chosen), "added": len(chosen - before), "removed": len(before - chosen),

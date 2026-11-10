@@ -138,7 +138,7 @@ class OwnershipMixin(ServiceBase):
             if len(names) != 1:
                 raise ValueError("pasta (monorepo) só com um repositório por vez")
             key = entity_key(names[0], path)
-            root = self._local_path(names[0])
+            root = await self._local_path(names[0])
             if root.is_dir() and not (root / split_entity(key)[1]).is_dir():  # type: ignore[operator]
                 raise ValueError(f"pasta não encontrada em {names[0]}: {path}")
             return [key]

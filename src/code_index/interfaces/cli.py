@@ -1,4 +1,4 @@
-"""CLI: code-index {org, repo, sync|index, watch, search, show, enrich, relations, ...}.
+"""CLI: code-index {org, repo, sync|index, watch, worker, search, show, enrich, relations, ...}.
 
 Só parsing e formatação: as regras de negócio estão em `services.CodeIndexService`.
 Cada comando roda em UM `asyncio.run` dentro de `open_service()`.
@@ -205,6 +205,18 @@ async def _cmd_watch(a: argparse.Namespace, settings: Settings) -> None:
             except Exception:
                 logging.exception("falha no ciclo de sync")
             await asyncio.sleep(a.interval)
+
+
+async def _cmd_worker(a: argparse.Namespace, settings: Settings) -> None:
+    import signal
+
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):  # encerra limpo: o job em andamento volta à fila
+        loop.add_signal_handler(sig, stop.set)
+    async with open_service(settings) as svc:
+        n = await svc.run_sync_worker(stop, once=a.once)
+    print(f"worker encerrado ({n} job(s) reservado(s)).")
 
 
 # ---------------------------------------------------------------- consulta
@@ -933,6 +945,10 @@ def main() -> None:
     w.add_argument("-b", "--batch", type=int, default=settings.default_batch)
     w.add_argument("--interval", type=int, default=300, help="segundos entre lotes (padrão 300)")
     w.set_defaults(fn=_cmd_watch)
+
+    wk = sub.add_parser("worker", help="executa os jobs da fila de sync (pedidos pela API/interface)")
+    wk.add_argument("--once", action="store_true", help="tenta um job só e sai (sem esperar a fila)")
+    wk.set_defaults(fn=_cmd_worker)
 
     # consulta
     q = sub.add_parser("search", help="busca híbrida no código")

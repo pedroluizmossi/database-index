@@ -3,7 +3,6 @@ import { Database, ExternalLink, Network, RefreshCw, Search } from "lucide-react
 import { apiId, type XrayTarget } from "../lib/xray";
 import { api } from "../api/endpoints";
 import { ApiError, describeError } from "../api/client";
-import type { SyncJob } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { useIndex } from "../data/IndexProvider";
 import { hasScope } from "../lib/capabilities";
@@ -11,7 +10,9 @@ import { formatDateTime } from "../lib/utils";
 import { Alert, Badge, Button, EmptyState, Field, Panel, Select, Skeleton, inputClass } from "../components/ui";
 import { Dialog } from "../components/Dialog";
 import { KindIcon } from "../components/kind";
-import { JobDialog, JobsPanel, RunningJobBanner, useJobs } from "../components/JobsPanel";
+import { ActiveJobNotice, useJobs } from "../components/JobsPanel";
+import { useToast } from "../components/Toaster";
+import { useNavigation } from "../lib/navigation";
 
 type Item = Awaited<ReturnType<typeof api.openapiCatalog>>[number];
 type Source = Awaited<ReturnType<typeof api.openapiStatus>>[number];
@@ -31,7 +32,8 @@ export function ApisPage({ onXray }: { onXray: (target: XrayTarget) => void }) {
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(0);
-  const [jobDetail, setJobDetail] = useState<SyncJob | null>(null);
+  const { push } = useToast();
+  const nav = useNavigation();
   const admin = !!session && hasScope(session.me, "admin");
   const canSeeJobs = !!session && hasScope(session.me, "index:write");
 
@@ -55,9 +57,8 @@ export function ApisPage({ onXray }: { onXray: (target: XrayTarget) => void }) {
   }, []);
   useEffect(() => { void load(); }, [load]);
   const onFinished = useCallback(() => { void load(); void reload(); }, [load, reload]);
+  // Só o job ativo importa aqui (aviso e botão); a fila e o histórico de todas as fontes ficam em Indexação.
   const jobs = useJobs(canSeeJobs, onFinished);
-  const apiRepos = new Set(sources?.map((s) => s.repo) ?? []);
-  const apiJobs = { ...jobs, jobs: jobs.jobs?.filter((j) => j.params?.openapi_domain != null || j.params?.repos?.some((r) => apiRepos.has(r))) ?? null };
   const domains = useMemo(() => [...new Set((items ?? []).map((i) => i.domain))].sort(), [items]);
   const services = useMemo(() => (items ?? []).filter((i) => i.domain === domain), [items, domain]);
   const source = sources?.find((s) => s.domain === domain);
@@ -79,7 +80,17 @@ export function ApisPage({ onXray }: { onXray: (target: XrayTarget) => void }) {
   }
   async function start() {
     setBusy(true); setError("");
-    try { await api.openapiIndex(domain, all ? null : selected); setPreview(null); setSelected([]); setAll(false); await jobs.refresh(); await load(); }
+    try {
+      const started = await api.openapiIndex(domain, all ? null : selected);
+      setPreview(null); setSelected([]); setAll(false);
+      push({
+        tone: "info",
+        title: started.status === "running" ? `Indexação de ${domain} iniciada` : `Indexação de ${domain} na fila`,
+        description: "O andamento e o resultado ficam na página Indexação.",
+        action: nav?.can("indexing") ? { label: "Acompanhar em Indexação", onClick: () => nav.open("indexing") } : undefined,
+      });
+      await jobs.refresh(); await load();
+    }
     catch (e) { setError(describeError(e)); }
     finally { setBusy(false); }
   }
@@ -91,7 +102,7 @@ export function ApisPage({ onXray }: { onXray: (target: XrayTarget) => void }) {
       <Button variant="secondary" size="sm" loading={loading} onClick={() => void load()}><RefreshCw className="size-3.5" /> Atualizar</Button>
     </div>
     {error && <Alert>{error}</Alert>}
-    {jobs.running && <RunningJobBanner job={jobs.running} onOpen={setJobDetail} />}
+    {jobs.running && <ActiveJobNotice job={jobs.running} />}
     <Panel>
       <dl className="grid divide-stone-200 sm:grid-cols-3 sm:divide-x dark:divide-stone-800">
         <Summary label="domínios cadastrados" value={sources?.length} hint="seleções persistidas" />
@@ -141,10 +152,8 @@ export function ApisPage({ onXray }: { onXray: (target: XrayTarget) => void }) {
         </div>
       </>}
     </Panel>
-    {canSeeJobs && <JobsPanel state={apiJobs} onOpen={setJobDetail} />}
-    <JobDialog job={jobDetail} onClose={() => setJobDetail(null)} />
     <Dialog open={preview !== null} onClose={() => setPreview(null)} title="Prévia da indexação" description="Confira os serviços antes de iniciar." size="lg" footer={<><Button variant="secondary" onClick={() => setPreview(null)}>Cancelar</Button>{admin && <Button loading={busy} disabled={!!jobs.running} onClick={() => void start()}>Indexar seleção</Button>}</>}>
-      {preview && <div className="space-y-4 text-sm"><p><strong>Domínio:</strong> {preview.domain}</p><p><strong>Serviços:</strong> {preview.services.length} · {(preview.bytes / 1024 / 1024).toFixed(2)} MiB em arquivos de origem</p><div className="max-h-48 overflow-y-auto rounded-xl border border-stone-200 p-3 dark:border-stone-800">{preview.services.join(", ")}</div><p className="text-stone-500 dark:text-stone-400">A indexação gera custo de embeddings na Voyage. O tamanho dos arquivos não é uma estimativa de custo.</p>{!admin && <p>A indexação exige permissão de administrador.</p>}{jobs.running && <p>Já existe uma indexação em andamento.</p>}</div>}
+      {preview && <div className="space-y-4 text-sm"><p><strong>Domínio:</strong> {preview.domain}</p><p><strong>Serviços:</strong> {preview.services.length} · {(preview.bytes / 1024 / 1024).toFixed(2)} MiB em arquivos de origem</p><div className="max-h-48 overflow-y-auto rounded-xl border border-stone-200 p-3 dark:border-stone-800">{preview.services.join(", ")}</div><p className="text-stone-500 dark:text-stone-400">A indexação gera custo de embeddings na Voyage. O tamanho dos arquivos não é uma estimativa de custo.</p>{!admin && <p>A indexação exige permissão de administrador.</p>}{jobs.running && <p>Já existe uma indexação {jobs.running.status === "queued" ? "na fila" : "em andamento"}: espere ela terminar (acompanhe em Indexação).</p>}</div>}
     </Dialog>
   </div>;
 }

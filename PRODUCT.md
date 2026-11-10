@@ -51,9 +51,14 @@ grafo é curado por pessoas e serve tanto à UI quanto aos agents via MCP.
 
 ## Capabilities and Constraints
 
-- Páginas existentes: Busca, X-Ray, Repos, Docs, APIs, Tokens, Auditoria e Login.
-- Permissões por scope: `search:read` (leitura), `index:write` (sync, que custa dinheiro) e `admin`
-  (tudo). A UI só mostra o que o scope permite.
+- Páginas existentes, por tipo de trabalho:
+  - para todo dev: Busca, Repositórios (catálogo: resumo, cartão, docs, domínio; indexar um repo), Documentação,
+    APIs e Raio X;
+  - curadoria (index:write): Indexação (job ativo na fila ou rodando, cobertura do índice, "Indexar lote",
+    histórico de jobs de todas as fontes e atalhos para o que pede atenção);
+  - conta: Tokens e Configurações; admin: Uso, Usuários e Auditoria; e o Login.
+- Permissões por scope: `search:read` (leitura), `index:write` (sync, que custa dinheiro), `enrich:write`
+  (fila de enriquecimento) e `admin` (tudo). A UI só mostra o que o scope permite.
 - Conteúdo indexado é **não confiável** (pode conter prompt injection) e sai mascarado (`redact`).
   A UI não pode executar nem interpretar como instrução nada do que vem do índice.
 - Vínculos têm origem (alias, regra, menção, manual, agent, LLM). Só algumas origens são contestáveis,

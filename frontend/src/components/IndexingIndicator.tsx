@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api/endpoints";
 import type { SyncJob } from "../api/types";
 import { useIndex } from "../data/IndexProvider";
-import { cx } from "../lib/utils";
+import { cx, jobActive } from "../lib/utils";
 
 const POLL_RUNNING_MS = 3000;
 const POLL_IDLE_MS = 30000;
@@ -24,7 +24,7 @@ export function useActiveJob(enabled: boolean): SyncJob | null {
     const tick = async () => {
       if (document.visibilityState === "visible") {
         try {
-          const running = (await api.syncJobs(5)).find((j) => j.status === "running") ?? null;
+          const running = (await api.syncJobs(5)).find(jobActive) ?? null;
           if (!active) return;
           if (runningId.current && runningId.current !== running?.id) void reload();
           runningId.current = running?.id ?? null;
@@ -61,13 +61,20 @@ function fraction(job: SyncJob): number | null {
   return p.repos_total > 0 ? p.repos_done / p.repos_total : null;
 }
 
-/** Ponto pulsante + andamento no menu lateral. Clicar leva à aba onde os jobs aparecem. */
+/** Ponto pulsante + andamento no menu lateral. Clicar abre a página Indexação (job ativo e histórico). */
 export function IndexingIndicator({ job, collapsed, onOpen }: { job: SyncJob; collapsed: boolean; onOpen: () => void }) {
-  const p = job.progress;
-  const done = fraction(job);
-  const heading = p?.phase_label ?? "Indexação";
-  const detail = p && p.repos_total > 0 ? `${p.repos_done}/${p.repos_total} repositórios` : "em andamento";
-  const label = `Indexação em andamento: ${heading}, ${detail}${done !== null ? ` (${Math.round(done * 100)}%)` : ""}`;
+  const queued = job.status === "queued";
+  const p = queued ? null : job.progress;
+  const done = queued ? null : fraction(job);
+  const heading = queued ? "Na fila" : (p?.phase_label ?? "Indexação");
+  const detail = queued
+    ? (job.attempts ?? 0) > 0
+      ? "devolvido à fila"
+      : "aguardando o worker"
+    : p && p.repos_total > 0
+      ? `${p.repos_done}/${p.repos_total} repositórios`
+      : "em andamento";
+  const label = `${queued ? "Indexação na fila" : "Indexação em andamento"}: ${heading}, ${detail}${done !== null ? ` (${Math.round(done * 100)}%)` : ""}. Abrir Indexação`;
   return (
     <button
       type="button"

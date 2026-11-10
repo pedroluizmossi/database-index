@@ -27,6 +27,9 @@ PHASE_LABEL: dict[str, str] = {
     "index": "indexando",
     "finish": "finalizando",
 }
+# Etapa "index" com todos os selecionados prontos: o CocoIndex ainda percorre os demais repos indexados
+# (memo hit, em geral rápido; demora quando uma dependência de lógica, como `content.py`, mudou).
+CHECKING_OTHERS_LABEL = "verificando os demais repos"
 
 
 class _StatsSource(Protocol):
@@ -152,9 +155,12 @@ class SyncProgress:
         with self._lock:
             repos = [r.to_dict() for r in self.repos.values()]
         done = sum(1 for r in repos if r["status"] in ("done", "error", "skipped"))
+        label = PHASE_LABEL[self.phase]
+        if self.phase == "index" and repos and done == len(repos):
+            label = CHECKING_OTHERS_LABEL
         return {
             "phase": self.phase,
-            "phase_label": PHASE_LABEL[self.phase],
+            "phase_label": label,
             "repos_total": len(repos),
             "repos_done": done,
             "files_total": sum(r["files_total"] or 0 for r in repos),

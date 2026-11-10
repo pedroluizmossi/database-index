@@ -86,6 +86,16 @@ class Settings(BaseSettings):
     default_batch: int = Field(10, validation_alias="CODE_INDEX_BATCH")
     max_file_bytes: int = 512 * 1024
 
+    # Fila de sync (jobs pedidos pela API/interface): o `serve` roda o worker embutido por padrão; desligado,
+    # só o `code-index worker` (outro processo) executa os jobs. Os dois usam o mesmo código e a mesma fila.
+    sync_worker_embedded: bool = Field(True, validation_alias="CODE_INDEX_SYNC_WORKER_EMBEDDED")
+    # Lease de um job reservado; o worker o renova a cada 1/3 disso. Vencido = worker caiu: o job volta à fila.
+    sync_job_lease_seconds: float = Field(120.0, gt=0, le=3600, validation_alias="SYNC_JOB_LEASE_SECONDS")
+    # Tentativas (reservas) de um job antes de falhar de vez. Encerramento limpo do worker não conta.
+    sync_job_max_attempts: int = Field(3, ge=1, le=20, validation_alias="SYNC_JOB_MAX_ATTEMPTS")
+    # Intervalo de consulta da fila pelo worker parado (no `serve`, um pedido acorda o worker embutido na hora).
+    sync_worker_poll_seconds: float = Field(5.0, gt=0, le=600, validation_alias="SYNC_WORKER_POLL_SECONDS")
+
     # Servidor HTTP (API REST + MCP em /mcp)
     http_host: str = Field("127.0.0.1", validation_alias="CODE_INDEX_HTTP_HOST")
     http_port: int = Field(8765, validation_alias="CODE_INDEX_HTTP_PORT")

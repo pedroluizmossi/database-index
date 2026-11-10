@@ -72,8 +72,13 @@ class GitClient:
         return self._git("-C", str(dest), "rev-parse", "HEAD")
 
     def remote_head(self, url: str, branch: str | None = None) -> str | None:
-        """Commit atual do remoto sem clonar (git ls-remote)."""
-        out = self._git("ls-remote", url, branch or "HEAD", url=url)
+        """Commit atual do remoto sem clonar (git ls-remote).
+
+        Com `branch`, consulta `refs/heads/<branch>` exato: um padrão simples casa por sufixo
+        (`feature/main` traria também `refs/heads/feature/main`).
+        """
+        ref = f"refs/heads/{branch}" if branch else "HEAD"
+        out = self._git("ls-remote", url, ref, url=url)
         return out.split()[0] if out else None
 
     def remove_clone(self, repo: Repo) -> None:

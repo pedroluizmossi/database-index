@@ -12,7 +12,7 @@ from typing import Any
 
 import asyncpg
 
-from ..domain.usage import QUERY_PARAMS, UsageEvent
+from ..domain.usage import QUERY_PARAMS, QUERY_WRITE_ACTIONS, UsageEvent
 from ..settings import Settings
 
 
@@ -178,6 +178,8 @@ class UsageStore:
         where, args = self._where(days, user_id)
         keys = ", ".join(f"e.params->>'{k}'" for k in QUERY_PARAMS)
         extra = " AND e.result_count = 0 AND e.status < 400" if empty_only else ""
+        args.append(list(QUERY_WRITE_ACTIONS))
+        extra += f" AND (e.channel = 'mcp' OR e.action LIKE 'GET %' OR e.action = ANY(${len(args)}::text[]))"
         args.append(min(max(limit, 1), 200))
         rows = await self._pool.fetch(
             f"""SELECT e.action, lower(btrim(COALESCE({keys}))) AS query, count(*) AS calls,

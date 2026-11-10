@@ -107,6 +107,11 @@ class OIDCProvider:
         """Autoriza a pessoa a partir dos claims já validados (assinatura, aud, iss, nonce)."""
         raise NotImplementedError
 
+    @classmethod
+    def allows_email(cls, settings: Settings, email: str) -> bool:
+        """A allowlist do provedor ainda aceita este e-mail (sem claims: usado ao renovar tokens OAuth)."""
+        raise NotImplementedError
+
     # ------------------------------------------------------------ fluxo
 
     def start(self) -> LoginStart:

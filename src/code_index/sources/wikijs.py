@@ -325,7 +325,12 @@ async def sync_docs(
         manifest = {pid: {"updated_at": p.updated_at, "file": rel} for pid, (p, rel) in wanted.items()}
     else:
         manifest = dict(old)
-        manifest.update({pid: {"updated_at": p.updated_at, "file": rel} for pid, (p, rel) in scope.items()})
+        for pid, (p, rel) in scope.items():
+            previous = (old.get(pid) or {}).get("file", "")
+            if previous and previous != rel and (dest / previous).is_file():
+                (dest / previous).unlink()  # página mudou de caminho: não deixa órfão indexado
+                deleted += 1
+            manifest[pid] = {"updated_at": p.updated_at, "file": rel}
     _write_atomic(dest / MANIFEST, json.dumps({"pages": manifest}, ensure_ascii=False, indent=1))
     digest = hashlib.sha256(json.dumps(sorted(manifest.items())).encode()).hexdigest()[:16]
     return DocSyncResult(total=len(scope), changed=len(to_fetch), deleted=deleted, revision=f"docs:{digest}")

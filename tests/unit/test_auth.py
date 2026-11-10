@@ -57,3 +57,15 @@ def test_rate_limiter_janela_deslizante(monkeypatch: pytest.MonkeyPatch) -> None
     assert rl.hit("search", "t2", limit=2, window=60) is None  # outra chave, outro balde
     now[0] += 61
     assert rl.hit("search", "t1", limit=2, window=60) is None
+
+
+def test_rate_limiter_descarta_chaves_ociosas(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = [1000.0]
+    monkeypatch.setattr("code_index.interfaces.http.security.time.monotonic", lambda: now[0])
+    rl = RateLimiter()
+    for i in range(100):  # tokens que rotacionam: cada um usado uma vez e nunca mais
+        assert rl.hit("search", f"t{i}", limit=2, window=60) is None
+    now[0] += 61
+    for _ in range(RateLimiter._SWEEP_EVERY):
+        assert rl.hit("search", "ativo", limit=10**6, window=60) is None
+    assert set(rl._events) == {("search", "ativo")}

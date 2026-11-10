@@ -106,6 +106,17 @@ async def test_troca_de_caminhos_com_data_inalterada_rebaixa_as_paginas(wiki: Fa
     assert "# Webhooks" in (tmp_path / "pt-br/Plataforma/Email.md").read_text()
 
 
+async def test_pagina_movida_num_subconjunto_apaga_o_arquivo_antigo(wiki: FakeWiki, tmp_path: Path) -> None:
+    await sync_docs(SOURCE, client(wiki), tmp_path)
+    old = tmp_path / "pt-br/Plataforma/Email.md"
+    assert old.is_file()
+    wiki.pages[1]["path"] = "Plataforma/Email-v2"
+    result = await sync_docs(SOURCE, client(wiki), tmp_path, only=frozenset({"Plataforma/Email-v2"}))
+    assert result.deleted == 1
+    assert not old.exists()
+    assert (tmp_path / "pt-br/Plataforma/Email-v2.md").is_file()
+
+
 async def test_token_ausente_ou_recusado() -> None:
     with pytest.raises(WikiJsError, match="WIKIJS_TOKEN"):
         WikiJsClient("https://w", None)

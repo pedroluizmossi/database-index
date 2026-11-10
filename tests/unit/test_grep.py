@@ -43,10 +43,22 @@ async def test_case_sensitive_e_regex(repo: GrepTarget) -> None:
 
 
 async def test_mascara_e_limite(repo: GrepTarget) -> None:
-    res = await Grep().search([repo], "apiKey", mask=lambda _p, line: line.replace("a8f9d0s9f8d0s9f8", "***"))
+    async def mask(_path: Path, _line: int, line: str) -> str:
+        return line.replace("a8f9d0s9f8d0s9f8", "***")
+
+    res = await Grep().search([repo], "apiKey", mask=mask)
     assert res.matches and all("a8f9d0" not in m.text and "***" in m.text for m in res.matches)
     res = await Grep().search([repo], "saldo", max_results=2)
     assert len(res.matches) == 2 and res.truncated
+
+
+async def test_linha_gigante_nao_derruba_o_grep(repo: GrepTarget) -> None:
+    # Arquivo abaixo do --max-filesize, mas com 250 mil ocorrências numa linha: o evento JSON do rg
+    # passa do limite do leitor. A linha é pulada e as outras voltam.
+    (repo.root / "src" / "dados.py").write_text("z " * 250_000 + "\n")
+    (repo.root / "src" / "outro.py").write_text("z = 1\n")
+    res = await Grep().search([repo], "z", case_sensitive=True)
+    assert {m.path for m in res.matches} == {"src/outro.py"}
 
 
 async def test_filtro_de_caminho(repo: GrepTarget) -> None:

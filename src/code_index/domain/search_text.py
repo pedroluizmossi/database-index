@@ -121,7 +121,7 @@ def query_kind(query: str) -> QueryKind:
     q = query.strip()
     if not q or " " in q:
         return "natural"
-    if re.search(r"[a-z][A-Z]|_|\.|::|\(|\)", q) or q.isupper():
+    if re.search(r"[a-z][A-Z]|[A-Z]{2,}[a-z]|_|\.|::|\(|\)", q) or q.isupper():
         return "identifier"
     return "natural"
 

@@ -81,6 +81,13 @@ class TokenStore:
         self._pool = pool
         self._t = f'"{settings.pg_schema}".api_tokens'
         self._users = f'"{settings.pg_schema}".users'
+        self._refresh = f'"{settings.pg_schema}".oauth_refresh_tokens'
+        # Token OAuth vencido cujo refresh ainda vale: o cliente segue conectado (renova quando voltar a ser usado).
+        # Ele continua na lista e no banco para a pessoa poder desconectar o cliente por ele.
+        self._oauth_connected = (
+            f"(kind = 'oauth' AND EXISTS (SELECT 1 FROM {self._refresh} r WHERE r.access_token_id = {self._t}.id "
+            "AND r.revoked_at IS NULL AND r.expires_at > now()))"
+        )
         self._settings = settings
 
     def _secret(self) -> str:
@@ -146,7 +153,7 @@ class TokenStore:
             args.append(owner_email.lower())
             where.append(f"owner_email = ${len(args)}")
         if not include_inactive:
-            where.append("revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())")
+            where.append(f"revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now() OR {self._oauth_connected})")
         rows = await self._pool.fetch(
             f"SELECT {_COLS} FROM {self._t} WHERE {' AND '.join(where)} ORDER BY created_at DESC", *args
         )
@@ -171,9 +178,11 @@ class TokenStore:
     async def purge_expired_sessions(self) -> int:
         """Remove sessões e tokens OAuth vencidos há mais de 1 dia (os de agent ficam para histórico).
 
-        Tokens OAuth são de vida curta e renovados pelo refresh: sem isto, a tabela cresceria a cada hora."""
+        Tokens OAuth são de vida curta e renovados pelo refresh: sem isto, a tabela cresceria a cada hora.
+        Fica o último de cada cliente ainda conectado (refresh válido): é por ele que a pessoa desconecta."""
         res = await self._pool.execute(
-            f"DELETE FROM {self._t} WHERE kind IN ('session', 'oauth') AND expires_at < now() - interval '1 day'"
+            f"DELETE FROM {self._t} WHERE kind IN ('session', 'oauth') AND expires_at < now() - interval '1 day' "
+            f"AND NOT {self._oauth_connected}"
         )
         return int(res.split()[-1])
 

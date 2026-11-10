@@ -243,6 +243,16 @@ class SyncResult:
     def to_dict(self) -> dict:
         return asdict(self)
 
+    @property
+    def all_failed(self) -> bool:
+        """Nada foi indexado e os selecionados falharam: o sync falhou (job `failed`, CLI com código 1)."""
+        return bool(self.selected and not self.indexed and self.errors)
+
+    def first_error(self) -> str:
+        """Primeira linha do primeiro erro ("" se não há erro ou a mensagem é vazia)."""
+        msg = next(iter(self.errors.values()), "")
+        return msg.splitlines()[0] if msg else ""
+
 
 @dataclass
 class SymbolHit:

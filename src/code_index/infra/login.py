@@ -30,3 +30,8 @@ def open_provider(settings: Settings, name: str) -> OIDCProvider:
     if cls is None or cls not in configured_providers(settings):
         raise RuntimeError(f"login '{name}' não está configurado neste servidor")
     return cls(settings)  # type: ignore[call-arg]
+
+
+def email_allowed(settings: Settings, email: str) -> bool:
+    """Algum provedor configurado ainda autoriza este e-mail (a allowlist pode ter mudado desde o login)."""
+    return any(cls.allows_email(settings, email) for cls in configured_providers(settings))

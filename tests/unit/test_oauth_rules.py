@@ -41,6 +41,19 @@ def test_prefixo_configurado() -> None:
         check_redirect_uris([])
 
 
+@pytest.mark.parametrize("uri", [
+    "https://app.example.com@evil.com/cb",        # usuário no URL: o host é evil.com
+    "https://app.example.com.evil.com/cb",
+    "https://app.example.com:8443/cb",            # outra porta
+    "https://claude.ai/api/mcp/auth_callbackevil",  # caminho sem fronteira de segmento
+])
+def test_prefixo_exige_mesmo_host_e_fronteira_de_caminho(uri: str) -> None:
+    prefixes = ["https://app.example.com", "https://claude.ai/api/mcp/auth_callback"]
+    assert not redirect_uri_allowed(uri, prefixes)
+    assert redirect_uri_allowed("https://app.example.com/cb", prefixes)
+    assert redirect_uri_allowed("https://claude.ai/api/mcp/auth_callback?x=1", prefixes)
+
+
 def test_oauth_so_concede_leitura_mesmo_para_admin() -> None:
     admin = (ADMIN, INDEX_WRITE, SEARCH_READ)
     assert grant_scopes(None, admin) == (SEARCH_READ,)

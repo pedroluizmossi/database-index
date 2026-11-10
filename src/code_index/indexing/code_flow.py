@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from pathlib import Path, PurePath
 from typing import Annotated, Any
 
 import asyncpg
@@ -22,7 +23,7 @@ import cocoindex as coco
 from cocoindex.connectors import localfs, postgres
 from cocoindex.ops.litellm import LiteLLMEmbedder
 from cocoindex.ops.text import RecursiveSplitter, detect_code_language
-from cocoindex.resources.file import FileLike, PatternFilePathMatcher
+from cocoindex.resources.file import FileLike, FilePathMatcher, PatternFilePathMatcher
 from cocoindex.resources.id import IdGenerator
 from numpy.typing import NDArray
 
@@ -280,6 +281,26 @@ def _declare_symbols(
             container = d.name
 
 
+class _RepoMatcher(FilePathMatcher):
+    """Filtros do repo (include/exclude) e nada de symlinks: o walker do CocoIndex segue links, e um link
+    commitado (`config.yaml -> /app/.env`, `lib -> /etc`) levaria arquivos de fora do clone ao índice."""
+
+    def __init__(self, root: Path, repo: Repo) -> None:
+        self._root = root
+        self._patterns = PatternFilePathMatcher(included_patterns=list(repo.include), excluded_patterns=repo.all_excludes)
+
+    def is_dir_included(self, path: PurePath) -> bool:
+        return self._patterns.is_dir_included(path) and not (self._root / path).is_symlink()
+
+    def is_file_included(self, path: PurePath) -> bool:
+        return self._patterns.is_file_included(path) and not (self._root / path).is_symlink()
+
+
+def _walk_repo(repo: Repo) -> Any:
+    root = repo.local_path(get_settings().repos_dir)
+    return localfs.walk_dir(root, recursive=True, path_matcher=_RepoMatcher(root.resolve(), repo))
+
+
 @coco.fn(memo=True)
 async def index_repo(
     repo: Repo,
@@ -292,14 +313,7 @@ async def index_repo(
     e as linhas já gravadas são mantidas. Por isso o custo de um sync é proporcional
     aos repos que mudaram, não ao tamanho da org."""
     root = repo.local_path(get_settings().repos_dir)
-    files = localfs.walk_dir(
-        root,
-        recursive=True,
-        path_matcher=PatternFilePathMatcher(
-            included_patterns=list(repo.include),
-            excluded_patterns=repo.all_excludes,
-        ),
-    )
+    files = _walk_repo(repo)
     if repo.kind == "code":
         for alias, origin in repo_name_aliases(repo.name):
             doc_targets.aliases.declare_row(row=RepoAlias(
@@ -316,11 +330,7 @@ async def count_repo_files(repo: Repo) -> int:
 
     Fica fora do `index_repo` de propósito: mudar o corpo de uma função memoizada força revarrer os repos.
     """
-    files = localfs.walk_dir(
-        repo.local_path(get_settings().repos_dir),
-        recursive=True,
-        path_matcher=PatternFilePathMatcher(included_patterns=list(repo.include), excluded_patterns=repo.all_excludes),
-    )
+    files = _walk_repo(repo)
     return sum([1 async for _ in files.items()])
 
 

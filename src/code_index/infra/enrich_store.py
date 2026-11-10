@@ -193,21 +193,33 @@ class EnrichStore:
         """Reserva o próximo repo pendente (sem cartão primeiro). Seguro com vários agents em paralelo."""
         async with self._pool.acquire() as conn:
             async with conn.transaction():
-                where = " AND c.repo = $1" if repo else ""
-                row = await conn.fetchrow(
-                    f"SELECT c.repo, c.input_hash {self._pending_sql()}{where} "
-                    "ORDER BY (c.card IS NOT NULL), c.repo LIMIT 1 FOR UPDATE OF c SKIP LOCKED",
-                    *([repo] if repo else []),
-                )
-                if row is None:
-                    return None
-                task = await conn.fetchrow(
-                    f"""INSERT INTO {self._tasks} (kind, repo, input_hash, agent, status, lease_until)
-                        VALUES ('card', $1, $2, $3, 'leased', now() + make_interval(mins => $4))
-                        ON CONFLICT DO NOTHING RETURNING *""",
-                    row["repo"], row["input_hash"], agent, lease_minutes,
-                )
-        return _task(task) if task else None
+                lost: list[str] = []  # repos cujo INSERT perdeu a corrida (outra tarefa reservada)
+                for _ in range(5):
+                    params: list[Any] = []
+                    where = ""
+                    if repo:
+                        params.append(repo)
+                        where += f" AND c.repo = ${len(params)}"
+                    if lost:
+                        params.append(lost)
+                        where += f" AND c.repo <> ALL(${len(params)}::text[])"
+                    row = await conn.fetchrow(
+                        f"SELECT c.repo, c.input_hash {self._pending_sql()}{where} "
+                        "ORDER BY (c.card IS NOT NULL), c.repo LIMIT 1 FOR UPDATE OF c SKIP LOCKED",
+                        *params,
+                    )
+                    if row is None:
+                        return None
+                    task = await conn.fetchrow(
+                        f"""INSERT INTO {self._tasks} (kind, repo, input_hash, agent, status, lease_until)
+                            VALUES ('card', $1, $2, $3, 'leased', now() + make_interval(mins => $4))
+                            ON CONFLICT DO NOTHING RETURNING *""",
+                        row["repo"], row["input_hash"], agent, lease_minutes,
+                    )
+                    if task:
+                        return _task(task)
+                    lost.append(row["repo"])
+        return None
 
     async def set_candidates(self, task_id: str, candidates: list[str]) -> None:
         await self._pool.execute(f"UPDATE {self._tasks} SET candidates = $2::jsonb WHERE id = $1::uuid",
@@ -308,7 +320,15 @@ class EnrichStore:
 
     async def complete_doc_task(self, conn: asyncpg.Connection, task: EnrichTask, results: list[dict[str, Any]],
                                 agent: str) -> None:
-        """Registra a análise de cada página (não volta para a fila enquanto não mudar) e fecha a tarefa."""
+        """Registra a análise de cada página (não volta para a fila enquanto não mudar) e fecha a tarefa.
+        Entrega de tarefa expirada ou já entregue → ValueError (nada é gravado)."""
+        closed = await conn.fetchval(
+            f"UPDATE {self._tasks} SET status = 'done', finished_at = now(), last_error = NULL, "
+            "agent = CASE WHEN $2 = '' THEN agent ELSE $2 END "
+            "WHERE id = $1::uuid AND status = 'leased' RETURNING id", task.id, agent,
+        )
+        if closed is None:
+            raise ValueError(f"tarefa expirada ou já entregue: {task.id}")
         reviews = f'"{self._settings.pg_schema}".enrich_reviews'
         hashes = {p["path"]: p["hash"] for p in (task.payload or {}).get("pages", [])}
         for page in results:
@@ -318,10 +338,6 @@ class EnrichStore:
                         result = EXCLUDED.result, created_at = now()""",
                 doc_key(task.repo, page["path"]), hashes.get(page["path"], ""), agent, _jsonb(page),
             )
-        await conn.execute(
-            f"UPDATE {self._tasks} SET status = 'done', finished_at = now(), last_error = NULL, "
-            "agent = CASE WHEN $2 = '' THEN agent ELSE $2 END WHERE id = $1::uuid", task.id, agent,
-        )
 
     async def doc_queue_stats(self) -> dict[str, int]:
         pending = {}

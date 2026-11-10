@@ -83,7 +83,15 @@ class SummaryStore:
 
     async def complete(self, conn: asyncpg.Connection, task: EnrichTask, results: list[dict[str, Any]],
                        agent: str) -> None:
-        """Grava os resumos do lote e fecha a tarefa."""
+        """Grava os resumos do lote e fecha a tarefa.
+        Entrega de tarefa expirada ou já entregue → ValueError (nada é gravado)."""
+        closed = await conn.fetchval(
+            f"UPDATE {self._tasks} SET status = 'done', finished_at = now(), last_error = NULL, "
+            "agent = CASE WHEN $2 = '' THEN agent ELSE $2 END "
+            "WHERE id = $1::uuid AND status = 'leased' RETURNING id", task.id, agent,
+        )
+        if closed is None:
+            raise ValueError(f"tarefa expirada ou já entregue: {task.id}")
         hashes = {f["path"]: f["hash"] for f in (task.payload or {}).get("files", [])}
         for r in results:
             await conn.execute(

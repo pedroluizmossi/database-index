@@ -67,3 +67,10 @@ class GoogleOIDC(OIDCProvider):
         if not (by_email or by_domain):
             raise LoginError(f"a conta {email} não tem acesso a este servidor")
         return Identity(email=email, name=claims.get("name"), domain=hd, provider=self.name)
+
+    @classmethod
+    def allows_email(cls, settings: Settings, email: str) -> bool:
+        # Sem o claim `hd` (só existe no login): o domínio vale pelo sufixo do e-mail, que o login já exigiu casar.
+        domain = (settings.google_allowed_domain or "").lower()
+        email = email.lower()
+        return email in settings.login_emails or bool(domain and email.endswith("@" + domain))

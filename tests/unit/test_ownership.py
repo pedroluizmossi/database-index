@@ -151,6 +151,22 @@ def test_escopo_com_pastas_de_monorepo() -> None:
     assert owners_of(r, "sem-dono", "a") == []
 
 
+def test_escopo_segue_a_pasta_mais_especifica() -> None:
+    # repo de A; apps de B; apps/billing volta para A: o escopo concorda com owners_of em cada nível.
+    r = resolve([
+        Assignment("repo:r", Owner("a"), "manual"),
+        Assignment("dir:r/apps", Owner("b"), "manual"),
+        Assignment("dir:r/apps/billing", Owner("a"), "manual"),
+    ])
+    a, b = scope_for(r, "a"), scope_for(r, "b")
+    for path in ("x.py", "apps/y.py", "apps/billing/z.py", "apps/billingx/w.py"):
+        expected = owners_of(r, "r", path)[0].domain
+        assert a.contains("r", path) == (expected == "a"), path
+        assert b.contains("r", path) == (expected == "b"), path
+    assert a.clauses() == [("r", None, ["apps"]), ("r", "apps/billing", [])]
+    assert b.clauses() == [("r", "apps", ["apps/billing"])]
+
+
 def test_cobertura() -> None:
     r = resolve([Assignment("repo:a", Owner("x"), "manual"), Assignment("repo:b", Owner("x", "y"), "declared")])
     assert coverage(["a", "b", "c", "d"], r) == {

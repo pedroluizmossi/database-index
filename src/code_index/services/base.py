@@ -135,15 +135,19 @@ class ServiceBase:
         """Recalcula o catálogo de documentos e as relações derivadas (sem LLM e sem Voyage).
         `only`: nomes de linkers a rodar (sem recalcular o catálogo de documentos)."""
         self._owner_cache = None
-        return await rebuild_relations(self._chunks.pool, self.settings, self._config.load_docs(), only=only)
+        try:
+            return await rebuild_relations(self._chunks.pool, self.settings, self._config.load_docs(), only=only)
+        finally:
+            self._owner_cache = None  # uma requisição concorrente pode ter repovoado o cache durante o rebuild
 
     async def ensure_relations(self) -> None:
         """Primeiro uso (banco novo ou recém-migrado): calcula documentos e relações derivadas se ainda não
         existem e já há o que ligar. Barato quando já calculado (uma consulta)."""
         sources = self._config.load_docs()
-        if await self._relations.has_derived() and not (sources and not await self._documents.has_present()):
+        present = [s for s in sources if (self.settings.repos_dir / s.repo_name).is_dir()]
+        if await self._relations.has_derived() and not (present and not await self._documents.has_present()):
             return
-        if not sources and not await self._enrich.has_cards():
+        if not present and not await self._enrich.has_cards():
             return
         log.info("calculando relações pela primeira vez")
         await self.rebuild_relations()

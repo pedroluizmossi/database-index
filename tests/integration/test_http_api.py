@@ -74,9 +74,12 @@ async def _setup_tokens(settings: Settings) -> tuple[dict[str, str], dict[str, s
 def server(int_settings: Settings, fake_llm: Any, tmp_path: Any) -> Iterator[Server]:
     port = _free_port()
     url = f"http://127.0.0.1:{port}"
+    # Login Google configurado (sem rede: as sessões são criadas direto). O refresh OAuth confere a allowlist.
     settings = int_settings.model_copy(update={
         "auth_secret": SecretStr("s" * 48), "public_url": url, "http_port": port,
         "admin_emails": [ADMIN_EMAIL], "rate_limit_search_per_min": 3,
+        "google_client_id": "teste.apps.googleusercontent.com", "google_client_secret": SecretStr("x"),
+        "google_allowed_emails": [USER_EMAIL],
     })
     use_settings(settings)
     tokens, ids = asyncio.run(_setup_tokens(settings))
@@ -813,7 +816,7 @@ def test_uso_registrado_por_pessoa_tool_e_cliente(server: Server) -> None:
     assert {"query": "nada-casa-isso", "action": "grep_code"}.items() <= next(
         q for q in rep["empty_queries"] if q["action"] == "grep_code").items()
     assert rep["totals"]["calls"] >= 4 and rep["totals"]["errors"] >= 1
-    assert len(rep["daily"]) == 7 and rep["daily"][-1]["mcp"] >= 3
+    assert len(rep["daily"]) == 8 and rep["daily"][-1]["mcp"] >= 3  # 7 dias para trás tocam 8 datas
     assert {e["email"] for e in rep["recent"] if e["channel"] == "mcp"} == {USER_EMAIL}
     assert "cix_" not in json.dumps(rep)  # nunca guarda tokens
 

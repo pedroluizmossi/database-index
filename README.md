@@ -541,9 +541,12 @@ claude mcp add --scope user --transport http code-index https://<host>/mcp
 
 O token OAuth só lê (`search:read`), vale `CODE_INDEX_OAUTH_ACCESS_TTL_HOURS` (8 h) e é renovado pelo refresh
 token (`CODE_INDEX_OAUTH_REFRESH_TTL_DAYS`, 30 dias), que é trocado a cada uso: o reuso de um refresh antigo
-derruba a conexão inteira. Para desconectar um cliente, revogue-o na aba *Tokens* (aparece como "conectado via
-OAuth"). Clientes cujo retorno não é `http://localhost`/`127.0.0.1` (ex.: conectores web) precisam do prefixo
-em `CODE_INDEX_OAUTH_REDIRECT_URIS`.
+derruba a conexão inteira. Cada renovação confere de novo a allowlist do login e se a pessoa está ativa: quem
+saiu de `GOOGLE_ALLOWED_EMAILS`/`AZURE_ALLOWED_EMAILS` (ou do domínio) perde a conexão na próxima renovação.
+Para desconectar um cliente, revogue-o na aba *Tokens* (aparece como "conectado via OAuth", mesmo parado há
+dias, enquanto o refresh valer). Clientes cujo retorno não é `http://localhost`/`127.0.0.1` (ex.: conectores web)
+precisam do prefixo em `CODE_INDEX_OAUTH_REDIRECT_URIS`: mesmo esquema e host:porta, e o caminho do prefixo
+fecha num segmento (`https://site/cb` aceita `/cb` e `/cb/x`, não `/cbx` nem `https://site@outro`).
 
 **Com token colado:** os tokens de agent também servem para o MCP. O `.mcp.json` deste projeto lê
 `CODE_INDEX_URL` e `CODE_INDEX_TOKEN` do ambiente. Para usar em qualquer projeto:

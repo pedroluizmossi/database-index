@@ -43,8 +43,8 @@ _TOKENS = [
     re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"),                               # Google API key
     re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"),  # JWT
 ]
-# usuário:senha@host em URLs
-_URL_CREDS = re.compile(r"(\b[a-z][a-z0-9+.-]*://[^/\s:@'\"]+:)([^/\s@'\"]+)(@)", re.I)
+# usuário:senha@host em URLs (usuário pode faltar: redis://:senha@host)
+_URL_CREDS = re.compile(r"(\b[a-z][a-z0-9+.-]*://[^/\s:@'\"]*:)([^/\s@'\"]+)(@)", re.I)
 # .npmrc / .yarnrc: //registry.host/caminho/:_authToken=valor (também _auth e _password)
 # Em qualquer ponto da linha: aparece também citado em docs ("Valor atual: ...:_authToken=...").
 _NPMRC_AUTH = re.compile(r"(?i)(?<!\w)(:?_(?:authToken|auth|password)[ \t]*[=:][ \t]*[\"']?)([^\s\"';,)]+)")
@@ -55,9 +55,11 @@ _CONN_STR = re.compile(r"(?i)\b(AccountKey|SharedAccessKey|Password|Pwd)=([^;\"'
 _KEY = r"[\w.-]*(?:password|passwd|pwd|secret|token|api[_.-]?key|access[_.-]?key|private[_.-]?key|client[_.-]?secret|credential)s?[\w.-]*"
 # Código: só literais entre aspas (evita mascarar `password = req.getPassword()`).
 _CODE_ASSIGN = re.compile(rf"(?i)(\b{_KEY}\b[\"']?[ \t]*[:=]+[ \t]*)([\"'])([^\"'\s]{{6,}})\2")
-# Config: aceita valor sem aspas (yaml/properties/env).
+# Config: aceita valor sem aspas (yaml/properties/env), também após `export`/`ENV`/`ARG`/`set` (shell, Dockerfile).
 _CONFIG_ASSIGN = re.compile(
-    rf"(?im)^([ \t]*[\"']?{_KEY}[\"']?[ \t]*[:=][ \t]*)([\"']?)([^\s\"'#,}}]{{6,}})\2(?=[ \t]*(?:[,}}\]#]|$))")
+    rf"(?im)^([ \t]*(?:(?:export|ENV|ARG|set)[ \t]+)?[\"']?{_KEY}[\"']?[ \t]*[:=][ \t]*)([\"']?)([^\s\"'#,}}]{{6,}})\2(?=[ \t]*(?:[,}}\]#]|$))")
+# Bloco cercado de markdown (``` ou ~~~): yaml/env/properties citados em docs e páginas da wiki.
+_MD_FENCE = re.compile(r"(?m)^[ \t]*(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:^[ \t]*\1[ \t]*$|\Z)")
 
 
 _UUID = re.compile(r"(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
@@ -87,7 +89,8 @@ def redact(text: str, language: str) -> tuple[str, int]:
         count += n
         return new
 
-    text = sub(_PEM, lambda m: f"<{m.group(1).lower()} omitido>", text)
+    # Mantém a quantidade de linhas: números de linha do índice, do read_file e do grep batem com o arquivo.
+    text = sub(_PEM, lambda m: f"<{m.group(1).lower()} omitido>" + "\n" * m.group(0).count("\n"), text)
     text = sub(_BASE64_BLOB, "<base64 omitido>", text)
     for pat in _TOKENS:
         text = sub(pat, MASK, text)
@@ -122,6 +125,8 @@ def redact(text: str, language: str) -> tuple[str, int]:
     text = _CODE_ASSIGN.sub(assign, text)
     if language in _CONFIG_LANGS:
         text = _CONFIG_ASSIGN.sub(assign, text)
+    elif language == "markdown":  # só dentro dos blocos de código: na prosa, "token: obrigatório" não é segredo
+        text = _MD_FENCE.sub(lambda m: _CONFIG_ASSIGN.sub(assign, m.group(0)), text)
     return text, count
 
 

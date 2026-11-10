@@ -2,7 +2,7 @@
 
 O SDK cuida do protocolo (/.well-known/oauth-authorization-server, /authorize, /token, /register, /revoke,
 PKCE, checagem de redirect_uri e de validade). Aqui só se traduz para o serviço. A parte com a pessoa
-(login Google/Microsoft e consentimento) fica em /auth/authorize, no app.py: `authorize` devolve a URL dela
+(login Google/Microsoft e consentimento) fica em /auth/authorize, em routes/auth.py: `authorize` devolve a URL dela
 com o pedido assinado, sem estado no servidor até a aprovação.
 """
 

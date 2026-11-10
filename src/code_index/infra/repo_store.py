@@ -28,7 +28,7 @@ class RepoStore:
         return {r["name"]: RepoState(**dict(r)) for r in rows}
 
     async def reconcile_manual(self, repos: Iterable[Repo]) -> None:
-        """Espelha os [[repo]] do repos.toml na tabela (insere novos, remove os apagados)."""
+        """Espelha os repos avulsos e fontes de documentação da configuração na tabela (insere novos, remove os apagados)."""
         items = list(repos)
         t = self._t
         async with self._pool.acquire() as conn:

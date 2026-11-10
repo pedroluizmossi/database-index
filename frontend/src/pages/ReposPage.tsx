@@ -619,7 +619,7 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
           </p>
         ) : (
           <p>
-            Remover <span className="font-mono">{removeTarget?.name}</span> do repos.toml e apagar o clone local.
+            Remover <span className="font-mono">{removeTarget?.name}</span> da configuração e apagar o clone local.
             Os trechos indexados somem no próximo sync.
           </p>
         )}

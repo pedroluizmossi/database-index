@@ -77,7 +77,6 @@ class Settings(BaseSettings):
     enrich_lease_minutes: int = Field(20, ge=1, le=24 * 60, validation_alias="ENRICH_LEASE_MINUTES")
 
     # Arquivos locais (relativos a `base_dir`)
-    repos_file: Path = Field(Path("repos.toml"), validation_alias="CODE_INDEX_REPOS")
     repos_dir: Path = Field(Path(".repos"), validation_alias="CODE_INDEX_REPOS_DIR")
     cocoindex_db: Path = Field(Path(".cocoindex"), validation_alias="COCOINDEX_DB")
     lock_file: Path = Path(".code-index.lock")
@@ -159,7 +158,7 @@ class Settings(BaseSettings):
     def _resolve_paths(self) -> "Settings":
         base = self.base_dir.expanduser().resolve()
         object.__setattr__(self, "base_dir", base)
-        for name in ("repos_file", "repos_dir", "cocoindex_db", "lock_file"):
+        for name in ("repos_dir", "cocoindex_db", "lock_file"):
             p = getattr(self, name).expanduser()
             object.__setattr__(self, name, p if p.is_absolute() else (base / p).resolve())
         return self

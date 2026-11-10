@@ -25,10 +25,10 @@ log = logging.getLogger(__name__)
 
 
 class EnrichMixin(ServiceBase):
-    def _card_targets(self, rows: dict[str, RepoState]) -> dict[str, tuple[RepoState, Path]]:
+    async def _card_targets(self, rows: dict[str, RepoState]) -> dict[str, tuple[RepoState, Path]]:
         """Repos de código indexados, não ignorados, com clone local."""
-        orgs = self._config.load_orgs()
-        manual = configured_repos(self._config)
+        orgs = await self._config.orgs()
+        manual = await configured_repos(self._config)
         out: dict[str, tuple[RepoState, Path]] = {}
         for row in rows.values():
             if row.kind != "code" or row.ignored or not row.indexed:
@@ -49,7 +49,7 @@ class EnrichMixin(ServiceBase):
         """Coleta os fatos/material (sem LLM, sem custo) dos repos cuja revisão mudou desde a última coleta.
         Com `rebuild`, recalcula as relações que dependem dos fatos (SDL → API, operação → handler)."""
         wanted = await self._resolve_repos(repos)
-        targets = self._card_targets(await self._repos.all_rows())
+        targets = await self._card_targets(await self._repos.all_rows())
         done = await self._enrich.revisions()
         updated = 0
         for name, (row, root) in sorted(targets.items()):
@@ -94,7 +94,7 @@ class EnrichMixin(ServiceBase):
             return None
         card = await self._enrich.get(task.repo)
         assert card is not None
-        targets = self._card_targets(await self._repos.all_rows())
+        targets = await self._card_targets(await self._repos.all_rows())
         candidates = related_candidates(task.repo, targets.keys(), await self._enrich.all_facts())
         await self._enrich.set_candidates(task.id, candidates)
         remaining = await self._enrich.pending_count()
@@ -104,8 +104,8 @@ class EnrichMixin(ServiceBase):
                 "lease_until": _iso_local(task.lease_until), "remaining": remaining,
                 "candidates": candidates, "material": card["material"], "text": text}
 
-    def _read_page_excerpt(self, doc_repo: str, path: str) -> str:
-        root = self._local_path(doc_repo)
+    @staticmethod
+    def _read_page_excerpt(root: Path, path: str) -> str:
         if not enrich_collect.path_exists(root, path):
             return ""
         try:
@@ -133,9 +133,10 @@ class EnrichMixin(ServiceBase):
                                                       doc_repo=repo, folder=folder, pages=batch, candidates=cands)
             if task is None:  # outra reserva ativa nesta pasta
                 continue
+            root = await self._local_path(repo)
             items = [{"path": p["path"], "title": p["title"], "tags": " ".join(p["tags"]), "url": p["url"],
                       "links": p["links"],
-                      "excerpt": await asyncio.to_thread(self._read_page_excerpt, repo, p["path"])} for p in batch]
+                      "excerpt": await asyncio.to_thread(self._read_page_excerpt, root, p["path"])} for p in batch]
             remaining = len(pending) - len(batch)
             text = render_doc_task(task_id=task.id, doc_repo=repo, folder=folder, remaining_pages=remaining,
                                    pages=items, candidates=[{**c, "summary": mask_output(c["summary"] or "", "markdown")}
@@ -269,7 +270,7 @@ class EnrichMixin(ServiceBase):
             return await self._submit_doc_links(task, payload, agent.strip()[:100])
         if task.kind == "file_summaries":
             return await self._submit_file_summaries(task, payload, agent.strip()[:100])
-        root = self._local_path(task.repo)
+        root = await self._local_path(task.repo)
         try:
             raw = parse_payload(payload)
             known = self._code_repo_names(await self._repos.all_rows())
@@ -306,7 +307,7 @@ class EnrichMixin(ServiceBase):
         """Vínculos página → repo sugeridos por LLM (`enrich next --kind doc_links`), para revisão."""
         if status not in ("suggested", "active", "rejected"):
             raise ValueError("status inválido: suggested, active ou rejected")
-        doc_repo = self._doc_source(source).repo_name if source and not source.startswith("docs__") else source
+        doc_repo = (await self._doc_source(source)).repo_name if source and not source.startswith("docs__") else source
         if action not in (None, "add", "remove"):
             raise ValueError("ação inválida: add ou remove")
         return await self._relations.suggestions(status=status, doc_repo=doc_repo, confidence=confidence,

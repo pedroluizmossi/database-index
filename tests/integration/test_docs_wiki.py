@@ -196,11 +196,11 @@ async def test_cadastro_valida_conteudo_e_nao_salva_se_faltar_permissao(
     async with open_service(settings) as svc:
         with pytest.raises(WikiJsError, match="read:source"):
             await svc.add_docs("wiki", url=WIKI)
-        assert svc.list_docs() == []
+        assert await svc.list_docs() == []
         wiki.pages.clear()
         with pytest.raises(WikiJsError, match="nenhuma página acessível"):
             await svc.add_docs("wiki", url=WIKI)
-        assert svc.list_docs() == []
+        assert await svc.list_docs() == []
 
 
 async def test_colisoes_e_remocao_preservam_repositorios(
@@ -215,14 +215,14 @@ async def test_colisoes_e_remocao_preservam_repositorios(
         repo = await svc.add_repo(str(tmp_path), name="docs__wiki")
         with pytest.raises(ValueError, match="conflita"):
             await svc.add_docs("wiki", url=WIKI)
-        svc._config.save(docs=[DocSource(name="wiki", url=WIKI)])
+        await svc._config.put(DocSource(name="wiki", url=WIKI))
         with pytest.raises(ValueError, match="conflita"):
-            configured_repos(svc._config)
+            await configured_repos(svc._config)
         with pytest.raises(ValueError, match="conflita"):
             await svc.remove_docs("wiki")
-        assert svc._config.load_repos() == [repo] and svc.list_docs()
+        assert await svc._config.repos() == [repo] and await svc.list_docs()
 
-        svc._config.save(repos=[])
+        await svc._config.delete("repo", repo.name)
         with pytest.raises(ValueError, match="reservado"):
             await svc.add_repo(str(tmp_path), name="docs__wiki")
         await svc._repos.reconcile_org("docs", [DiscoveredRepo(
@@ -239,7 +239,7 @@ async def test_colisoes_e_remocao_preservam_repositorios(
         write(clone, {".git/config": "clone", "keep.txt": "dados"})
         with pytest.raises(ValueError, match="não identificada"):
             await svc.remove_docs("wiki")
-        assert (clone / "keep.txt").read_text() == "dados" and svc.list_docs()
+        assert (clone / "keep.txt").read_text() == "dados" and await svc.list_docs()
         with pytest.raises(RuntimeError, match="não identificada"):
             await svc._indexer._fetch_docs(DocSource(name="wiki", url=WIKI).to_repo(),
                                             Mock(), True)
@@ -436,7 +436,7 @@ async def test_escolha_de_paginas_grava_regras_e_vale_no_sync(int_settings: Sett
         # Prévia não grava; a escolha vira regras e só vale no próximo sync.
         prev = await svc.set_wiki_selection("wiki", ["Plataforma/Email", "Geral/Glossario"], dry_run=True)
         assert (prev["added"], prev["removed"], prev["saved"]) == (1, 1, False)
-        assert svc.list_docs()[0].include == ("Plataforma/**",)
+        assert (await svc.list_docs())[0].include == ("Plataforma/**",)
 
         res = await svc.set_wiki_selection("wiki", ["Plataforma/Email", "Geral/Glossario"])
         # Geral inteira (páginas futuras dela também); de Plataforma, só a página escolhida.

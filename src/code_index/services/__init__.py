@@ -18,7 +18,7 @@ from ..indexing.orchestrator import Indexer
 from ..infra import llm
 from ..infra.auth_store import AuditStore, TokenStore
 from ..infra.chunk_store import ChunkStore
-from ..infra.config_file import ConfigFile
+from ..infra.config_store import ConfigStore
 from ..infra.db import open_pool
 from ..infra.document_store import DocumentStore
 from ..infra.enrich_store import EnrichStore
@@ -69,7 +69,7 @@ async def open_service(settings: Settings | None = None) -> AsyncIterator[CodeIn
             documents = DocumentStore(pool, settings)
             relations = RelationStore(pool, settings)
             chunks = ChunkStore(pool, settings, documents=documents, relations=relations)
-            config = ConfigFile(settings.repos_file)
+            config = ConfigStore(pool, settings)
             git = GitClient(token, settings.repos_dir)
             indexer = Indexer(
                 settings,

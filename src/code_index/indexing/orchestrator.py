@@ -2,8 +2,8 @@
 
 Fluxo de um `sync`, em etapas (métodos privados, nesta ordem):
   1. `_lock`: um sync por vez (flock em `lock_file`);
-  2. `_discover_all`: redescobre os repos das [[org]] pela API (opcional);
-  3. `_load_rows`: espelha os [[repo]] do repos.toml na tabela de estado e poda orgs removidas;
+  2. `_discover_all`: redescobre os repos das orgs pela API (opcional);
+  3. `_load_rows`: espelha os repos avulsos e fontes de docs da configuração (banco) na tabela de estado e poda orgs removidas;
   4. `_select`: os nomes pedidos, ou um lote de até N repos (alterados upstream > pendentes > com erro);
   5. `_fetch`: clona/atualiza só os selecionados;
   6. `_run_pipeline`: roda o pipeline com TODOS os repos indexados. Os não selecionados passam com
@@ -32,7 +32,7 @@ from ..domain.policies import (
     pick_batch,
     resolve_name,
 )
-from ..infra.config_file import ConfigFile
+from ..infra.config_store import ConfigStore
 from ..infra.git import GitClient
 from ..infra.github import GitHubClient
 from ..infra.repo_store import RepoStore
@@ -59,7 +59,7 @@ class Indexer:
         self,
         settings: Settings,
         repos: RepoStore,
-        config: ConfigFile,
+        config: ConfigStore,
         git: GitClient,
         github: GitHubClient,
     ) -> None:
@@ -71,7 +71,7 @@ class Indexer:
 
     async def discover(self, orgs: list[Org] | None = None) -> dict[str, dict]:
         """Redescobre os repos das orgs (sem clonar nem indexar)."""
-        orgs = self._config.load_orgs() if orgs is None else orgs
+        orgs = await self._config.orgs() if orgs is None else orgs
         out: dict[str, dict] = {}
         for org in orgs:
             found = await GitHubOrgSource(org, self._github).discover()
@@ -98,8 +98,8 @@ class Indexer:
                aceita nomes desconhecidos no formato 'org/repo', URL ou diretório.
         batch: sem `names`, processa no máximo N repos (None = todos os candidatos).
         dry_run: só mostra a seleção: não trava o sync (pode rodar junto de um), não registra nomes novos
-               (nem no repos.toml), não clona, não indexa e não gasta tokens. Só atualiza o catálogo como
-               `orgs refresh` faria: descoberta das orgs e repos.toml → tabela de estado.
+               (nem na configuração), não clona, não indexa e não gasta tokens. Só atualiza o catálogo como
+               `orgs refresh` faria: descoberta das orgs e configuração → tabela de estado.
         allow_register: aceita nomes desconhecidos (URL, 'org/repo', diretório) registrando-os
                como repo avulso. Desligado para chamadas remotas sem scope admin.
         doc_pages: só para fontes de documentação: sincroniza apenas estas páginas (caminho sem idioma).
@@ -108,7 +108,7 @@ class Indexer:
         """
         res = SyncResult()
         if dry_run:
-            orgs = self._config.load_orgs()
+            orgs = await self._config.orgs()
             if do_discover and orgs:
                 await self._discover_all(orgs, res)
             rows = await self._load_rows(orgs)
@@ -117,7 +117,7 @@ class Indexer:
         tracker = SyncProgress()
         publish = _publisher(tracker, on_progress)
         with self.exclusive():
-            orgs = self._config.load_orgs()
+            orgs = await self._config.orgs()
             if do_discover and orgs:
                 await publish()
                 await self._discover_all(orgs, res)
@@ -132,7 +132,7 @@ class Indexer:
             tracker.select(selected)
             tracker.set_phase("fetch")
             await publish()
-            manual = configured_repos(self._config)
+            manual = await configured_repos(self._config)
             revisions = await self._fetch(
                 selected, rows, orgs, manual, forced=bool(names), pull=pull, res=res, doc_pages=doc_pages,
                 tracker=tracker, publish=publish,
@@ -186,8 +186,8 @@ class Indexer:
                 res.errors[f"org:{org.name}"] = str(e)
 
     async def _load_rows(self, orgs: list[Org]) -> dict[str, RepoState]:
-        # [[repo]] avulsos e fontes [[docs]] (cada fonte vira um repo kind="docs")
-        await self._repos.reconcile_manual(configured_repos(self._config).values())
+        # repos avulsos e fontes de documentação (cada fonte vira um repo kind="docs")
+        await self._repos.reconcile_manual((await configured_repos(self._config)).values())
         await self._repos.prune_orgs([o.name for o in orgs])
         return await self._repos.all_rows()
 
@@ -213,7 +213,7 @@ class Indexer:
                     if dry_run:
                         resolved = self._manual_name(n)[0]
                     else:
-                        resolved = self._register_manual(n)
+                        resolved = await self._register_manual(n)
                         rows = await self._load_rows(orgs)
                 elif rows[resolved].ignored and not allow_register:
                     # Ignorar e reativar é de admin (DELETE /repos, /unignore); indexar pelo nome reativaria.
@@ -234,20 +234,19 @@ class Indexer:
             return name_from_path(path), None, path
         raise ValueError(f"repositório desconhecido: {source}")
 
-    def _register_manual(self, source: str) -> str:
-        """Nome não encontrado mas é 'org/repo', URL git ou diretório: adiciona como [[repo]]."""
+    async def _register_manual(self, source: str) -> str:
+        """Nome não encontrado mas é 'org/repo', URL git ou diretório: cadastra como repo avulso."""
         name, url, path = self._manual_name(source)
-        repos = self._config.load_repos()
-        existing = next((r for r in repos if r.name == name), None)
+        existing = next((r for r in await self._config.repos() if r.name == name), None)
         if existing is None:
-            repos.append(Repo(name=name, url=url, path=path))
-            self._config.save(repos=repos)
+            if not await self._config.add(Repo(name=name, url=url, path=path)):
+                return await self._register_manual(source)  # outro processo cadastrou agora: confere a origem
             log.info("registrado novo repo avulso %s", name)
         elif not _same_source(existing, url, path):
             # Mesmo nome, outra origem (~/a/api e ~/b/api; github e gitlab com o mesmo org/repo).
             raise ValueError(
                 f"já existe um repo chamado {name} ({existing.url or existing.path}); "
-                "registre este com outro nome no repos.toml"
+                "registre este com outro nome (`code-index repo add --name`)"
             )
         return name
 
@@ -345,7 +344,7 @@ class Indexer:
             return row.revision.split("#", 1)[0]
         source = repo.doc_source
         if source is None:
-            raise RuntimeError(f"fonte de documentação {repo.name} não está mais no repos.toml")
+            raise RuntimeError(f"fonte de documentação {repo.name} não está mais configurada")
         return await doc_plugin(source.type).fetch(source, dest, self._settings, only=only)
 
     def _plan(
@@ -438,7 +437,7 @@ class Indexer:
 
 
 def _same_source(repo: Repo, url: str | None, path: str | None) -> bool:
-    """O [[repo]] já registrado aponta para a mesma origem (URL igual, ou a mesma pasta depois de resolver ~ e links)."""
+    """O repo avulso já registrado aponta para a mesma origem (URL igual, ou a mesma pasta depois de resolver ~ e links)."""
     if url is not None or repo.url is not None:
         return repo.url == url
     if repo.path is None or path is None:
@@ -460,10 +459,10 @@ def _publisher(tracker: SyncProgress, sink: ProgressSink | None) -> Callable[[],
     return publish
 
 
-def configured_repos(config: ConfigFile) -> dict[str, Repo]:
-    """Repos definidos no repos.toml: [[repo]] avulsos + um repo kind="docs" por fonte [[docs]]."""
-    repos = {r.name: r for r in config.load_repos()}
-    for source in config.load_docs():
+async def configured_repos(config: ConfigStore) -> dict[str, Repo]:
+    """Repos da configuração: avulsos + um repo kind="docs" por fonte de documentação."""
+    repos = {r.name: r for r in await config.repos()}
+    for source in await config.docs():
         if source.repo_name in repos:
             raise ValueError(f"fonte de documentação conflita com repo: {source.repo_name}")
         repos[source.repo_name] = source.to_repo()

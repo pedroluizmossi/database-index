@@ -24,14 +24,14 @@ log = logging.getLogger(__name__)
 
 
 class DocsMixin(ServiceBase):
-    def list_docs(self) -> list[DocSource]:
-        return self._config.load_docs()
+    async def list_docs(self) -> list[DocSource]:
+        return await self._config.docs()
 
     async def doc_sources(self) -> list[dict[str, Any]]:
         """Fontes cadastradas com a seleção (include/exclude) e quantos documentos estão no índice e fora da busca."""
         counts = await self._documents.source_counts()
         out = []
-        for d in self._config.load_docs():
+        for d in await self._config.docs():
             c = counts.get(d.repo_name, {})
             out.append({"name": d.name, "repo": d.repo_name, "type": d.type, "label": doc_plugin(d.type).label,
                         "url": d.url, "locale": d.locale, "include": list(d.include), "exclude": list(d.exclude),
@@ -41,7 +41,7 @@ class DocsMixin(ServiceBase):
 
     async def docs_preview(self, name: str, *, limit: int = 200) -> dict:
         """Prévia sem custo: o que entraria na indexação (o plugin da fonte lista a origem; nada é baixado)."""
-        source = self._doc_source(name)
+        source = await self._doc_source(name)
         return await doc_plugin(source.type).preview(source, self.settings, limit=limit)
 
     # ------------------------------------------------------------ vínculos gravados (manual/agent)
@@ -73,14 +73,14 @@ class DocsMixin(ServiceBase):
 
         Não reindexa nada: vale na próxima consulta, e some da consulta se a página ou o repo saírem.
         """
-        doc = self._doc_source(source)
+        doc = await self._doc_source(source)
         result = await self.link_doc_key(doc.repo_name, self._page_key(doc, page), repo, reason=reason, origin=origin)
         return {**result, "page": page.strip().strip("/")}
 
     async def link_doc_key(self, doc_repo: str, doc_path: str, repo: str, *, reason: str = "",
                            origin: str = "manual") -> dict:
         """Grava vínculo pela chave da página (doc_repo + doc_path, como aparece em docs_overview)."""
-        doc = self._doc_key(doc_repo, doc_path)
+        doc = await self._doc_key(doc_repo, doc_path)
         resolved, reason = await self._check_link(origin, reason, repo)
         await self._relations.set_stored_link(doc.repo_name, doc_path, resolved, origin=origin, reason=reason)
         return {
@@ -90,17 +90,17 @@ class DocsMixin(ServiceBase):
 
     async def unlink_doc(self, source: str, page: str, repo: str) -> bool:
         """Remove um vínculo gravado (manual, agent ou LLM aprovado). Devolve False se não existia."""
-        doc = self._doc_source(source)
+        doc = await self._doc_source(source)
         return await self.unlink_doc_key(doc.repo_name, self._page_key(doc, page), repo)
 
     async def unlink_doc_key(self, doc_repo: str, doc_path: str, repo: str) -> bool:
-        doc = self._doc_source(doc_repo)
+        doc = await self._doc_source(doc_repo)
         (resolved,) = await self._resolve_repos([repo]) or (repo,)
         return await self._relations.remove_stored_link(doc.repo_name, doc_path, resolved)
 
     async def doc_links(self, *, source: str | None = None, repo: str | None = None) -> list[dict]:
         """Vínculos gravados (manual/agent/LLM aprovado), com a página e o repo de cada um."""
-        doc_repo = self._doc_source(source).repo_name if source else None
+        doc_repo = (await self._doc_source(source)).repo_name if source else None
         resolved: str | None = None
         if repo:
             names = await self._resolve_repos([repo]) or []
@@ -111,29 +111,29 @@ class DocsMixin(ServiceBase):
 
     async def ignore_doc(self, source: str, page: str, reason: str = "") -> dict:
         """Ignora uma página da documentação: ela sai dos resultados da busca (reversível com unignore_doc)."""
-        doc = self._doc_source(source)
+        doc = await self._doc_source(source)
         doc_path = self._page_key(doc, page)
         await self._documents.set_ignore(doc.repo_name, doc_path, reason.strip())
         return {"page": page.strip().strip("/"), "doc": doc.repo_name, "doc_path": doc_path}
 
     async def unignore_doc(self, source: str, page: str) -> bool:
-        doc = self._doc_source(source)
+        doc = await self._doc_source(source)
         return await self._documents.remove_ignore(doc.repo_name, self._page_key(doc, page))
 
-    def _doc_key(self, doc_repo: str, doc_path: str) -> DocSource:
-        doc = self._doc_source(doc_repo)
+    async def _doc_key(self, doc_repo: str, doc_path: str) -> DocSource:
+        doc = await self._doc_source(doc_repo)
         if not doc_path.startswith(f"{doc.locale}/") or not doc_path.endswith(".md") or ".." in doc_path.split("/"):
             raise ValueError(f"caminho de página inválido: {doc_path!r}")
         return doc
 
     async def ignore_doc_key(self, doc_repo: str, doc_path: str, reason: str = "") -> dict:
         """Ignora pela chave da página (doc_repo + doc_path, como aparece em docs_overview)."""
-        doc = self._doc_key(doc_repo, doc_path)
+        doc = await self._doc_key(doc_repo, doc_path)
         await self._documents.set_ignore(doc.repo_name, doc_path, reason.strip())
         return {"doc_repo": doc.repo_name, "doc_path": doc_path, "ignored": True}
 
     async def unignore_doc_key(self, doc_repo: str, doc_path: str) -> bool:
-        doc = self._doc_key(doc_repo, doc_path)
+        doc = await self._doc_key(doc_repo, doc_path)
         return await self._documents.remove_ignore(doc.repo_name, doc_path)
 
     # ------------------------------------------------------------ leitura: visão geral, X-Ray, repo
@@ -182,11 +182,10 @@ class DocsMixin(ServiceBase):
 
     async def remove_docs(self, name: str, *, keep_files: bool = False) -> None:
         """Remove a fonte; os trechos somem no próximo sync, e documentos/relações saem já."""
-        docs = self._config.load_docs()
-        source = next((d for d in docs if d.name == name or d.repo_name == name), None)
+        source = next((d for d in await self._config.docs() if d.name == name or d.repo_name == name), None)
         if source is None:
             raise ValueError(f"fonte de documentação não encontrada: {name}")
-        if any(r.name == source.repo_name for r in self._config.load_repos()):
+        if any(r.name == source.repo_name for r in await self._config.repos()):
             raise ValueError(f"fonte de documentação conflita com repo: {source.repo_name}")
         row = (await self._repos.all_rows()).get(source.repo_name)
         if row is not None and (row.kind != "docs" or row.org is not None):
@@ -194,7 +193,7 @@ class DocsMixin(ServiceBase):
         folder = self.settings.repos_dir / source.repo_name
         if not keep_files and folder.exists() and not is_docs_folder(folder):
             raise ValueError(f"pasta de {source.repo_name} não identificada como documentação; use --keep-files")
-        self._config.save(docs=[d for d in docs if d is not source])
+        await self._config.delete("docs", source.name)
         await self._repos.delete([source.repo_name])
         await self._documents.drop_source(source.repo_name)
         await self.rebuild_relations()

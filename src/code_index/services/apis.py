@@ -31,7 +31,7 @@ class ApisMixin(ServiceBase):
 
     async def openapi_status(self) -> list[dict[str, Any]]:
         """Seleções persistidas e operações existentes no índice, sem consultar o S3."""
-        sources = [d for d in self._config.load_docs() if d.type == "openapi_s3"]
+        sources = [d for d in await self._config.docs() if d.type == "openapi_s3"]
         states = await self._repos.all_rows()
         counts = await self._documents.api_counts([d.repo_name for d in sources])
         return [{"domain": d.locale, "repo": d.repo_name, "all_services": not bool(d.include),
@@ -48,11 +48,10 @@ class ApisMixin(ServiceBase):
         await self.openapi_preview(domain, services)
         validate_name(domain)
         name = f"openapi-{domain}"
-        docs = self._config.load_docs()
-        existing = next((d for d in docs if d.name == name), None)
+        existing = next((d for d in await self._config.docs() if d.name == name), None)
         if existing and (existing.type != "openapi_s3" or existing.locale != domain):
             raise ValueError(f"nome de fonte já em uso: {name}")
-        if any(r.name == f"docs__{name}" for r in self._config.load_repos()):
+        if any(r.name == f"docs__{name}" for r in await self._config.repos()):
             raise ValueError(f"nome de repositório já em uso: docs__{name}")
         if existing is None:
             if f"docs__{name}" in await self._repos.all_rows():
@@ -66,5 +65,5 @@ class ApisMixin(ServiceBase):
             selected = ()
         source = DocSource(name=name, url=self.settings.openapi_bucket_url, type="openapi_s3",
                            locale=domain, include=selected)
-        self._config.save(docs=[d for d in docs if d.name != name] + [source])
+        await self._config.put(source)
         return source.repo_name

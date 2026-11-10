@@ -20,7 +20,7 @@ services:
   # API + MCP + interface web. Opcional (perfil `app`): `docker compose up -d` continua subindo só o banco.
   #   docker compose --profile app up -d --build
   # Lê os segredos do .env. A pasta do projeto é montada no MESMO caminho do host, para que os clones
-  # (.repos/), o estado do CocoIndex (.cocoindex/) e o repos.toml sirvam ao container e ao `uv run` local sem
+  # (.repos/) e o estado do CocoIndex (.cocoindex/) sirvam ao container e ao `uv run` local sem
   # reprocessar nada. Rode o compose a partir da raiz do projeto.
   app:
     build: .

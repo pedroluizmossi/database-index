@@ -5,7 +5,7 @@ candidatos (busca pelo cartão do repo). O agent:
 - dá um veredito (manter/remover) para cada vínculo AUTOMÁTICO atual (menção, tag, link);
 - sugere de 0 a 3 repos novos por página.
 Tudo entra como SUGESTÃO (`doc_links.status = 'suggested'`, action add/remove) e só vale depois de aprovado.
-Vínculos gravados (manual/agent/llm aprovado) e regras do repos.toml aparecem só como contexto.
+Vínculos gravados (manual/agent/llm aprovado) e regras da fonte (`links`) aparecem só como contexto.
 """
 
 from __future__ import annotations

@@ -29,19 +29,35 @@ class RateLimiter:
     Suficiente para uma instância. Com várias réplicas, troque por Redis/Postgres.
     """
 
+    _SWEEP_EVERY = 1024  # a cada N eventos, descarta as chaves sem evento dentro da janela delas
+
     def __init__(self) -> None:
         self._events: dict[tuple[str, str], deque[float]] = defaultdict(deque)
+        self._windows: dict[tuple[str, str], float] = {}
+        self._hits = 0
 
     def hit(self, bucket: str, key: str, *, limit: int, window: float) -> float | None:
         """Registra um evento. Retorna None se permitido, ou os segundos até liberar."""
         now = time.monotonic()
-        q = self._events[(bucket, key)]
+        self._hits += 1
+        if self._hits % self._SWEEP_EVERY == 0:
+            self._sweep(now)
+        slot = (bucket, key)
+        self._windows[slot] = window
+        q = self._events[slot]
         while q and q[0] <= now - window:
             q.popleft()
         if len(q) >= limit:
             return max(0.0, q[0] + window - now)
         q.append(now)
         return None
+
+    def _sweep(self, now: float) -> None:
+        """Chaves cujo último evento já saiu da janela (token rotacionado, IP que sumiu): sem isso o
+        dicionário cresce para sempre no servidor."""
+        for slot in [s for s, q in self._events.items() if not q or q[-1] <= now - self._windows.get(s, 0.0)]:
+            del self._events[slot]
+            self._windows.pop(slot, None)
 
 
 def origin_of(url: str) -> str:

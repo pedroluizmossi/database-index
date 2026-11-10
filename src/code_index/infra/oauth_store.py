@@ -204,5 +204,8 @@ class OAuthStore:
             f"SELECT family_id::text FROM {self._refresh} WHERE access_token_id = $1::uuid LIMIT 1", access_token_id
         )
 
-    async def purge_expired(self) -> None:
-        await self._pool.execute(f"DELETE FROM {self._refresh} WHERE expires_at < now() - interval '1 day'")
+    async def purge_expired(self) -> int:
+        """Remove refresh tokens vencidos há mais de 1 dia e códigos vencidos. Retorna quantos refresh saíram."""
+        await self._pool.execute(f"DELETE FROM {self._codes} WHERE expires_at < now() - interval '1 hour'")
+        res = await self._pool.execute(f"DELETE FROM {self._refresh} WHERE expires_at < now() - interval '1 day'")
+        return int(res.split()[-1])

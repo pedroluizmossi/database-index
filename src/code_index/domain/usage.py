@@ -27,7 +27,10 @@ MAX_PARAM_ITEMS = 20         # listas (repos, globs) longas também
 MAX_REPORT_DAYS = 365
 
 # Parâmetros que identificam "o que a pessoa procurou": usados nos relatórios de consultas.
-QUERY_PARAMS = ("query", "pattern", "name", "operation", "entity")
+QUERY_PARAMS = ("query", "pattern", "name", "operation", "entity", "q")
+# Rotas de escrita que são consultas. As demais escritas (criar token, remover repo...) também têm `name`,
+# mas não são buscas; das rotas da API só contam as de leitura (GET) e estas.
+QUERY_WRITE_ACTIONS = ("POST /api/v1/search", "POST /api/v1/grep")
 
 _SECRET_KEYS = re.compile(r"token|secret|password|senha|authorization|cookie", re.IGNORECASE)
 _UA_PRODUCT = re.compile(r"^\s*([A-Za-z][\w.\-]*)(?:/([\w.\-+]+))?")
@@ -96,15 +99,18 @@ def clean_params(params: Mapping[str, Any] | None) -> dict[str, Any] | None:
     return out or None
 
 
+_COUNT_KEYS = ("matches", "results", "relations", "items", "hits", "domains")
+
+
 def result_count(result: Any) -> int | None:
-    """Quantos itens uma resposta trouxe: lista → tamanho; dict → a primeira lista conhecida dentro dele."""
-    if isinstance(result, (list, tuple)):
+    """Quantos itens uma resposta trouxe: lista → tamanho; dict ou objeto (ex.: GrepResult) → a primeira lista
+    conhecida dentro dele. Tupla é um par de valores (ex.: token, metadados), não uma lista de itens."""
+    if isinstance(result, list):
         return len(result)
-    if isinstance(result, Mapping):
-        for key in ("matches", "results", "relations", "items", "hits", "domains"):
-            value = result.get(key)
-            if isinstance(value, (list, tuple)):
-                return len(value)
+    for key in _COUNT_KEYS:
+        value = result.get(key) if isinstance(result, Mapping) else getattr(result, key, None)
+        if isinstance(value, (list, tuple)):
+            return len(value)
     return None
 
 

@@ -56,8 +56,12 @@ Regras:
 
 ## Superfícies
 
-- Painel (`Panel` em `components/ui.tsx`): `bg-sheet`, fio de 1 px, `rounded-xl`, **sem sombra**. A prancha não
-  tem sombras; o fio separa.
+- Painel (`Panel` em `components/ui.tsx`): folha translúcida com desfoque suave (`bg-sheet/85 backdrop-blur-md`;
+  escuro `stone-900/80`), fio de 1 px, `rounded-xl`, **sem sombra**. A prancha aparece por trás como névoa, nunca
+  nítida atrás de texto. A prancha não tem sombras; o fio separa.
+- **Desfoque é para o que fica sobre o fundo vivo**: painéis, toasts, barra de seleção, barra do topo no celular
+  (tinta a 85–90% + `backdrop-blur-md`) e o fundo dos diálogos (`backdrop-blur-[3px]`). Cartões dentro de listas
+  longas (resultados, páginas) continuam opacos: desfoque em dezenas de elementos sobre um fundo animado pesa.
 - Sombra só no que flutua sobre o conteúdo: diálogo, toast, menu suspenso, barra de seleção.
 - Menu lateral: tinta quente. Item ativo: texto branco e barra fina cor de papel na borda esquerda (não azul).
 - **Estado ativo ou em andamento marca, não pinta.** Faixa de status (ex.: "Indexação em andamento") e item
@@ -86,21 +90,27 @@ bloco `prefers-reduced-motion` do `index.css` desliga tudo.
 | Onde | Como | Arquivo |
 |---|---|---|
 | Diálogo abre | `animate-pop` (escala 0,96 → 1) e fundo em `fade-in` | `components/Dialog.tsx` |
-| Troca de aba | View Transition: só o conteúdo (`view-transition-name: page`) some em 120 ms e entra subindo 8 px | `App.tsx`, `index.css` |
+| Troca de aba | só a página nova entra (`animate-page-in`: fade e subida de 6 px em 300 ms), por `key` da aba | `App.tsx`, `index.css` |
 | Listas | `.stagger` no contêiner: filhos sobem um a um, 30 ms entre eles, até 300 ms | `index.css` |
 | Raio X | o vizinho clicado desliza para o centro (500 ms); linhas e rótulos novos aparecem depois | `components/XrayMap.tsx` |
 | Indexação em andamento | ponto pulsante e barra no menu lateral | `components/IndexingIndicator.tsx` |
-| Prancha de fundo | aparece em 1,2 s ao carregar | `index.css` |
+| Prancha de fundo | aparece em 1,2 s; deriva bem devagar (80 s); feixe de varredura dá uma volta a cada 40 s; o achado vermelhão emite anéis a cada 1,8 s | `components/PlateBackdrop.tsx`, `index.css` |
+
+A prancha é o **único movimento contínuo** da interface: é o instrumento ligado, atrás de tudo, sem receber clique.
+Com movimento reduzido ela fica parada, sem feixe nem anéis. Não use View Transitions para trocar de aba: o retrato
+da página antiga é redimensionado e distorce telas longas.
 
 Não use: parallax, gradiente animado, confete, grafo com simulação de forças (instável e pesado com milhares de
-nós), animação em tabelas densas (Uso, Auditoria, Repositórios), nem movimento contínuo sem estado por trás.
+nós), animação em tabelas densas (Uso, Auditoria, Repositórios), nem outro movimento contínuo além do fundo.
 
 ## Componentes que carregam a identidade
 
-- **Prancha de fundo** (`body::before` em `index.css`): fixa, inteira (`contain`), centrada na área de conteúdo
-  (desconta o menu). O papel foi tirado da imagem (só a tinta, com alfa): no claro ela assenta sobre o mesmo papel; no
-  escuro a tinta é invertida e o vermelhão continua vermelho. Opacidade 0,6 (claro) e 0,4 (escuro). É textura: todo
-  conteúdo fica em superfícies opacas.
+- **Prancha de fundo** (`PlateBackdrop.tsx`, classes `.plate*` em `index.css`): uma camada fixa do tamanho exato
+  da imagem (`contain`), centrada na área de conteúdo (desconta o menu), para que feixe e anéis caiam no lugar certo
+  (disco em 50% × 33% da prancha, diâmetro 62% da largura; achado em 52,75% × 16,9%). O papel foi tirado da imagem
+  (só a tinta, com alfa): no claro ela assenta sobre o mesmo papel; no escuro a tinta é invertida e o vermelhão
+  continua vermelho. Opacidade 0,6 (claro) e 0,4 (escuro). O disco fica nítido; a metade de baixo (estratos, atrás
+  das tabelas) é desfocada. Trocar a imagem exige medir de novo essas posições.
 - **Mapa do Raio X** (`XrayMap.tsx`): aro graduado, isolinhas pontilhadas, item no centro em vermelhão, um setor fixo
   por tipo (posições determinísticas). Vínculos diretos no anel de fora com rótulo radial; inferidos no de dentro,
   com rótulo só no hover. O traço diz a origem: **cheio** = gravado (manual, agent, LLM aprovado), **tracejado** =

@@ -20,6 +20,7 @@ import logging
 import time
 from collections.abc import Awaitable, Callable, Iterator
 from typing import Any
+from pathlib import Path
 
 import cocoindex as coco
 
@@ -92,7 +93,9 @@ class Indexer:
         names: indexa exatamente estes (revarrendo mesmo sem mudança de commit);
                aceita nomes desconhecidos no formato 'org/repo', URL ou diretório.
         batch: sem `names`, processa no máximo N repos (None = todos os candidatos).
-        dry_run: só mostra a seleção (não clona, não indexa, não gasta tokens).
+        dry_run: só mostra a seleção: não trava o sync (pode rodar junto de um), não registra nomes novos
+               (nem no repos.toml), não clona, não indexa e não gasta tokens. Só atualiza o catálogo como
+               `orgs refresh` faria: descoberta das orgs e repos.toml → tabela de estado.
         allow_register: aceita nomes desconhecidos (URL, 'org/repo', diretório) registrando-os
                como repo avulso. Desligado para chamadas remotas sem scope admin.
         doc_pages: só para fontes de documentação: sincroniza apenas estas páginas (caminho sem idioma).
@@ -100,9 +103,16 @@ class Indexer:
             Falhas ao publicar não interrompem o sync.
         """
         res = SyncResult()
+        if dry_run:
+            orgs = self._config.load_orgs()
+            if do_discover and orgs:
+                await self._discover_all(orgs, res)
+            rows = await self._load_rows(orgs)
+            res.selected, res.remaining, _ = await self._select(names, rows, batch, orgs, allow_register, dry_run=True)
+            return res
         tracker = SyncProgress()
         publish = _publisher(tracker, on_progress)
-        with self._lock():
+        with self.exclusive():
             orgs = self._config.load_orgs()
             if do_discover and orgs:
                 await publish()
@@ -114,8 +124,6 @@ class Indexer:
             selected, remaining, rows = await self._select(names, rows, batch, orgs, allow_register)
             res.selected = selected
             res.remaining = remaining
-            if dry_run:
-                return res
 
             tracker.select(selected)
             tracker.set_phase("fetch")
@@ -143,7 +151,9 @@ class Indexer:
     # --- etapas -------------------------------------------------------------------
 
     @contextlib.contextmanager
-    def _lock(self) -> Iterator[None]:
+    def exclusive(self) -> Iterator[None]:
+        """Trava do sync (arquivo, entre processos). Também a usa quem apaga clones, para não tirar a pasta
+        de baixo de um sync em andamento. RuntimeError se outro sync já está rodando."""
         path = self._settings.lock_file
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w") as f:
@@ -176,8 +186,11 @@ class Indexer:
         batch: int | None,
         orgs: list[Org],
         allow_register: bool = True,
+        *,
+        dry_run: bool = False,
     ) -> tuple[list[str], int, dict[str, RepoState]]:
-        """Devolve (selecionados, quantos ficaram para os próximos lotes, linhas atualizadas)."""
+        """Devolve (selecionados, quantos ficaram para os próximos lotes, linhas atualizadas).
+        dry_run: nome desconhecido entra na seleção com o nome que teria, sem ser registrado."""
         if names:
             selected: list[str] = []
             for n in names:
@@ -185,28 +198,45 @@ class Indexer:
                 if resolved is None:
                     if not allow_register:
                         raise PermissionError(f"repo desconhecido: {n} (só admins registram repos novos)")
-                    resolved = self._register_manual(n)
-                    rows = await self._load_rows(orgs)
+                    if dry_run:
+                        resolved = self._manual_name(n)[0]
+                    else:
+                        resolved = self._register_manual(n)
+                        rows = await self._load_rows(orgs)
+                elif rows[resolved].ignored and not allow_register:
+                    # Ignorar e reativar é de admin (DELETE /repos, /unignore); indexar pelo nome reativaria.
+                    raise PermissionError(f"repo ignorado: {resolved} (só admins reativam repos ignorados)")
                 selected.append(resolved)
             return list(dict.fromkeys(selected)), 0, rows
         manual_changed = await self._manual_changed(rows)
         selected, remaining = pick_batch(rows, batch, orgs, manual_changed)
         return selected, remaining, rows
 
-    def _register_manual(self, source: str) -> str:
-        """Nome não encontrado mas é 'org/repo', URL git ou diretório: adiciona como [[repo]]."""
+    @staticmethod
+    def _manual_name(source: str) -> tuple[str, str | None, str | None]:
+        """(nome, url, caminho) de um repo avulso a partir de 'org/repo', URL git ou diretório."""
         url, path = normalize_source(source)
         if url:
-            name = name_from_url(url)
-        elif path:
-            name = name_from_path(path)
-        else:
-            raise ValueError(f"repositório desconhecido: {source}")
+            return name_from_url(url), url, None
+        if path:
+            return name_from_path(path), None, path
+        raise ValueError(f"repositório desconhecido: {source}")
+
+    def _register_manual(self, source: str) -> str:
+        """Nome não encontrado mas é 'org/repo', URL git ou diretório: adiciona como [[repo]]."""
+        name, url, path = self._manual_name(source)
         repos = self._config.load_repos()
-        if not any(r.name == name for r in repos):
+        existing = next((r for r in repos if r.name == name), None)
+        if existing is None:
             repos.append(Repo(name=name, url=url, path=path))
             self._config.save(repos=repos)
             log.info("registrado novo repo avulso %s", name)
+        elif not _same_source(existing, url, path):
+            # Mesmo nome, outra origem (~/a/api e ~/b/api; github e gitlab com o mesmo org/repo).
+            raise ValueError(
+                f"já existe um repo chamado {name} ({existing.url or existing.path}); "
+                "registre este com outro nome no repos.toml"
+            )
         return name
 
     async def _manual_changed(self, rows: dict[str, RepoState]) -> set[str]:
@@ -393,6 +423,15 @@ class Indexer:
     @staticmethod
     def _to_repo(row: RepoState, orgs: list[Org], manual: dict[str, Repo]) -> Repo:
         return repo_for_row(row, orgs, manual)
+
+
+def _same_source(repo: Repo, url: str | None, path: str | None) -> bool:
+    """O [[repo]] já registrado aponta para a mesma origem (URL igual, ou a mesma pasta depois de resolver ~ e links)."""
+    if url is not None or repo.url is not None:
+        return repo.url == url
+    if repo.path is None or path is None:
+        return False
+    return Path(repo.path).expanduser().resolve() == Path(path).expanduser().resolve()
 
 
 def _publisher(tracker: SyncProgress, sink: ProgressSink | None) -> Callable[[], Awaitable[None]]:

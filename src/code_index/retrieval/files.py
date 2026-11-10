@@ -14,6 +14,7 @@ from ..indexing.content import file_language
 from .redaction import mask_output
 
 MAX_LINES = 2000  # por leitura; arquivo maior pede intervalo
+MAX_BYTES = 2 * 1024 * 1024  # tamanho máximo de um arquivo lido (o clone é local, mas o índice não é)
 
 
 def _hidden(rel: Path) -> bool:
@@ -49,6 +50,12 @@ def read_file(
     target = _inside_root(local_path, path)
     if target is None:
         raise ValueError(f"arquivo não encontrado: {repo}/{path}")
+    try:
+        size = target.stat().st_size
+    except OSError as e:
+        raise ValueError(f"não foi possível ler {repo}/{path}: {e}") from None
+    if size > MAX_BYTES:
+        raise ValueError(f"{repo}/{path} é grande demais para leitura ({size} bytes; máximo {MAX_BYTES})")
     try:
         text = target.read_text(errors="replace")
     except OSError as e:

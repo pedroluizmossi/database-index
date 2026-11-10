@@ -9,6 +9,7 @@ Caminhos relativos são resolvidos a partir de `base_dir` (pasta do .env, ou o d
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Annotated
@@ -138,7 +139,9 @@ class Settings(BaseSettings):
     @classmethod
     def _split_csv(cls, v: object) -> object:
         """Aceita lista JSON ou texto separado por vírgula (ex.: `a@x.com,b@x.com`)."""
-        if isinstance(v, str) and not v.strip().startswith("["):
+        if isinstance(v, str):
+            if v.strip().startswith("["):  # com NoDecode, o pydantic-settings não decodifica JSON sozinho
+                return json.loads(v)
             return [x.strip() for x in v.split(",") if x.strip()]
         return v
 

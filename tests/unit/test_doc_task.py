@@ -93,3 +93,14 @@ def test_render_mostra_vinculos_atuais() -> None:
     assert "o__snr-email-frontend (termo do texto igual a um apelido forte do repo) [contestável]" in text
     assert "o__snr-email-backend (gravado por uma pessoa) [só contexto]" in text
     assert "VÍNCULOS ATUAIS: nenhum" in text
+
+
+def test_validate_veredito_repetido_ainda_acusa_falta_de_veredito() -> None:
+    existing = {PAGES[0]: {"org__a": ["mention"], "org__b": ["mention"]}}
+    raw = {"pages": [{"path": PAGES[0], "repos": [], "vinculos_atuais": [
+        {"repo": "org__a", "veredito": "manter", "confidence": "alta", "why": "x"},
+        {"repo": "org__a", "veredito": "manter", "confidence": "alta", "why": "x"}]},
+        {"path": PAGES[1], "repos": []}]}
+    out, errors = validate_doc_links(raw, pages=PAGES, known_repos=KNOWN, existing=existing)
+    assert out is None
+    assert any("falta veredito para org__b" in e for e in errors)

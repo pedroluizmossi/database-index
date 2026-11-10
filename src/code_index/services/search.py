@@ -24,6 +24,13 @@ from .ownership import OwnershipMixin
 
 log = logging.getLogger(__name__)
 
+# Limites de entrada (os mesmos da API REST): valem para API, MCP e CLI. Uma consulta enorme vai à Voyage
+# no embedding e é cobrada de novo para cada candidato do rerank.
+MAX_QUERY_CHARS = 2000
+MAX_EXCLUDES = 50
+MAX_DOCS = 50
+MAX_SYMBOL_CHARS = 200
+
 
 class SearchMixin(OwnershipMixin):
     async def search(
@@ -55,6 +62,12 @@ class SearchMixin(OwnershipMixin):
 
         exclude_repos / exclude_path_glob: o que não pode aparecer no resultado (nomes de repo e globs de caminho).
         """
+        if not query.strip() or len(query) > MAX_QUERY_CHARS:
+            raise ValueError(f"consulta vazia ou maior que {MAX_QUERY_CHARS} caracteres")
+        if len(exclude_repos or ()) > MAX_EXCLUDES or len(exclude_path_glob or ()) > MAX_EXCLUDES:
+            raise ValueError(f"no máximo {MAX_EXCLUDES} itens em exclude_repos e exclude_path_glob")
+        if max_docs is not None and not 0 <= max_docs <= MAX_DOCS:
+            raise ValueError(f"max_docs deve ser entre 0 e {MAX_DOCS}")
         if service and not domain:
             raise ValueError("informe o domínio junto com o serviço (ex.: domain=platform, service=audit)")
         scope = await self.owner_scope(domain, service) if domain else None
@@ -162,6 +175,8 @@ class SearchMixin(OwnershipMixin):
         limit: int = 20,
     ) -> list[SymbolHit]:
         """Onde uma classe/função/método/recurso é declarado (tabela preenchida na indexação)."""
+        if not name.strip() or len(name) > MAX_SYMBOL_CHARS:
+            raise ValueError(f"nome vazio ou maior que {MAX_SYMBOL_CHARS} caracteres")
         hits = await self._symbols.find(
             name, kind=kind, repos=await self._resolve_repos(repos), language=language, limit=limit
         )
@@ -205,8 +220,24 @@ class SearchMixin(OwnershipMixin):
         if not targets:
             return GrepResult(matches=[], truncated=False)
 
-        def mask(path: str, line: str) -> str:
-            return mask_output(line, file_language(path.rsplit("/", 1)[-1]))
+        masked: dict[Path, list[str] | None] = {}
+
+        def masked_lines(path: Path) -> list[str] | None:
+            try:
+                text = path.read_text(errors="replace")
+            except OSError:
+                return None
+            # `redact` preserva a contagem de linhas; split("\n") numera como o rg (splitlines quebraria em \r, \x0c...)
+            return mask_output(text, file_language(path.name)).split("\n")
+
+        async def mask(path: Path, line_number: int, line: str) -> str:
+            """Linha mascarada com o arquivo inteiro como contexto (uma chave PEM só é reconhecida inteira)."""
+            if path not in masked:
+                masked[path] = await asyncio.to_thread(masked_lines, path)
+            lines = masked[path]
+            if lines is not None and 0 < line_number <= len(lines):
+                return lines[line_number - 1].rstrip("\r")
+            return mask_output(line, file_language(path.name))
 
         return await self._grep.search(
             targets, pattern, regex=regex, case_sensitive=case_sensitive, path_glob=path_glob,

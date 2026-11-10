@@ -409,8 +409,10 @@ def infer(repos: Iterable[str], sdl_by_repo: Mapping[str, Sequence[Mapping[str, 
 class Scope:
     """Onde está o código de um domínio/serviço: repos inteiros, pastas incluídas e pastas excluídas.
 
-    `exclude[repo]`: pastas de um repo do escopo que pertencem a outro dono (monorepo).
-    `include[repo]`: pastas de repos fora do escopo que pertencem a este dono."""
+    Vale o dono da pasta mais específica, como em `owners_of`. As listas guardam só as trocas de dono:
+    `exclude[repo]`: pastas que saem do escopo (o dono da pasta acima era deste escopo, o dela não);
+    `include[repo]`: pastas que entram (o de cima não era, o dela é), em repos fora do escopo ou dentro de
+    uma pasta excluída (monorepo com pasta de outro dono que tem, dentro, uma subpasta deste)."""
 
     whole: set[str] = field(default_factory=set)
     include: dict[str, list[str]] = field(default_factory=dict)
@@ -425,12 +427,24 @@ class Scope:
         return self.whole | set(self.include)
 
     def contains(self, repo: str, path: str) -> bool:
-        def under(folders: Sequence[str]) -> bool:
-            return any(path == f or path.startswith(f + "/") for f in folders)
+        rules = [(f, True) for f in self.include.get(repo, [])] + [(f, False) for f in self.exclude.get(repo, [])]
+        deepest = max((r for r in rules if _under(path, r[0])), key=lambda r: len(r[0]), default=None)
+        return deepest[1] if deepest is not None else repo in self.whole
 
-        if repo in self.whole:
-            return not under(self.exclude.get(repo, []))
-        return under(self.include.get(repo, []))
+    def clauses(self) -> list[tuple[str, str | None, list[str]]]:
+        """(repo, pasta ou None = repo inteiro, pastas de dentro que saem). Um caminho está no escopo se casa
+        com alguma cláusula: forma usada para montar o filtro SQL."""
+        out: list[tuple[str, str | None, list[str]]] = []
+        for repo in sorted(self.whole):
+            out.append((repo, None, sorted(self.exclude.get(repo, []))))
+        for repo, folders in sorted(self.include.items()):
+            for folder in sorted(folders):
+                out.append((repo, folder, sorted(f for f in self.exclude.get(repo, []) if _under(f, folder) and f != folder)))
+        return out
+
+
+def _under(path: str, folder: str) -> bool:
+    return path == folder or path.startswith(folder + "/")
 
 
 def scope_for(resolved: Mapping[str, Resolved], domain: str, service: str | None = None) -> Scope:
@@ -444,16 +458,20 @@ def scope_for(resolved: Mapping[str, Resolved], domain: str, service: str | None
         if path is None:
             repo_level[repo] = hit
         else:
-            folders.setdefault(repo, []).append((path, hit))
+            folders.setdefault(repo, []).append((path.rstrip("/"), hit))
     for repo, hit in repo_level.items():
         if hit:
             scope.whole.add(repo)
     for repo, items in folders.items():
-        for path, hit in sorted(items):
-            if repo in scope.whole and not hit:
-                scope.exclude.setdefault(repo, []).append(path)
-            elif repo not in scope.whole and hit:
+        seen: list[tuple[str, bool]] = []
+        for path, hit in sorted(items, key=lambda x: (x[0].count("/"), x[0])):  # pais antes dos filhos
+            parent = max((s for s in seen if _under(path, s[0])), key=lambda s: len(s[0]), default=None)
+            parent_hit = parent[1] if parent is not None else repo_level.get(repo, False)
+            if hit and not parent_hit:
                 scope.include.setdefault(repo, []).append(path)
+            elif parent_hit and not hit:
+                scope.exclude.setdefault(repo, []).append(path)
+            seen.append((path, hit))
     return scope
 
 

@@ -144,8 +144,9 @@ def _filters(
 
 
 def _scope_sql(p: _Params, scope: Scope, linked_docs_sql: str | None) -> str:
-    """Repos inteiros do domínio, menos pastas de outro dono (monorepo), mais pastas deste dono em outros
-    repos. `starts_with` em vez de LIKE: nomes de pasta com '_' ou '%' não viram curinga."""
+    """Repos e pastas do domínio, menos as pastas de dentro com outro dono (monorepo), na mesma regra da pasta
+    mais específica de `Scope.contains`. `starts_with` em vez de LIKE: nomes de pasta com '_' ou '%' não viram
+    curinga."""
     if scope.empty:
         return "FALSE"
 
@@ -153,14 +154,19 @@ def _scope_sql(p: _Params, scope: Scope, linked_docs_sql: str | None) -> str:
         return " OR ".join(f"starts_with(path, {p(f.rstrip('/') + '/')})" for f in folders)
 
     parts = []
-    simple = sorted(r for r in scope.whole if r not in scope.exclude)
+    clauses = scope.clauses()
+    simple = sorted(repo for repo, folder, out in clauses if folder is None and not out)
     if simple:
         parts.append(f"repo = ANY({p(simple)})")
-    for repo, folders in sorted(scope.exclude.items()):
-        if repo in scope.whole:
-            parts.append(f"(repo = {p(repo)} AND NOT ({under(folders)}))")
-    for repo, folders in sorted(scope.include.items()):
-        parts.append(f"(repo = {p(repo)} AND ({under(folders)}))")
+    for repo, folder, out in clauses:
+        if folder is None and not out:
+            continue
+        cond = [f"repo = {p(repo)}"]
+        if folder is not None:
+            cond.append(f"({under([folder])})")
+        if out:
+            cond.append(f"NOT ({under(out)})")
+        parts.append("(" + " AND ".join(cond) + ")")
     if linked_docs_sql:
         parts.append(f"(repo, path) IN (SELECT l.doc_repo, l.doc_path FROM ({linked_docs_sql}) l"
                      f" WHERE l.repo = ANY({p(sorted(scope.repos))}))")

@@ -106,7 +106,9 @@ class UsageMixin(ServiceBase):
             mcp = a["channel"] == "mcp"
             a["context_tokens"] = U.approx_tokens(a["response_bytes"]) if mcp else None
             a["avg_context_tokens"] = U.approx_tokens(a["avg_response_bytes"]) if mcp else None
-        daily = U.fill_days(await self._usage.daily(days, offset, user_id), days, now.date())
+        # A janela é "agora − N dias": toca N+1 datas (a mais antiga, parcial). Sem ela, a soma do gráfico
+        # ficaria menor que os totais.
+        daily = U.fill_days(await self._usage.daily(days, offset, user_id), days + 1, now.date())
         return {
             "days": days,
             "generated_at": now.isoformat(timespec="seconds"),
@@ -153,8 +155,9 @@ class UsageMixin(ServiceBase):
                 "disabled_at": user["disabled_at"].isoformat(timespec="seconds") if user["disabled_at"] else None}
 
     async def housekeeping(self) -> dict[str, int]:
-        """Limpeza periódica: eventos de uso além da retenção e sessões/tokens OAuth vencidos."""
+        """Limpeza periódica: eventos de uso além da retenção, sessões/tokens OAuth e refresh tokens vencidos."""
         return {
             "usage_events": await self._usage.purge(max(1, self.settings.usage_retention_days)),
             "sessions": await self._tokens.purge_expired_sessions(),
+            "oauth_refresh": await self._oauth.purge_expired(),
         }

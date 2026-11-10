@@ -54,6 +54,9 @@ class RelationStore:
         names = sorted(set(origins))
         if set(names) & STORED:
             raise ValueError("origens gravadas por pessoas/agents não são recalculadas")
+        # Dois rebuilds ao mesmo tempo (fim de sync, owner set, enrich submit): sem a trava, o DELETE de um não vê
+        # as linhas que o outro está inserindo e o INSERT bate na chave primária.
+        await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", f"code_index.relations.{self.table}")
         await conn.execute(f"DELETE FROM {self.table} WHERE origin = ANY($1::text[])", names)
         rows = list({(r.src, r.dst, r.type, r.origin): r for r in relations}.values())
         if rows:
@@ -137,10 +140,11 @@ class RelationStore:
         )
 
     async def remove_stored_link(self, doc_repo: str, path: str, repo: str) -> bool:
-        """Remove vínculos gravados (manual, agent ou LLM aprovado) deste par."""
+        """Remove vínculos gravados ativos (manual, agent ou LLM aprovado) deste par. Sugestão LLM pendente ou
+        rejeitada fica: apagar a rejeitada faria a sugestão voltar na próxima revisão."""
         res = await self._pool.execute(
             f"DELETE FROM {self.table} WHERE src = $1 AND dst = $2 AND type = $3 AND origin = ANY($4::text[]) "
-            "AND action = 'add'",
+            "AND action = 'add' AND status = 'active'",
             doc_key(doc_repo, path), repo_key(repo), DOCUMENTS, sorted(STORED),
         )
         return not res.endswith(" 0")

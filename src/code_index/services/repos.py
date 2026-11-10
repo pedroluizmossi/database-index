@@ -59,10 +59,11 @@ class ReposMixin(OwnershipMixin):
         repos = self._config.load_repos()
         manual = next((r for r in repos if r.name == name), None)
         if manual is not None:
-            self._config.save(repos=[r for r in repos if r.name != name])
-            await self._repos.delete([name])
-            if not keep_clone:
-                await asyncio.to_thread(self._git.remove_clone, manual)
+            with self._indexer.exclusive():  # o sync em andamento pode estar lendo este clone
+                self._config.save(repos=[r for r in repos if r.name != name])
+                await self._repos.delete([name])
+                if not keep_clone:
+                    await asyncio.to_thread(self._git.remove_clone, manual)
             await self.rebuild_relations()
             return "removed"
         if await self._repos.set_ignored(name, True):
@@ -109,8 +110,8 @@ class ReposMixin(OwnershipMixin):
 
     async def find_repos(self, query: str, *, limit: int = 10) -> list[dict[str, Any]]:
         """Repos cujo cartão casa com a pergunta ("quem cuida da blocklist de e-mail?"). Sem LLM e sem Voyage."""
-        if not query.strip():
-            raise ValueError("informe o que procurar")
+        if not query.strip() or len(query) > 500:
+            raise ValueError("informe o que procurar (até 500 caracteres)")
         hits = await self._enrich.find(query, limit=limit)
         for h in hits:
             if h["summary"]:
@@ -186,11 +187,12 @@ class ReposMixin(OwnershipMixin):
         if not any(o.name == name for o in orgs):
             raise ValueError(f"org não configurada: {name}")
         remaining = [o for o in orgs if o.name != name]
-        self._config.save(orgs=remaining)
-        removed = await self._repos.prune_orgs([o.name for o in remaining])
-        if not keep_clones:
-            for repo_name in removed:
-                await asyncio.to_thread(self._git.remove_clone, Repo(name=repo_name, url="-"))
+        with self._indexer.exclusive():  # o sync em andamento pode estar lendo estes clones
+            self._config.save(orgs=remaining)
+            removed = await self._repos.prune_orgs([o.name for o in remaining])
+            if not keep_clones:
+                for repo_name in removed:
+                    await asyncio.to_thread(self._git.remove_clone, Repo(name=repo_name, url="-"))
         if removed:
             await self.rebuild_relations()
         return len(removed)

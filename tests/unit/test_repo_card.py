@@ -156,6 +156,14 @@ def test_validate_card_ok_normaliza() -> None:
     assert card["domain_tags"] == ["e-mail", "notificação"]
 
 
+def test_validate_card_entrypoint_com_ponto_inicial_e_preservado() -> None:
+    card, errors = validate_card(_valid() | {"entrypoints": [".github/workflows/ci.yml"]},
+                                 candidates=["o__snr-email-frontend"],
+                                 path_exists=lambda p: p == ".github/workflows/ci.yml")
+    assert errors == []
+    assert card is not None and card["entrypoints"] == [".github/workflows/ci.yml"]
+
+
 def test_validate_card_erros_legiveis() -> None:
     raw = _valid() | {"kind": "banco", "summary": "curto", "extra": 1,
                       "related_repos": [{"repo": "inventado", "basis": "nome", "why": "?"},

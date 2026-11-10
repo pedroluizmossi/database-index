@@ -5,8 +5,9 @@ Segurança e custo:
   - sem shell: argumentos em lista; o padrão vai depois de `-e` e os caminhos depois de `--`;
   - só arquivos que o índice consideraria (mesmos include/exclude), respeitando .gitignore,
     sem arquivos ocultos (`.env` etc.) e sem binários;
-  - cada linha devolvida passa por `mask(caminho, linha)`, injetada pelo serviço
-    (a máscara de segredos de indexing/content; infra não depende de indexing);
+  - cada linha devolvida passa por `mask(arquivo, número da linha, linha)`, injetada pelo serviço
+    (a máscara de segredos de indexing/content; infra não depende de indexing). A máscara vê o
+    arquivo inteiro: segredo de várias linhas (chave PEM) não se esconde linha a linha;
   - limites: total de resultados, resultados por arquivo, tamanho de arquivo e tempo.
 O regex do ripgrep (Rust) não tem backtracking exponencial.
 """
@@ -16,18 +17,25 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from ..domain.models import GrepMatch
 from ..domain.path_glob import glob_matcher
 
-LineMask = Callable[[str, str], str]  # (caminho relativo, linha) -> linha mascarada
+# (arquivo absoluto, número da linha a partir de 1, linha) -> linha mascarada
+LineMask = Callable[[Path, int, str], Awaitable[str]]
 
 MAX_PATTERN = 500
 _PER_FILE = 20
 _MAX_LINE = 300
+# Maior evento JSON lido do rg: linha enorme (ou com milhares de ocorrências) passa disso e é pulada.
+_MAX_EVENT = 8 * 1024 * 1024
+
+
+async def _no_mask(_path: Path, _line: int, line: str) -> str:
+    return line
 
 
 @dataclass(frozen=True)
@@ -62,7 +70,7 @@ class Grep:
         path_glob: str | None = None,
         max_results: int = 50,
         timeout: float = 20.0,
-        mask: LineMask = lambda _path, line: line,
+        mask: LineMask = _no_mask,
     ) -> GrepResult:
         if not self._rg:
             raise RuntimeError("ripgrep (rg) não está instalado no servidor")
@@ -121,14 +129,23 @@ class Grep:
         args += ["-e", pattern, "--", *[str(t.root) for t in group]]
 
         proc = await asyncio.create_subprocess_exec(
-            *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, limit=_MAX_EVENT
         )
         hit_limit = False
         try:
             async with asyncio.timeout(timeout):
                 assert proc.stdout is not None
-                async for raw in proc.stdout:
-                    event = json.loads(raw)
+                while True:
+                    try:
+                        raw = await proc.stdout.readline()
+                    except ValueError:  # evento maior que o limite: descartado pelo leitor
+                        continue
+                    if not raw:
+                        break
+                    try:
+                        event = json.loads(raw)
+                    except ValueError:  # resto de um evento grande demais
+                        continue
                     if event.get("type") != "match":
                         continue
                     data = event["data"]
@@ -141,7 +158,8 @@ class Grep:
                     rel = abs_path[len(str(target.root)) + 1:]
                     if not keep(rel):
                         continue
-                    text = mask(rel, (data["lines"].get("text") or "").rstrip("\n"))
+                    raw_line = (data["lines"].get("text") or "").rstrip("\n")
+                    text = await mask(Path(abs_path), data["line_number"], raw_line)
                     out.append(GrepMatch(repo=target.repo, path=rel, line=data["line_number"],
                                          text=text.strip()[:_MAX_LINE]))
                     if len(out) >= max_results:

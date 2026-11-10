@@ -420,7 +420,7 @@ def create_app(settings: Settings) -> FastAPI:
             data = signer.loads(request.cookies.get(LOGIN_COOKIE, ""), max_age=LOGIN_MAX_AGE)
         except BadSignature:
             return _login_page(400, "Login expirou", "A sessão de login venceu ou não foi iniciada aqui.")
-        if not code or not secrets.compare_digest(state, data["s"]):
+        if not code or not secrets.compare_digest(state.encode(), str(data["s"]).encode()):
             return _login_page(400, "Login recusado", "A resposta do provedor não corresponde a este login.")
         try:
             oidc = open_provider(settings, data.get("p", "google"))

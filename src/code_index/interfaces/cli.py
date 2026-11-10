@@ -156,7 +156,7 @@ def _print_result(res: SyncResult) -> None:
     for name, commit in res.indexed.items():
         print(f"ok    {name} @ {(commit or '-')[:7]}")
     for name, err in res.errors.items():
-        print(f"ERRO  {name}: {err.splitlines()[0][:200]}", file=sys.stderr)
+        print(f"ERRO  {name}: {(err.splitlines() or [''])[0][:200]}", file=sys.stderr)
     if res.remaining:
         print(f"{res.remaining} repos ainda na fila (rode de novo ou use `code-index watch`).")
 
@@ -170,6 +170,8 @@ async def _cmd_sync(a: argparse.Namespace, settings: Settings) -> None:
         async with open_service(settings) as svc:
             res = await svc.index_doc_pages(a.repos[0], a.page)
         _print_result(res)
+        if res.errors:
+            sys.exit(1)
         return
     async with open_service(settings) as svc:
         res = await svc.sync(
@@ -188,7 +190,8 @@ async def _cmd_sync(a: argparse.Namespace, settings: Settings) -> None:
             print(f"(+{res.remaining} na fila depois deste lote)")
         return
     _print_result(res)
-    if res.errors and a.repos:
+    # Nomes pedidos: qualquer erro falha. Lote automático: falha quando nada foi indexado (a regra do job da API).
+    if (res.errors and a.repos) or res.all_failed:
         sys.exit(1)
 
 
@@ -1213,7 +1216,7 @@ def main() -> None:
     try:
         asyncio.run(fn(a, settings))
     except KeyboardInterrupt:
-        pass
+        sys.exit(130)  # interrompido (Ctrl-C): não conta como sucesso para scripts e cron
     except (ValueError, RuntimeError, PermissionError) as e:
         sys.exit(f"erro: {e}")
 

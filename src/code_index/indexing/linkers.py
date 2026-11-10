@@ -90,7 +90,7 @@ class RuleLinker:
         rows = await conn.fetch(
             f"""SELECT DISTINCT m.doc_repo, m.doc_path, r.name, m.term FROM {m} m
                 JOIN "{settings.pg_schema}".repos r ON m.origin = 'explicit' AND r.kind = 'code' AND NOT r.ignored
-                     AND (r.name LIKE m.term OR r.name LIKE '%\\_\\_' || m.term)"""
+                     AND (lower(r.name) LIKE m.term OR lower(r.name) LIKE '%\\_\\_' || m.term)"""
         )
         return [Relation(doc_key(r["doc_repo"], r["doc_path"]), repo_key(r["name"]), DOCUMENTS, "explicit",
                          evidence={"rule": r["term"]}) for r in rows]

@@ -15,6 +15,7 @@ from typing import Any
 
 from ..domain.auth import Principal, scopes_for_user
 from ..domain.oauth import CODE_TTL_SECONDS, check_redirect_uris, grant_scopes
+from ..infra.login import email_allowed
 from ..infra.oauth_store import OAuthCode, OAuthRefresh
 from .base import ServiceBase
 
@@ -99,6 +100,11 @@ class OAuthMixin(ServiceBase):
         found = await self.load_oauth_refresh(client_id, token)
         if found is None:
             raise ValueError("refresh token inválido, vencido ou já usado")
+        user = await self._users.get(found.owner_email)
+        if not email_allowed(self.settings, found.owner_email) or (user is not None and user.get("disabled_at")):
+            # Saiu da allowlist (ou foi desativada) depois do login: não renova, e a autorização inteira cai.
+            await self._revoke_oauth_family(found.family_id, reason="pessoa sem acesso")
+            raise ValueError("acesso removido: entre de novo pelo navegador")
         if not await self._oauth.use_refresh(found.id):  # outra troca concorrente usou este mesmo token
             await self._revoke_oauth_family(found.family_id, reason="reuso de refresh token")
             raise ValueError("refresh token já usado")

@@ -82,3 +82,9 @@ class EntraOIDC(OIDCProvider):
         if not (by_email or by_domain):
             raise LoginError(f"a conta {email} não tem acesso a este servidor")
         return Identity(email=email, name=claims.get("name"), domain=email.rsplit("@", 1)[1], provider=self.name)
+
+    @classmethod
+    def allows_email(cls, settings: Settings, email: str) -> bool:
+        domain = (settings.azure_allowed_domain or "").lower().lstrip("@")
+        email = email.lower()
+        return email in settings.azure_login_emails or bool(domain and email.endswith("@" + domain))

@@ -156,6 +156,7 @@ def validate_doc_links(
         current = existing.get(path, {})
         contestable = {repo for repo, origins in current.items() if is_contestable(origins)}
         verdicts: list[dict[str, str]] = []
+        errors_before = len(errors)
         given = item.get("vinculos_atuais", [])
         if not isinstance(given, list):
             errors.append(f"pages[{i}].vinculos_atuais: lista")
@@ -178,7 +179,7 @@ def validate_doc_links(
                 verdicts.append({"repo": name, "verdict": v["veredito"], "confidence": v["confidence"],
                                  "why": v["why"].strip()[:300]})
         missing_verdicts = sorted(contestable - {x["repo"] for x in verdicts})
-        if missing_verdicts and len(verdicts) == len(given):
+        if missing_verdicts and len(errors) == errors_before:
             errors.append(f"pages[{i}].vinculos_atuais: falta veredito para {', '.join(missing_verdicts)}")
         repos = item.get("repos", [])
         if not isinstance(repos, list) or len(repos) > MAX_REPOS_PER_PAGE:

@@ -14,7 +14,7 @@ Proteções:
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from urllib.parse import urlsplit
+from urllib.parse import SplitResult, urlsplit
 
 from .auth import SEARCH_READ
 
@@ -23,8 +23,29 @@ CODE_TTL_SECONDS = 300
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
+def _matches_prefix(uri: str, p: SplitResult, prefix: str) -> bool:
+    """Mesmo esquema e mesmo host:porta (sem usuário no meio: `https://site@evil.com`), e o caminho do prefixo
+    termina numa fronteira de segmento (`/cb` aceita `/cb` e `/cb/x`, não `/cbx`)."""
+    try:
+        q = urlsplit(prefix)
+    except ValueError:
+        return False
+    if not q.scheme:
+        return False
+    if not q.netloc:  # só o esquema de um app (`kiro://`): quem configurou aceita o esquema inteiro
+        return p.scheme.lower() == q.scheme.lower() and uri.startswith(prefix)
+    if p.scheme.lower() != q.scheme.lower() or p.netloc.lower() != q.netloc.lower():
+        return False
+    if q.query:
+        return uri.startswith(prefix)
+    base = q.path
+    if not base or base.endswith("/"):
+        return (p.path or "/").startswith(base or "/")
+    return p.path == base or p.path.startswith(base + "/")
+
+
 def redirect_uri_allowed(uri: str, allowed_prefixes: Iterable[str] = ()) -> bool:
-    """Loopback http(s) em qualquer porta/caminho, ou começa com um dos prefixos configurados."""
+    """Loopback http(s) em qualquer porta/caminho, ou dentro de um dos prefixos configurados."""
     try:
         p = urlsplit(uri)
     except ValueError:
@@ -33,7 +54,7 @@ def redirect_uri_allowed(uri: str, allowed_prefixes: Iterable[str] = ()) -> bool
         return False
     if p.scheme in ("http", "https") and (p.hostname or "") in LOOPBACK_HOSTS:
         return True
-    return any(prefix and uri.startswith(prefix) for prefix in allowed_prefixes)
+    return any(prefix and _matches_prefix(uri, p, prefix) for prefix in allowed_prefixes)
 
 
 def check_redirect_uris(uris: Sequence[str], allowed_prefixes: Iterable[str] = ()) -> None:

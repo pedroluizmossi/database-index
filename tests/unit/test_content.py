@@ -64,16 +64,31 @@ def test_senha_so_com_letras_e_mascarada(text: str, language: str, expected: str
 def test_bloco_pem_vira_marcador() -> None:
     out, count = redact(PEM_CERT, "text")
 
-    assert out == "<certificate omitido>"
+    assert out == "<certificate omitido>" + "\n" * PEM_CERT.count("\n")
     assert count == 1
 
 
-def test_bloco_pem_preserva_o_texto_ao_redor() -> None:
+def test_bloco_pem_preserva_o_texto_ao_redor_e_os_numeros_de_linha() -> None:
     text = "antes\n-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----\ndepois"
 
     out, _ = redact(text, "text")
 
-    assert out == "antes\n<private key omitido>\ndepois"
+    assert out == "antes\n<private key omitido>\n\n\ndepois"
+    assert out.split("\n").index("depois") == text.split("\n").index("depois")
+
+
+@pytest.mark.parametrize(
+    ("text", "language", "expected"),
+    [
+        ("redis://:s3cr3tP4ss@host:6379", "python", "redis://:***@host:6379"),
+        ("export API_TOKEN=abcd1234efgh", "bash", "export API_TOKEN=***"),
+        ("ENV DB_PASSWORD=Sup3rS3cretX", "", "ENV DB_PASSWORD=***"),
+        ("```yaml\n  client-secret: q8Zabc123xyz\n```", "markdown", "```yaml\n  client-secret: ***\n```"),
+        ("O token: obrigatorio123 na prosa", "markdown", "O token: obrigatorio123 na prosa"),
+    ],
+)
+def test_formatos_de_segredo(text: str, language: str, expected: str) -> None:
+    assert redact(text, language)[0] == expected
 
 
 def test_base64_longo_vira_marcador() -> None:

@@ -60,6 +60,17 @@ def test_intervalo_fora_do_arquivo_e_erro_com_total(repo: Path) -> None:
     assert read_file(repo, "r", "src/app.py", 2, 99).splitlines()[-1] == "    3  b = 2"
 
 
+def test_arquivo_grande_demais_e_recusado(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import code_index.retrieval.files as files
+
+    monkeypatch.setattr(files, "MAX_BYTES", 10)
+    (repo / "grande.txt").write_text("x" * 11)
+    with pytest.raises(ValueError, match="grande demais para leitura"):
+        read_file(repo, "r", "grande.txt")
+    (repo / "ok.txt").write_text("x" * 10)  # no limite, ainda lê
+    assert read_file(repo, "r", "ok.txt") == "    1  " + "x" * 10
+
+
 def test_arquivo_grande_vem_em_partes(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import code_index.retrieval.files as files
 

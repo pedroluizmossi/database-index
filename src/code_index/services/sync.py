@@ -131,11 +131,10 @@ class SyncMixin(ApisMixin, EnrichMixin):
                 doc_pages=doc_pages, on_progress=save_progress,
             )
             status, result = "done", res.to_dict()
-            if res.selected and not res.indexed and res.errors:
+            if res.all_failed:
                 # Nada foi indexado e todos os selecionados falharam: o job falhou, não "concluiu".
-                first = next(iter(res.errors.values())).splitlines()[0]
                 status = "failed"
-                error = f"todos os {len(res.selected)} repo(s) falharam; ex.: {first[:300]}"
+                error = f"todos os {len(res.selected)} repo(s) falharam; ex.: {res.first_error()[:300]}"
         except asyncio.CancelledError:
             error = "interrompido: o servidor foi encerrado durante a indexação"
             await self._jobs.finish(job_id, status=status, result=None, error=error)

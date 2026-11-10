@@ -407,7 +407,7 @@ def validate_card(
             errors.append(f"{key}: cada item com até {max_len} caracteres")
             continue
         if key in ("entrypoints", "evidencias"):
-            norm = [x.lstrip("./") for x in items]
+            norm = [x.removeprefix("./") for x in items]
             missing = [x for x in norm if not path_exists(x)]
             if missing:
                 errors.append(f"{key}: não existem no repo: {', '.join(missing[:5])}. Use caminhos relativos à raiz do repo.")

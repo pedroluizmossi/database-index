@@ -26,7 +26,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from ...domain.auth import SEARCH_READ, Principal
 from ...domain.oauth import OAUTH_SCOPES
-from ...domain.usage import client_from_user_agent
+from ...domain.usage import client_from_user_agent, status_for
 from ...services import CodeIndexService
 from ...settings import Settings
 from .mcp_oauth import CodeIndexOAuthProvider
@@ -157,7 +157,7 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
             try:
                 result = await fn(svc)
             except (ValueError, RuntimeError, PermissionError) as e:
-                await done(400, llm_usage=meter.snapshot())
+                await done(status_for(e), llm_usage=meter.snapshot())
                 raise ToolError(str(e)) from None
             except ToolError:
                 await done(400, llm_usage=meter.snapshot())

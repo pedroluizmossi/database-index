@@ -130,3 +130,33 @@ async def test_tabela_antiga_continua_buscavel(int_settings: Settings) -> None:
         assert [h.path for h in hits] == ["a.py"]
         # sem colunas de busca, o índice BM25 não é criado (nem quebra)
         assert await store.ensure_bm25_index() is False
+
+
+async def test_identificador_composto_casado_inteiro_vence_repeticao_das_partes(
+    int_settings: Settings, tmp_path: Path, fake_llm: Any
+) -> None:
+    """SMTP_THROTTLING_MINUTE usado uma vez vence um trecho que só repete "smtp" (o OR das partes)."""
+    root = tmp_path / "smtp"
+    (root / "src").mkdir(parents=True)
+    getters = "\n".join(
+        f"    public String getSmtp{n}() {{ return smtp{n}; }} // smtp smtp throttling minute" for n in range(30)
+    )
+    (root / "src" / "Tenant.java").write_text(f"public class Tenant {{\n{getters}\n}}\n")
+    (root / "src" / "Provider.java").write_text(
+        "public class Provider {\n"
+        "    int throttling() { return config.getInt(Consts.Service.SMTP_THROTTLING_MINUTE, 0); }\n"
+        "}\n"
+    )
+    async with open_service(int_settings) as svc:
+        await svc.add_repo(str(root), name="smtp")
+        res = await svc.sync(["smtp"], batch=None, do_discover=False, progress=False)
+        assert res.errors == {}
+        for query in ("SMTP_THROTTLING_MINUTE", "onde usa SMTP_THROTTLING_MINUTE"):
+            hits = await svc.search(query, mode="keyword", rerank=False)
+            assert hits and hits[0].path == "src/Provider.java", query
+
+        # filtros que se contradizem: erro explicando, não lista vazia
+        with pytest.raises(ValueError, match="kind=doc"):
+            await svc.search("x", kind="doc", language="java")
+        with pytest.raises(ValueError, match="path_glob"):
+            await svc.search("x", kind="code", path_glob="docs/**/*.md")

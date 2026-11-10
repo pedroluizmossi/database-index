@@ -39,7 +39,9 @@ log = logging.getLogger(__name__)
 MCP_CODE_MAX_CHARS = 4000  # trecho maior (ex.: JSON minificado) é cortado; o resto sai via read_file_lines
 
 
-_REPO_DROP = ("source", "pushed_at", "size_kb", "skipped", "card_stale", "owner_confidence")
+_REPO_DROP = ("source", "pushed_at", "size_kb", "skipped", "card_stale", "owner_confidence", "commit", "chunks")
+LIST_REPOS_LIMIT = 50   # padrão do list_repos no MCP: a lista inteira (centenas de repos) estoura o contexto
+LIST_REPOS_MAX = 200
 
 
 def _compact_repo(repo: dict) -> dict:
@@ -49,6 +51,19 @@ def _compact_repo(repo: dict) -> dict:
     if summary:
         first = summary.split(". ", 1)[0].rstrip(".")
         out["summary"] = (first[:200] + "…") if len(first) > 200 else first + "."
+    return out
+
+
+def page_repos(rows: list[dict], limit: int, offset: int) -> dict:
+    """Uma página do list_repos: `total` e `next_offset` dizem ao agent se há mais e como continuar."""
+    limit = max(1, min(limit, LIST_REPOS_MAX))
+    offset = max(0, offset)
+    page = rows[offset:offset + limit]
+    out: dict = {"total": len(rows), "repos": page}
+    if offset + len(page) < len(rows):
+        out["next_offset"] = offset + len(page)
+        out["hint"] = ("há mais repos: filtre por name/domain/status ou use find_repos para achar pelo assunto; "
+                       f"para continuar, offset={offset + len(page)}")
     return out
 
 
@@ -249,24 +264,33 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
 
     @server.tool()
     async def list_repos(status: str | None = None, org: str | None = None, name: str | None = None,
-                         domain: str | None = None, ctx: Context | None = None) -> list[dict]:
+                         domain: str | None = None, limit: int = LIST_REPOS_LIMIT, offset: int = 0,
+                         ctx: Context | None = None) -> dict:
         """Lista os repositórios conhecidos, seu estado de indexação e o dono no DDD (`owners`).
+
+        Há centenas de repos: filtre por `name` ou `domain` sempre que puder. Para achar o repo pelo
+        assunto ("quem envia e-mail"), use find_repos.
 
         Args:
             status: "indexed", "pending", "error" ou "ignored".
             org: filtra por org do GitHub.
             name: trecho do nome do repo.
             domain: só repos deste domínio ("platform") ou serviço ("platform/authentication").
+            limit: máximo de repos nesta página (padrão 50, até 200).
+            offset: quantos pular (use o `next_offset` da página anterior).
+
+        Retorna {"total", "repos": [...], "next_offset"?, "hint"?}; `next_offset` só vem quando há mais.
         """
 
-        async def fn(svc: CodeIndexService) -> list[dict]:
+        async def fn(svc: CodeIndexService) -> dict:
             rows = await svc.list_repos(status=status, org=org, name=name)
             if domain:
                 want = domain.strip().lower().rstrip("/")
                 rows = [r for r in rows if any(o == want or o.startswith(want + "/") for o in r.owners)]
-            return [_compact_repo(r.to_dict()) for r in rows]
+            return page_repos([_compact_repo(r.to_dict()) for r in rows], limit, offset)
 
-        return await run_tool(ctx, "list_repos", {"status": status, "org": org, "name": name, "domain": domain},
+        return await run_tool(ctx, "list_repos", {"status": status, "org": org, "name": name, "domain": domain,
+                                                  "limit": limit, "offset": offset},
                               "read", None, fn)
 
     @server.tool()

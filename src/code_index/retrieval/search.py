@@ -17,8 +17,8 @@ from ..domain.ownership import Scope
 from ..indexing.context import Decl, chunk_header
 from ..infra.symbol_store import SymbolStore
 from ..infra import llm
-from ..domain.search_text import fusion_weights, query_kind, query_terms
-from ..infra.chunk_store import KINDS, ChunkStore
+from ..domain.search_text import exact_terms, fusion_weights, query_kind, query_terms
+from ..infra.chunk_store import KINDS, ChunkStore, kind_filter_conflict
 from ..settings import Settings
 
 log = logging.getLogger(__name__)
@@ -169,6 +169,8 @@ class Searcher:
             raise ValueError(f"mode inválido: {mode}")
         if kind is not None and kind not in KINDS:
             raise ValueError(f"kind inválido: {kind} (use code ou doc)")
+        if conflict := kind_filter_conflict(kind, language, path_glob):
+            raise ValueError(conflict)
         s = self._settings
         use_vec = mode in ("hybrid", "semantic")
         use_kw = mode in ("hybrid", "keyword")
@@ -192,6 +194,7 @@ class Searcher:
         hits = await self._chunks.hybrid_search(
             query_vec=query_vec,
             terms=query_terms(query) if use_kw else [],
+            exact_terms=exact_terms(query) if use_kw else [],
             vec_weight=vec_weight,
             kw_weight=kw_weight,
             limit=fetch_n,

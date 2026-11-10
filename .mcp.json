@@ -2,10 +2,7 @@
   "mcpServers": {
     "code-index": {
       "type": "http",
-      "url": "${CODE_INDEX_URL:-http://127.0.0.1:8765}/mcp",
-      "headers": {
-        "Authorization": "Bearer ${CODE_INDEX_TOKEN}"
-      }
+      "url": "${CODE_INDEX_URL:-http://localhost:8765}/mcp"
     }
   }
 }

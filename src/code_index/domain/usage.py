@@ -99,7 +99,7 @@ def clean_params(params: Mapping[str, Any] | None) -> dict[str, Any] | None:
     return out or None
 
 
-_COUNT_KEYS = ("matches", "results", "relations", "items", "hits", "domains")
+_COUNT_KEYS = ("matches", "results", "relations", "items", "hits", "domains", "repos")
 
 
 def result_count(result: Any) -> int | None:

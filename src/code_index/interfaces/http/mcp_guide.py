@@ -17,7 +17,8 @@ Escolha a tool pelo tipo de pergunta:
 - repo_card: o que um repo faz, operações SDL, relacionados e por onde começar a ler.
 - find_api_impl: onde uma operação da API é implementada (handler, arquivo:linha).
 - related: tudo ligado a uma entidade (repo, página, operação, código), com a origem de cada relação.
-- list_repos: descobrir nomes de repos (com resumo, dono domínio/serviço) e se estão indexados.
+- list_repos: descobrir nomes de repos (com resumo, dono domínio/serviço) e se estão indexados; filtre por
+  `name` ou `domain` (a lista vem paginada: `total` e `next_offset`).
 - list_domains: domínios e serviços do DDD (nome técnico e rótulo), para filtrar a busca por domínio.
 
 Regras: filtre por `repos` assim que souber o repo (aceita o nome curto, sem a org), ou por `domain`

@@ -494,7 +494,9 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
           />
         )}
 
-        <div className="hidden overflow-x-auto md:block">
+        {/* Colunas opcionais pela largura do painel (@container), não da janela: o conteúdo tem largura máxima, e em
+            Full HD todas apareciam, a tabela passava do painel e a última coluna ficava sob "Ações" (fixa à direita). */}
+        <div className="@container hidden overflow-x-auto md:block">
           <table className="w-full text-sm">
             <thead className={tableHeadClass}>
               <tr>
@@ -511,12 +513,12 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
                 )}
                 <SortHeader label="Repositório" sortKey="name" sort={sort} onSort={toggleSort} />
                 <SortHeader label="Status" sortKey="status" sort={sort} onSort={toggleSort} />
-                <SortHeader label="Domínio" sortKey="owner" sort={sort} onSort={toggleSort} className="hidden lg:table-cell" />
-                <SortHeader label="Linguagem" sortKey="language" sort={sort} onSort={toggleSort} className="hidden xl:table-cell" />
-                <SortHeader label="Arquivos" sortKey="files" sort={sort} onSort={toggleSort} align="right" className="hidden 2xl:table-cell" />
+                <SortHeader label="Domínio" sortKey="owner" sort={sort} onSort={toggleSort} className="hidden @4xl:table-cell" />
+                <SortHeader label="Linguagem" sortKey="language" sort={sort} onSort={toggleSort} className="hidden @[70rem]:table-cell" />
+                <SortHeader label="Arquivos" sortKey="files" sort={sort} onSort={toggleSort} align="right" className="hidden @6xl:table-cell" />
                 <SortHeader label="Trechos" sortKey="chunks" sort={sort} onSort={toggleSort} align="right" />
-                <th className="hidden px-4 py-3 font-medium 2xl:table-cell">Commit</th>
-                <SortHeader label="Indexado" sortKey="indexed_at" sort={sort} onSort={toggleSort} className="hidden lg:table-cell" />
+                <th className="hidden px-4 py-3 font-medium @[80rem]:table-cell">Commit</th>
+                <SortHeader label="Indexado" sortKey="indexed_at" sort={sort} onSort={toggleSort} className="hidden @3xl:table-cell" />
                 {rowActions && (
                   <th className="sticky right-0 z-[2] bg-stone-50 px-4 py-3 text-right font-medium shadow-[-8px_0_8px_-8px_rgb(0_0_0/0.12)] dark:bg-stone-900">
                     Ações
@@ -1238,14 +1240,14 @@ function RepoRow({ repo: r, live, actions, selection, onXray }: { repo: Repo; li
       <td className="px-4 py-3">
         <RepoStatus repo={r} live={live} />
       </td>
-      <td className="hidden px-4 py-3 lg:table-cell">
+      <td className="hidden px-4 py-3 @4xl:table-cell">
         <OwnerCell repo={r} onOwn={ownerAction(actions, r)} />
       </td>
-      <td className="hidden px-4 py-3 text-stone-600 xl:table-cell dark:text-stone-300">{r.language ?? "—"}</td>
-      <td className="hidden px-4 py-3 text-right tabular-nums 2xl:table-cell">{numberFormat.format(r.files)}</td>
+      <td className="hidden px-4 py-3 text-stone-600 @[70rem]:table-cell dark:text-stone-300">{r.language ?? "—"}</td>
+      <td className="hidden px-4 py-3 text-right tabular-nums @6xl:table-cell">{numberFormat.format(r.files)}</td>
       <td className="px-4 py-3 text-right tabular-nums">{numberFormat.format(r.chunks)}</td>
-      <td className="hidden px-4 py-3 font-mono text-xs text-stone-500 2xl:table-cell dark:text-stone-400">{r.commit ?? "—"}</td>
-      <td className="hidden px-4 py-3 lg:table-cell">
+      <td className="hidden px-4 py-3 font-mono text-xs text-stone-500 @[80rem]:table-cell dark:text-stone-400">{r.commit ?? "—"}</td>
+      <td className="hidden px-4 py-3 @3xl:table-cell">
         <span title={formatDateTime(r.indexed_at)} className="block whitespace-nowrap text-stone-600 dark:text-stone-300">
           {timeAgo(r.indexed_at)}
         </span>

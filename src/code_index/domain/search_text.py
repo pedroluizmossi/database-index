@@ -115,6 +115,21 @@ def query_terms(query: str) -> list[str]:
     return out
 
 
+def exact_terms(query: str) -> list[str]:
+    """Identificadores compostos da consulta, inteiros e minúsculos (SMTP_THROTTLING_MINUTE, HmacServiceImpl).
+
+    Na busca por termos, cada um entra também com peso alto: sem isso, o OR das partes (smtp, throttling...)
+    premia trechos que só repetem uma parte comum e o trecho que usa o nome exato fica de fora.
+    """
+    out: list[str] = []
+    for word in _WORD.findall(query):
+        if _IDENT.fullmatch(word) and len(split_identifier(word)) > 1:
+            full = word.lower().strip("_")
+            if full not in out:
+                out.append(full)
+    return out
+
+
 def query_kind(query: str) -> QueryKind:
     """'identifier' quando a consulta parece um nome de código (HmacServiceImpl, get_user,
     pkg.Classe, Classe::metodo, metodo()); 'natural' para frases."""

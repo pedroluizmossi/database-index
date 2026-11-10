@@ -93,3 +93,12 @@ def test_singular(word: str, sing: str | None) -> None:
     from code_index.domain.search_text import singular
 
     assert singular(word) == sing
+
+
+def test_exact_terms_so_identificadores_compostos() -> None:
+    from code_index.domain.search_text import exact_terms
+
+    assert exact_terms("SMTP_THROTTLING_MINUTE") == ["smtp_throttling_minute"]
+    assert exact_terms("onde HmacServiceImpl usa get_user e get_user?") == ["hmacserviceimpl", "get_user"]
+    assert exact_terms("como funciona a autenticação") == []
+    assert exact_terms("smtp") == []

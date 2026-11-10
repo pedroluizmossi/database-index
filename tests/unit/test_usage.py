@@ -47,6 +47,7 @@ def test_contagem_e_tamanho_da_resposta() -> None:
     assert U.result_count([1, 2, 3]) == 3
     assert U.result_count({"matches": [1], "truncated": False}) == 1
     assert U.result_count({"entity": "repo:x", "relations": [1, 2]}) == 2
+    assert U.result_count({"total": 300, "repos": [1, 2], "next_offset": 2}) == 2  # list_repos paginado
     assert U.result_count("texto do arquivo") is None
     assert U.result_count(None) is None
     assert U.response_bytes(None) == 0

@@ -44,3 +44,17 @@ def test_linhas_estimadas_pelo_planner() -> None:
     plan = '[{"Plan": {"Node Type": "Seq Scan", "Plan Rows": 21381, "Plan Width": 4}}]'
     assert plan_rows(plan) == 21381
     assert plan_rows([{"Plan": {"Plan Rows": 1}}]) == 1
+
+
+def test_kind_filter_conflict() -> None:
+    from code_index.infra.chunk_store import kind_filter_conflict
+
+    assert kind_filter_conflict("doc", "java", None) is not None
+    assert kind_filter_conflict("doc", "Markdown", None) is None
+    assert kind_filter_conflict("code", "markdown", None) is not None
+    assert kind_filter_conflict("code", "java", None) is None
+    assert kind_filter_conflict("doc", None, "src/**/*.java") is not None
+    assert kind_filter_conflict("doc", None, "docs/**/*.md") is None
+    assert kind_filter_conflict("code", None, "**/*.MD") is not None
+    assert kind_filter_conflict("code", None, "src/**") is None   # sem extensão: não dá para saber
+    assert kind_filter_conflict(None, "java", "**/*.md") is None  # sem kind não há contradição

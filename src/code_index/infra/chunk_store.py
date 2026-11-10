@@ -37,6 +37,9 @@ log = logging.getLogger(__name__)
 _HNSW_EF_MAX = 1000       # teto do pgvector para hnsw.ef_search
 _CAPS_TTL = 30.0          # segundos entre rechecagens do que o banco oferece
 _BM25_SYMBOL_BOOST = 3    # nomes de símbolos/caminho valem mais que o corpo do código
+# Identificador composto da consulta casado inteiro (SMTP_THROTTLING_MINUTE): sem esse peso, o OR das partes
+# premia trechos que só repetem uma parte comum ("smtp") e o uso exato fica fora dos candidatos.
+_EXACT_BOOST = 5
 BM25_INDEX = "code_chunks_bm25"
 
 # Documento do full-text com pesos (símbolos A, código B). Usado no índice GIN e na consulta:
@@ -94,6 +97,33 @@ DOC_EXTENSIONS = (".md", ".mdx", ".rst", ".adoc", ".txt")
 def hit_kind(language: str, path: str) -> str:
     """'doc' para Markdown/RST/AsciiDoc (README, docs/ de um repo, páginas de wiki); senão 'code'."""
     return "doc" if language == "markdown" or path.lower().endswith(DOC_EXTENSIONS) else "code"
+
+
+DOC_LANGUAGES = ("markdown", "rst")  # linguagens que só aparecem em documentação (ver hit_kind)
+_GLOB_EXT = re.compile(r"\*\.([A-Za-z0-9]+)$")
+
+
+def kind_filter_conflict(kind: str | None, language: str | None, path_glob: str | None) -> str | None:
+    """Mensagem quando `kind` contradiz `language` ou a extensão de `path_glob` (o resultado seria sempre
+    vazio e o agent concluiria que "não existe"); None se os filtros combinam."""
+    if kind not in KINDS:
+        return None
+    lang = (language or "").strip().lower()
+    if lang:
+        if kind == "doc" and lang not in DOC_LANGUAGES:
+            return (f"kind=doc só traz documentação (markdown/rst), e language={lang} é código: "
+                    "tire o language ou use kind=code")
+        if kind == "code" and lang in DOC_LANGUAGES:
+            return f"language={lang} é documentação, e kind=code exclui documentação: use kind=doc ou tire o kind"
+    m = _GLOB_EXT.search((path_glob or "").strip())
+    if m:
+        is_doc = f".{m.group(1).lower()}" in DOC_EXTENSIONS
+        if kind == "doc" and not is_doc:
+            return (f"kind=doc só traz documentação ({', '.join(DOC_EXTENSIONS)}), e path_glob={path_glob} só "
+                    "casa código: tire o path_glob ou use kind=code")
+        if kind == "code" and is_doc:
+            return f"path_glob={path_glob} só casa documentação, e kind=code a exclui: use kind=doc ou tire o kind"
+    return None
 
 
 def _doc_condition(p: _Params) -> str:
@@ -246,6 +276,7 @@ class ChunkStore:
         *,
         query_vec: np.ndarray | None,
         terms: Sequence[str],
+        exact_terms: Sequence[str] = (),
         limit: int,
         per_source: int,
         vec_weight: float = 1.0,
@@ -261,7 +292,8 @@ class ChunkStore:
     ) -> list[Hit]:
         """Fusão RRF ponderada: score = Σ peso_fonte / (RRF_K + posição na fonte).
 
-        `terms` já vêm tokenizados (domain.search_text.query_terms). `per_source` é quantos
+        `terms` já vêm tokenizados (domain.search_text.query_terms); `exact_terms` (search_text.exact_terms)
+        são identificadores compostos da consulta, que pesam mais quando casam inteiros. `per_source` é quantos
         candidatos cada fonte traz; `limit` é quantos sobram após a fusão. Sem fontes → [].
         `kind`: 'code' | 'doc' | None. `include_linked_docs`: com `repos`, traz também as páginas
         de documentação externa ligadas a eles. `scope`: só o código de um domínio/serviço do DDD.
@@ -302,7 +334,7 @@ class ChunkStore:
             weights.append(vec_weight)
 
         if use_kw:
-            kw_sql = self._keyword_sql(engine, p, terms, where, k)
+            kw_sql = self._keyword_sql(engine, p, terms, where, k, exact_terms)
             if kw_sql:
                 parts.append(f"""
             SELECT repo, path, id, row_number() OVER (ORDER BY rank DESC) AS rnk, {float(kw_weight)}::float8 AS w
@@ -401,23 +433,33 @@ class ChunkStore:
             if key in impls:
                 h.implemented_in = impls[key]
 
-    def _keyword_sql(self, engine: KeywordEngine, p: _Params, terms: Sequence[str], where: str, k: str) -> str | None:
+    def _keyword_sql(self, engine: KeywordEngine, p: _Params, terms: Sequence[str], where: str, k: str,
+                     exact_terms: Sequence[str] = ()) -> str | None:
         t = self._table
+        exact = [e for e in exact_terms if e in terms]
         if engine == "bm25":
             q = p(" ".join(terms))
+            # ::text explícito: sem ele o asyncpg infere o parâmetro como pdb.boost (sem typmod) e falha
+            match = f"search_symbols ||| {q}::text::pdb.boost({_BM25_SYMBOL_BOOST}) OR search_terms ||| {q}::text"
+            if exact:
+                e = p(" ".join(exact))
+                match += (f" OR search_symbols ||| {e}::text::pdb.boost({_BM25_SYMBOL_BOOST * _EXACT_BOOST})"
+                          f" OR search_terms ||| {e}::text::pdb.boost({_EXACT_BOOST})")
             return (
                 f"SELECT repo, path, id, pdb.score(id) AS rank FROM {t} "
-                # ::text explícito: sem ele o asyncpg infere o parâmetro como pdb.boost (sem typmod) e falha
-                f"WHERE (search_symbols ||| {q}::text::pdb.boost({_BM25_SYMBOL_BOOST}) OR search_terms ||| {q}::text) "
-                f"AND {where} ORDER BY rank DESC LIMIT {k}"
+                f"WHERE ({match}) AND {where} ORDER BY rank DESC LIMIT {k}"
             )
         tsq = tsquery_or(terms)
         if tsq is None:
             return None
         q = p(tsq)
         if engine == "fts":
+            rank = f"ts_rank({_FTS_WEIGHTS}, {FTS_DOCUMENT}, to_tsquery('simple', {q}))"
+            exact_tsq = tsquery_or(exact)
+            if exact_tsq:
+                rank += f" + {_EXACT_BOOST} * ts_rank({_FTS_WEIGHTS}, {FTS_DOCUMENT}, to_tsquery('simple', {p(exact_tsq)}))"
             return (
-                f"SELECT repo, path, id, ts_rank({_FTS_WEIGHTS}, {FTS_DOCUMENT}, to_tsquery('simple', {q})) AS rank "
+                f"SELECT repo, path, id, {rank} AS rank "
                 f"FROM {t} WHERE {FTS_DOCUMENT} @@ to_tsquery('simple', {q}) AND {where} "
                 f"ORDER BY rank DESC LIMIT {k}"
             )

@@ -548,8 +548,10 @@ dias, enquanto o refresh valer). Clientes cujo retorno não é `http://localhost
 precisam do prefixo em `CODE_INDEX_OAUTH_REDIRECT_URIS`: mesmo esquema e host:porta, e o caminho do prefixo
 fecha num segmento (`https://site/cb` aceita `/cb` e `/cb/x`, não `/cbx` nem `https://site@outro`).
 
-**Com token colado:** os tokens de agent também servem para o MCP. O `.mcp.json` deste projeto lê
-`CODE_INDEX_URL` e `CODE_INDEX_TOKEN` do ambiente. Para usar em qualquer projeto:
+O `.mcp.json` deste projeto já aponta para o servidor local (`http://localhost:8765/mcp`, ou `CODE_INDEX_URL`
+se definida) sem token: entre pelo `/mcp` → code-index → Authenticate.
+
+**Com token colado:** os tokens de agent também servem para o MCP. Para usar em qualquer projeto:
 
 ```bash
 claude mcp add --scope user --transport http code-index https://<host>/mcp \

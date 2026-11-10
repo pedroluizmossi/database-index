@@ -47,9 +47,12 @@ class Settings(BaseSettings):
     embed_max_inflight: int = Field(4, validation_alias="EMBED_MAX_INFLIGHT")
     rerank_model: str = Field("voyage/rerank-2.5", validation_alias="RERANK_MODEL")  # vazio desliga
     rerank_candidates: int = Field(40, validation_alias="RERANK_CANDIDATES")
-    # Busca com filtro de repos/domínio sobre até N trechos: vetor exato em vez do HNSW (que perde resultados
-    # quando o filtro é seletivo). Acima disso, HNSW com varredura iterativa.
+    # Busca com filtro (repos, domínio, tipo, linguagem, caminho) sobre até N trechos: vetor exato em vez do
+    # HNSW (que perde resultados quando o filtro é seletivo). Acima disso, HNSW com varredura iterativa.
     search_exact_max_chunks: int = Field(60_000, ge=0, validation_alias="SEARCH_EXACT_MAX_CHUNKS")
+    # Vizinhos que o HNSW examina por busca. O padrão do pgvector (40) é menor que o nº de candidatos pedidos e
+    # perdia vizinhos: em ~90 mil trechos, recall@10 de 0,88 (pior caso 0,1) com 40 e de 1,00 com 400, em ~7 ms.
+    search_hnsw_ef_search: int = Field(400, ge=40, le=1000, validation_alias="SEARCH_HNSW_EF_SEARCH")
     # Variações do rerank (medidas com `code-index eval --rerank-variants`). A instrução foi a única com
     # ganho claro (MRR 0,76 -> 0,88 em evals/queries.json com rerank-3); cabeçalho e "só código", marginais.
     rerank_instruction: bool = Field(True, validation_alias="RERANK_INSTRUCTION")   # pede código na consulta
@@ -120,6 +123,10 @@ class Settings(BaseSettings):
     admin_emails:Annotated[list[str], NoDecode] = Field(default_factory=list, validation_alias="CODE_INDEX_ADMIN_EMAILS")
     session_ttl_hours: int = Field(12, validation_alias="CODE_INDEX_SESSION_TTL_HOURS")
     token_ttl_days: int = Field(90, validation_alias="CODE_INDEX_TOKEN_TTL_DAYS")
+
+    # Uso da aplicação (usage_events): um evento por chamada de tool MCP ou rota da API
+    usage_tracking: bool = Field(True, validation_alias="CODE_INDEX_USAGE_TRACKING")
+    usage_retention_days: int = Field(365, validation_alias="CODE_INDEX_USAGE_RETENTION_DAYS")
 
     # Rate limit por principal (requisições por minuto); sync/reindex tem limite próprio, por hora
     rate_limit_read_per_min: int = Field(120, validation_alias="CODE_INDEX_RATE_READ_PER_MIN")

@@ -19,7 +19,7 @@ from ..domain.models import Hit
 @dataclass(frozen=True)
 class Expected:
     repo: str            # nome do repo como em list_repos, só 'repo', ou '*' (qualquer)
-    path: str            # fim do caminho
+    path: str            # fim do caminho; começando com '/', o caminho exato a partir da raiz do repo
     line: int | None = None
 
 
@@ -30,6 +30,8 @@ class EvalCase:
     repos: tuple[str, ...] = ()
     kind: str | None = None
     tag: str = ""                    # categoria (code, doc, en, ident...) para métricas separadas
+    language: str | None = None      # filtros da busca, como em `search`
+    path_glob: str | None = None
 
 
 @dataclass
@@ -76,7 +78,8 @@ def load_cases(path: Path) -> list[EvalCase]:
         expect = tuple(Expected(e["repo"], e["path"], e.get("line")) for e in c["expect"])
         if not c.get("query") or not expect:
             raise ValueError(f"caso inválido em {path}: {c}")
-        cases.append(EvalCase(c["query"], expect, tuple(c.get("repos") or ()), c.get("kind"), c.get("tag", "")))
+        cases.append(EvalCase(c["query"], expect, tuple(c.get("repos") or ()), c.get("kind"), c.get("tag", ""),
+                              c.get("language"), c.get("path_glob")))
     return cases
 
 
@@ -87,7 +90,10 @@ def _repo_matches(expected: str, actual: str) -> bool:
 def matches(hit: Hit, exp: Expected) -> bool:
     if not _repo_matches(exp.repo, hit.repo):
         return False
-    if not (hit.path == exp.path or hit.path.endswith("/" + exp.path)):
+    if exp.path.startswith("/"):                      # ancorado na raiz do repo: caminho exato
+        if hit.path != exp.path[1:]:
+            return False
+    elif not (hit.path == exp.path or hit.path.endswith("/" + exp.path)):
         return False
     return exp.line is None or hit.start_line <= exp.line <= hit.end_line
 

@@ -18,7 +18,7 @@ class UsersMixin(ServiceBase):
         subject = self._settings_subject(principal, email)
         user = await self._users.get(subject)
         if principal is None and user is None:
-            raise ValueError(f"pessoa não encontrada: {subject} (ela aparece depois do primeiro login)")
+            raise ValueError(f"usuário não encontrado: {subject} (ele aparece depois do primeiro login)")
         stored = await self._users.settings(subject)
         return {
             "email": subject,
@@ -36,10 +36,10 @@ class UsersMixin(ServiceBase):
         um agent (que lê conteúdo indexado, não confiável) não muda as configs de ninguém.
         principal=None: operador local (CLI), que informa o `email` de uma pessoa que já fez login."""
         if principal is not None and principal.kind != "session":
-            raise PermissionError("só a própria pessoa, logada no navegador, altera as configurações")
+            raise PermissionError("só o próprio usuário, logado no navegador, altera as configurações")
         subject = self._settings_subject(principal, email)
         if principal is None and await self._users.get(subject) is None:
-            raise ValueError(f"pessoa não encontrada: {subject} (ela aparece depois do primeiro login)")
+            raise ValueError(f"usuário não encontrado: {subject} (ele aparece depois do primeiro login)")
         to_set, to_unset = preferences.validate_changes(changes)
         await self._users.apply_settings(subject, to_set, to_unset)
         return await self.user_settings(principal, email=email)
@@ -53,5 +53,5 @@ class UsersMixin(ServiceBase):
         if principal is not None:
             return principal.subject  # pela API, cada pessoa só alcança as próprias configs
         if not email or "@" not in email:
-            raise ValueError("informe o e-mail da pessoa")
+            raise ValueError("informe o e-mail do usuário")
         return email.strip().lower()

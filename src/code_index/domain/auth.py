@@ -62,6 +62,7 @@ class Principal:
     token_id: str | None = None
     token_name: str | None = None
     oauth_client_id: str | None = None   # só tokens OAuth: o cliente MCP que recebeu o token
+    user_id: str | None = None           # pessoa dona da credencial (users.id)
 
     def has(self, scope: str) -> bool:
         return scope in self.scopes
@@ -70,6 +71,18 @@ class Principal:
     def actor(self) -> str:
         """Identificação para auditoria: e-mail, mais o nome do token quando é um agent."""
         return self.subject if self.kind == "session" else f"{self.subject} [{self.token_name}]"
+
+
+def session_token_name(provider: str) -> str:
+    """Nome do token de sessão: guarda o provedor do login ('google-session')."""
+    return f"{provider}-session"
+
+
+def session_provider(principal: Principal) -> str | None:
+    """Provedor do login ('google', 'microsoft') de uma sessão de navegador; None para tokens de agent/OAuth."""
+    if principal.kind != "session" or not principal.token_name:
+        return None
+    return principal.token_name.removesuffix("-session") or None
 
 
 def check_can_issue(issuer: Principal, requested: Iterable[str]) -> tuple[str, ...]:

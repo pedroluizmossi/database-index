@@ -23,6 +23,9 @@ def test_acerto_por_nome_curto_sufixo_e_linha() -> None:
     assert first_hit(hits, (Expected("*", "X.java"),)) == 1
     assert first_hit(hits, (Expected("svc", "Y.java"),)) == 2          # fim do caminho
     assert first_hit(hits, (Expected("svc", "ice/Y.java"),)) is None   # não corta nome de pasta
+    docs = [hit("org__svc", "docs/README.md"), hit("org__svc", "README.md")]
+    assert first_hit(docs, (Expected("svc", "README.md"),)) == 1          # fim do caminho: qualquer README
+    assert first_hit(docs, (Expected("svc", "/README.md"),)) == 2         # '/' ancora na raiz do repo
 
 
 def test_metricas() -> None:
@@ -36,6 +39,10 @@ def test_carrega_casos_e_recusa_caso_sem_resposta(tmp_path: Path) -> None:
     f.write_text(json.dumps({"cases": [{"query": "q", "repos": ["r"], "expect": [{"repo": "r", "path": "a.py"}]}]}))
     (case,) = load_cases(f)
     assert case.repos == ("r",) and case.expect == (Expected("r", "a.py"),)
+    f.write_text(json.dumps({"cases": [{"query": "q", "kind": "code", "language": "go", "path_glob": "**/*.go",
+                                        "expect": [{"repo": "*", "path": "a.go", "line": 3}]}]}))
+    (case,) = load_cases(f)
+    assert (case.kind, case.language, case.path_glob, case.repos) == ("code", "go", "**/*.go", ())
     f.write_text(json.dumps({"cases": [{"query": "q", "expect": []}]}))
     with pytest.raises(ValueError):
         load_cases(f)
@@ -57,5 +64,5 @@ def test_metricas_por_categoria() -> None:
 
 def test_conjunto_tem_todas_as_categorias() -> None:
     cases = load_cases(Path(__file__).parents[2] / "evals" / "queries.json")
-    assert len(cases) >= 60
+    assert len(cases) >= 150
     assert {c.tag for c in cases} == {"code", "doc", "en", "ident"}

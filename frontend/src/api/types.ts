@@ -8,6 +8,8 @@ export interface Me {
   kind: "agent" | "session" | "oauth";
   scopes: string[];
   token_name: string | null;
+  /** Provedor do login ("google", "microsoft") quando a sessão é do navegador. */
+  provider?: string | null;
 }
 
 export type PrefValue = string | number | boolean;
@@ -419,4 +421,147 @@ export interface DocSuggestion {
   created_at: string;
   title: string | null;
   url: string | null;
+}
+
+/** Canal de uso: `mcp` = tool do MCP; `api` = REST com token de agent; `ui` = esta interface (sessão do navegador). */
+export type UsageChannel = "mcp" | "api" | "ui";
+
+export interface UsageTotals {
+  calls: number;
+  errors: number;
+  users: number;
+  clients: number;
+  mcp_calls: number;
+  avg_ms: number;
+  p95_ms: number;
+  /** Tamanho de todas as respostas (MCP, API e interface). */
+  response_bytes: number;
+  /** Só respostas de tools do MCP: o que entrou na janela de contexto de agents. */
+  context_bytes: number;
+  embed_tokens: number;
+  rerank_tokens: number;
+  cost_usd: number;
+  empty_results: number;
+  /** ≈ context_bytes / bytes_per_token: quanto da janela de contexto dos agents foi consumido (só MCP). */
+  context_tokens: number;
+}
+
+export interface UsageDay {
+  /** YYYY-MM-DD */
+  day: string;
+  mcp: number;
+  api: number;
+  ui: number;
+  errors: number;
+  users: number;
+  cost_usd: number;
+  /** Só MCP (contexto de agents). */
+  context_bytes: number;
+}
+
+export interface UsageAction {
+  channel: UsageChannel;
+  action: string;
+  calls: number;
+  errors: number;
+  users: number;
+  p50_ms: number;
+  p95_ms: number;
+  avg_results: number | null;
+  empty_results: number;
+  response_bytes: number;
+  avg_response_bytes: number;
+  embed_tokens: number;
+  rerank_tokens: number;
+  cost_usd: number;
+  last_at: string;
+  /** Só no canal MCP; null na API e na interface (a resposta não entra no contexto de um agent). */
+  context_tokens: number | null;
+  avg_context_tokens: number | null;
+}
+
+export interface UsageClient {
+  client: string;
+  channel: string;
+  calls: number;
+  users: number;
+  last_version: string | null;
+  last_at: string;
+}
+
+export interface UsageQuery {
+  action: string;
+  query: string;
+  calls: number;
+  users: number;
+  avg_results: number | null;
+  last_at: string;
+}
+
+export interface UsageEvent {
+  id: number;
+  at: string;
+  email: string | null;
+  channel: string;
+  action: string;
+  client: string | null;
+  client_version: string | null;
+  token_kind: string | null;
+  status: number;
+  duration_ms: number;
+  result_count: number | null;
+  response_bytes: number | null;
+  embed_tokens: number;
+  rerank_tokens: number;
+  cost_usd: number;
+  params: Record<string, unknown> | null;
+}
+
+/** GET /api/v1/usage (admin) e GET /api/v1/me/usage. */
+export interface UsageReport {
+  days: number;
+  generated_at: string;
+  bytes_per_token: number;
+  totals: UsageTotals;
+  /** Um item por dia (zerado quando não houve uso), do mais antigo ao mais recente. */
+  daily: UsageDay[];
+  by_action: UsageAction[];
+  by_client: UsageClient[];
+  top_queries: UsageQuery[];
+  /** Consultas que voltaram sem resultado: o sinal para melhorar o índice. */
+  empty_queries: UsageQuery[];
+  recent: UsageEvent[];
+}
+
+/** GET /api/v1/users (admin): usuário, papel, estado e uso no período. */
+export interface UserUsage {
+  id: string;
+  email: string;
+  display_name: string | null;
+  created_at: string;
+  last_login_at: string | null;
+  last_seen_at: string | null;
+  disabled_at: string | null;
+  active: boolean;
+  role: "admin" | "leitura";
+  active_tokens: number;
+  calls: number;
+  mcp_calls: number;
+  api_calls: number;
+  ui_calls: number;
+  errors: number;
+  /** Só MCP. */
+  context_bytes: number;
+  context_tokens: number;
+  llm_tokens: number;
+  cost_usd: number;
+  last_at: string | null;
+  top_action: string | null;
+  clients: string[];
+}
+
+export interface UserStatus {
+  email: string;
+  active: boolean;
+  disabled_at: string | null;
 }

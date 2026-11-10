@@ -1,5 +1,5 @@
 {
- "description": "Perguntas com a resposta conhecida (repo + fim do caminho, opcionalmente a linha). Rode com `uv run code-index eval`. Cada consulta gasta um embedding e, com rerank, uma chamada ao reranker. Tags: code (pergunta sobre código, em português), doc (a resposta é documentação), en (pergunta em inglês), ident (nome de classe/método).",
+ "description": "Perguntas com a resposta conhecida (repo + fim do caminho, opcionalmente a linha; caminho começando com '/' é exato a partir da raiz do repo). Rode com `uv run code-index eval`. Cada consulta gasta um embedding e, com rerank, uma chamada ao reranker. Tags: code (pergunta sobre código, em português), doc (a resposta é documentação), en (pergunta em inglês), ident (nome de classe/método). Filtros opcionais por caso, como na busca: repos, kind (code|doc), language, path_glob. As respostas foram escolhidas lendo os arquivos nos clones, não pelo resultado da busca.",
  "cases": [
   {
    "query": "onde é validado o código OTP no login multifator",
@@ -801,6 +801,1022 @@
     {
      "repo": "*",
      "path": "CaptchaValidator.java"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "sanitização do HTML do conteúdo de uma notificação do tipo enquete, deixando passar só links e formatação",
+   "expect": [
+    {
+     "repo": "snr-notifications-backend",
+     "path": "distribution/PollDistributor.java"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "impedir que o script que gera o payload de um agendamento chame exit ou acesse classes Java",
+   "expect": [
+    {
+     "repo": "snr-scheduler-service",
+     "path": "core/ScriptPayloadProvider.java"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "limpeza periódica do histórico de execuções antigas dos jobs agendados",
+   "expect": [
+    {
+     "repo": "snr-scheduler-service",
+     "path": "db/ExecutionHistoryCleanerJob.java"
+    },
+    {
+     "repo": "snr-scheduler-service",
+     "path": "db/ExecutionHistoryCleaner.java"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "bloqueia o envio de SMS quando o tenant já atingiu o limite mensal",
+   "expect": [
+    {
+     "repo": "snr-sms-backend",
+     "path": "services/sms/TenantSmsLimitValidationUseCaseImpl.java"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "valida o token do cookie antes de aceitar a conexão do websocket",
+   "expect": [
+    {
+     "repo": "snr-websocket",
+     "path": "interceptor/HandshakeInterceptor.java"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "avisar os usuários por notificação quando as licenças do tenant são alteradas",
+   "expect": [
+    {
+     "repo": "snr-licensing-backend",
+     "path": "service/LicenseChangedListener.java"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "por que a ordenação da pesquisa de usuários sempre acrescenta o id como último critério",
+   "expect": [
+    {
+     "repo": "snr-user-backend",
+     "path": "search/filter/SearchOrderByParser.java"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "limite de requisições por IP no portal de login que responde 429",
+   "expect": [
+    {
+     "repo": "snr-login-backend",
+     "path": "filter/IpThrottlingFilter.java"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "apagar em lotes os registros antigos do histórico de entregas de webhook sem segurar lock por muito tempo",
+   "expect": [
+    {
+     "repo": "snr-events-hub-backend",
+     "path": "retention/RetentionBatchDeleter.java"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "transformar uma lista de inteiros em intervalos como 1-3,5,7-9 para o valor de um filtro de domínio",
+   "expect": [
+    {
+     "repo": "snr-domain-filter-backend",
+     "path": "utils/RangeCompressor.java"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "tabelas e colunas que ficam de fora do backup feito antes de excluir um tenant",
+   "expect": [
+    {
+     "repo": "snr-tenant-cleanup-worker-backend",
+     "path": "backup/BackupExclusions.java"
+    }
+   ]
+  },
+  {
+   "tag": "en",
+   "query": "obtain and cache the Google access token used to send push notifications through Firebase",
+   "expect": [
+    {
+     "repo": "snr-notifications-backend",
+     "path": "firebase/FirebaseAccessTokenServiceCacheImpl.java"
+    }
+   ]
+  },
+  {
+   "tag": "en",
+   "query": "normalize a phone number to E.164 using Brazil as the default region",
+   "expect": [
+    {
+     "repo": "snr-sms-backend",
+     "path": "infra/utils/PhoneNumberParserImpl.java"
+    }
+   ]
+  },
+  {
+   "tag": "en",
+   "query": "periodically compare resource usage against tenant limits and notify when a resource gets blocked or becomes available again",
+   "expect": [
+    {
+     "repo": "snr-usage-limiter",
+     "path": "limiter/LimiterWatchdog.java"
+    }
+   ]
+  },
+  {
+   "tag": "en",
+   "query": "validate the OpenID Connect back-channel logout token sent by the identity provider",
+   "expect": [
+    {
+     "repo": "snr-login-backend",
+     "path": "login/BackChannelLogoutHandlerImpl.java"
+    }
+   ]
+  },
+  {
+   "tag": "en",
+   "query": "reconcile rate limit configs stored in the database with Redis and remove orphan keys",
+   "expect": [
+    {
+     "repo": "snr-rate-limit-config-back",
+     "path": "service/ReconciliationService.java"
+    }
+   ]
+  },
+  {
+   "tag": "ident",
+   "query": "validatePassword",
+   "expect": [
+    {
+     "repo": "snr-password-validator",
+     "path": "passwordvalidator/PasswordValidator.java"
+    },
+    {
+     "repo": "snr-tenant-service",
+     "path": "handlers/CreateTenantHandler.java"
+    }
+   ]
+  },
+  {
+   "tag": "ident",
+   "query": "hash128",
+   "expect": [
+    {
+     "repo": "snr-authorization-backend",
+     "path": "utils/HashFunctions.java"
+    }
+   ]
+  },
+  {
+   "tag": "ident",
+   "query": "CryptoConverter",
+   "expect": [
+    {
+     "repo": "*",
+     "path": "CryptoConverter.java"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "gerar ou trocar o segredo HMAC usado para assinar as chamadas de webhook de um endpoint",
+   "language": "java",
+   "expect": [
+    {
+     "repo": "snr-events-hub-backend",
+     "path": "service/HmacServiceImpl.java"
+    },
+    {
+     "repo": "snr-events-hub-backend",
+     "path": "ConfigureHmacHandler.java"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "exportar o resultado de uma consulta de trace para um arquivo e devolver o link de download",
+   "language": "java",
+   "expect": [
+    {
+     "repo": "snr-trace-backend",
+     "path": "service/FileQueryResultExporter.java"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "carga inicial dos estados brasileiros na tabela de estados",
+   "language": "sql",
+   "expect": [
+    {
+     "repo": "snr-localization-backend",
+     "path": "V20220513101616466__carga_estados.sql"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "acompanhar a resposta de uma conversa do assistente por mensagens do iframe ou consultando a API de tempos em tempos",
+   "expect": [
+    {
+     "repo": "snr-senior-x-frontend",
+     "path": "sara/services/thread-monitor.service.ts"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "escolher preto ou branco para o contorno de foco conforme a cor da marca do cliente",
+   "expect": [
+    {
+     "repo": "snr-senior-x-frontend",
+     "path": "header-brand/shade-color.ts"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "remover URLs, credenciais e conteúdo de arquivos antes de escrever no log da extensão do VS Code",
+   "expect": [
+    {
+     "repo": "snr-functions-vscode-extension",
+     "path": "utils/logSanitizer.ts"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "detectar o navegador e a versão pelo user agent na tela de login",
+   "expect": [
+    {
+     "repo": "snr-login-frontend",
+     "path": "app/browser-version.js"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "montar o texto de resumo do agendamento com data de início, repetição e regra de término",
+   "expect": [
+    {
+     "repo": "snr-scheduler-frontend",
+     "path": "scheduler-detail/summary-builder.service.ts"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "web component do banner de aceite de cookies",
+   "expect": [
+    {
+     "repo": "snr-web-components",
+     "path": "sds-cookie-banner/sds-cookie-banner.tsx"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "aceitar o nome do ícone digitado em vários formatos e converter para a classe padrão do Font Awesome",
+   "expect": [
+    {
+     "repo": "snr-iassist-frontend",
+     "path": "icon-picker/icon-utils.ts"
+    }
+   ]
+  },
+  {
+   "tag": "en",
+   "query": "directive that emits an event when the user keeps the mouse button or the touch pressed for a configured delay",
+   "expect": [
+    {
+     "repo": "snr-angular-components",
+     "path": "mouse-events/long-press.directive.ts"
+    }
+   ]
+  },
+  {
+   "tag": "en",
+   "query": "workaround for the PrimeNG autocomplete not updating the model when a chip is removed using the keyboard",
+   "expect": [
+    {
+     "repo": "snr-angular-components",
+     "path": "autocomplete/p-autocomplete-multiple-keyboard-fix.directive.ts"
+    }
+   ]
+  },
+  {
+   "tag": "en",
+   "query": "parse the repetition settings of an existing schedule back into the form options",
+   "expect": [
+    {
+     "repo": "snr-scheduler-frontend",
+     "path": "scheduler-detail/schedule-repetition-parser.service.ts"
+    }
+   ]
+  },
+  {
+   "tag": "ident",
+   "query": "FavoriteService",
+   "expect": [
+    {
+     "repo": "snr-senior-x-frontend",
+     "path": "modal-favorite/favorite.service.ts"
+    }
+   ]
+  },
+  {
+   "tag": "ident",
+   "query": "UpdateLambdaRuntimeTool",
+   "expect": [
+    {
+     "repo": "snr-functions-vscode-extension",
+     "path": "ai/tools/UpdateLambdaRuntimeTool.ts"
+    }
+   ]
+  },
+  {
+   "tag": "ident",
+   "query": "IframeTrackerDirective",
+   "expect": [
+    {
+     "repo": "*",
+     "path": "iframe-tracker.directive.ts"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "guard de rota que manda para a página de acesso negado quem não pode salvar shards",
+   "language": "typescript",
+   "expect": [
+    {
+     "repo": "snr-platform-db-sharding-frontend",
+     "path": "guard/db-sharding-management.guard.ts"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "nomes traduzidos de dias e meses para o calendário do filtro avançado",
+   "language": "typescript",
+   "expect": [
+    {
+     "repo": "snr-platform-components",
+     "path": "services/calendar-options.service.ts"
+    },
+    {
+     "repo": "snr-trace-frontend",
+     "path": "services/calendarOptionsService.ts"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "colar o código copiado da área de transferência no campo do segundo fator de autenticação do aplicativo",
+   "language": "dart",
+   "expect": [
+    {
+     "repo": "snr-senior-platform-authentication-ui",
+     "path": "widgets/mfa_authentication_code.dart"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "tirar da navegação por tab os botões de mês e ano do calendário, por acessibilidade",
+   "path_glob": "**/*.directive.ts",
+   "expect": [
+    {
+     "repo": "*",
+     "path": "datepicker-no-period-tab.directive.ts"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "trocar o token OAuth legado por um JWT antes de encaminhar a requisição",
+   "expect": [
+    {
+     "repo": "snr-legacy-gateway",
+     "path": "service/token_switcher.go"
+    },
+    {
+     "repo": "snr-legacy-gateway",
+     "path": "service/token_mapper.go"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "apagar da fila do serviço no RabbitMQ os bindings de eventos que ele não assina mais",
+   "expect": [
+    {
+     "repo": "snr-sidecar",
+     "path": "messaging/rabbitmq_admin.go"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "cifrar a senha do usuário para reutilizar nas chamadas SOAP feitas pelo servidor MCP",
+   "expect": [
+    {
+     "repo": "snr-seniorx-mcp",
+     "path": "auth/soap_credentials.py"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "garantir que só uma instância execute o agendador usando um lease no MongoDB",
+   "expect": [
+    {
+     "repo": "snr-senior-context-explorer",
+     "path": "agentic_rag_core/scheduler_lease.py"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "extrair domínio, serviço e primitiva do caminho da requisição no plugin de rate limit do Kong",
+   "expect": [
+    {
+     "repo": "snr-kong",
+     "path": "senior-rate-limit/path_parser.lua"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "exemplo no template .NET de serviço que processa em segundo plano e notifica o usuário quando termina",
+   "expect": [
+    {
+     "repo": "snr-dotnet-flex-scaffold",
+     "path": "Services/NotificationsDemoService.cs"
+    },
+    {
+     "repo": "snr-dotnet-flex-scaffold",
+     "path": "Controllers/NotificationsDemoController.cs"
+    }
+   ]
+  },
+  {
+   "tag": "en",
+   "query": "renew Microsoft Graph webhook subscriptions that are about to expire",
+   "expect": [
+    {
+     "repo": "snr-platform-graph-webhook",
+     "path": "subscription/azure_subscription_service.py"
+    }
+   ]
+  },
+  {
+   "tag": "en",
+   "query": "check that the domain and service of a shard target exist in the service catalog",
+   "expect": [
+    {
+     "repo": "snr-platform-db-sharding",
+     "path": "service/service_catalog_validator.go"
+    }
+   ]
+  },
+  {
+   "tag": "en",
+   "query": "build the proxy cache key from request arguments sorted so that the parameter order does not matter",
+   "expect": [
+    {
+     "repo": "snr-kong",
+     "path": "senior-proxy-cache/cache_key.lua"
+    }
+   ]
+  },
+  {
+   "tag": "ident",
+   "query": "NewEtcdSource",
+   "expect": [
+    {
+     "repo": "snr-go-config",
+     "path": "etcd.go"
+    }
+   ]
+  },
+  {
+   "tag": "ident",
+   "query": "enrich_chunks",
+   "expect": [
+    {
+     "repo": "snr-senior-context-explorer",
+     "path": "worker_app/enrichment.py"
+    }
+   ]
+  },
+  {
+   "tag": "ident",
+   "query": "DummyCursorSpecification",
+   "expect": [
+    {
+     "repo": "snr-dotnet-flex-scaffold",
+     "path": "Specifications/DummyCursorSpecification.cs"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "proxy que valida a URL pré-assinada e encaminha a chamada ao destino com um token novo",
+   "language": "go",
+   "expect": [
+    {
+     "repo": "snr-infra-presigned-urls",
+     "path": "handler/presigned_proxy_handler.go"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "converter o valor de uma configuração em duração ou em lista de strings",
+   "language": "go",
+   "expect": [
+    {
+     "repo": "snr-go-config",
+     "path": "decoder.go"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "middleware que descobre o tipo de ambiente do tenant da requisição",
+   "language": "python",
+   "expect": [
+    {
+     "repo": "snr-seniorx-mcp",
+     "path": "tenantcontrol/middleware.py"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "validar o sid do token de identidade consultando cache em memória e Redis",
+   "language": "lua",
+   "expect": [
+    {
+     "repo": "snr-kong",
+     "path": "senior-identity-token-sid/access.lua"
+    },
+    {
+     "repo": "snr-kong",
+     "path": "senior-identity-token-sid/sid_cache.lua"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "gerar tools a partir do WSDL de um escopo SOAP",
+   "repos": [
+    "snr-seniorx-mcp"
+   ],
+   "path_glob": "src/app/framework/**",
+   "expect": [
+    {
+     "repo": "snr-seniorx-mcp",
+     "path": "framework/wsdl_loader.py"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "remover do X-Forwarded-For os IPs falsos que o cliente injeta antes do IP real",
+   "expect": [
+    {
+     "repo": "snr-terraform-module-kong",
+     "path": "code-handle-xff-header/main.tf"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "lambda que apaga do bucket os objetos cujo tempo de vida já venceu",
+   "expect": [
+    {
+     "repo": "snr-blob-service-terraform",
+     "path": "lambda/shredder/handler.py"
+    },
+    {
+     "repo": "snr-blob-service-terraform",
+     "path": "lambda/sweeper/handler.py"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "script para invalidar no Redis só o cache de um tenant, sem limpar o cache de todos",
+   "expect": [
+    {
+     "repo": "snr-domain-change",
+     "path": "flush_tenant_cache_redis.py"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "cabeçalhos de CORS e de segurança que a lambda acrescenta nas respostas do CDN",
+   "expect": [
+    {
+     "repo": "snr-module-aws-cdn-headers-lambda",
+     "path": "files/cdn_headers.js"
+    }
+   ]
+  },
+  {
+   "tag": "en",
+   "query": "lambda that deletes EBS snapshots older than the retention period",
+   "expect": [
+    {
+     "repo": "snr-module-aws-snapshot-ebs-lambda",
+     "path": "files/ebs_snapshot_delete.py"
+    }
+   ]
+  },
+  {
+   "tag": "en",
+   "query": "Keycloak client policy that rotates the client secret and keeps the previous one valid during a grace period",
+   "expect": [
+    {
+     "repo": "snr-terraform-module-keycloak",
+     "path": "client_secret_rotation.tf"
+    }
+   ]
+  },
+  {
+   "tag": "ident",
+   "query": "rabbitmq-on-premises-config",
+   "expect": [
+    {
+     "repo": "snr-arq-platform-k8s-manifests",
+     "path": "rabbitmq-on-premises/configmap.yaml"
+    },
+    {
+     "repo": "snr-arq-platform-k8s-manifests",
+     "path": "rabbitmq-on-premises/statefullset.yaml"
+    }
+   ]
+  },
+  {
+   "tag": "ident",
+   "query": "saveNotificationUsers",
+   "expect": [
+    {
+     "repo": "snr-licensing-backend",
+     "path": "licensing.sdl"
+    },
+    {
+     "repo": "snr-licensing-backend",
+     "path": "handler/SaveNotificationUsersHandler.java"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "agendar a rotação periódica da chave de acesso do serviço de arquivos",
+   "language": "hcl",
+   "expect": [
+    {
+     "repo": "snr-blob-service-terraform",
+     "path": "event_access_key_rotation.tf"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "regra de evento que dispara o job do AWS Batch conforme uma expressão de agendamento",
+   "language": "hcl",
+   "expect": [
+    {
+     "repo": "snr-module-aws-batch",
+     "path": "cloudwatch_event.tf"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "statefulset do Hazelcast com serviço headless para os nós se descobrirem",
+   "language": "yaml",
+   "expect": [
+    {
+     "repo": "snr-kubernetes",
+     "path": "stateful/hazelcast.yaml"
+    },
+    {
+     "repo": "snr-kubernetes",
+     "path": "services/hazelcast.yaml"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "sinais de backup, exclusão lógica, exclusão definitiva e rollback do worker de limpeza de tenant",
+   "language": "sdl",
+   "expect": [
+    {
+     "repo": "snr-tenant-cleanup-worker-backend",
+     "path": "worker.sdl"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "resumir os eventos da exportação de snapshot do RDS e publicar num tópico SNS",
+   "path_glob": "**/*.py",
+   "expect": [
+    {
+     "repo": "snr-module-export-rds-to-s3",
+     "path": "monitor-export-to-s3/index.py"
+    }
+   ]
+  },
+  {
+   "tag": "code",
+   "query": "web ACL do WAF com grupos de regras gerenciadas, listas de IP e limite de requisições por IP",
+   "path_glob": "**/*.tf",
+   "expect": [
+    {
+     "repo": "snr-module-aws-wafv2",
+     "path": "main.tf"
+    }
+   ]
+  },
+  {
+   "tag": "doc",
+   "query": "o serviço Java estourou a memória heap mas o Kubernetes não reiniciou o container, o que configurar",
+   "expect": [
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/SRE/informacoes/java-erros-outofmemory.md"
+    }
+   ]
+  },
+  {
+   "tag": "doc",
+   "query": "o que fazer quando a memória do Redis sobe por causa das chaves de controle de tentativas de login sem TTL",
+   "expect": [
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/SRE/processos/consumo-memoria-redis.md"
+    }
+   ]
+  },
+  {
+   "tag": "doc",
+   "query": "post-mortem da indisponibilidade causada pela saturação de IOPS do banco depois da atualização do scheduler",
+   "expect": [
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/SRE/post-mortems/Plataforma/2026/2026-11-04-indisponibilidade-scheduler.md"
+    }
+   ]
+  },
+  {
+   "tag": "doc",
+   "query": "quais tipos de commit geram versão major, minor ou patch no release automático",
+   "expect": [
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/DevSecOps/Semantic-Release/Tipos-de-Commit.md"
+    },
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/DevSecOps/Semantic-Release.md"
+    }
+   ]
+  },
+  {
+   "tag": "doc",
+   "query": "o pipeline mostra 0% de cobertura de testes no merge request, como resolver",
+   "expect": [
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/DevSecOps/SonarQube/Validação-de-Code-Coverage-em-Merge-Requests.md"
+    }
+   ]
+  },
+  {
+   "tag": "doc",
+   "query": "como declarar na SDL uma primitiva que pode ser chamada sem autenticação",
+   "expect": [
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/DevExp/sdl/criando-primitivas-anonimas.md"
+    },
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/DevExp/sdl/primitive-metadata.md"
+    }
+   ]
+  },
+  {
+   "tag": "doc",
+   "query": "as funções lambda da plataforma saem com IP fixo para liberar em firewall?",
+   "expect": [
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/Plataforma/Functions/documentacao-ip-fixo-lambdas.md"
+    }
+   ]
+  },
+  {
+   "tag": "doc",
+   "query": "como um tenant pode ter usuários com mais de um domínio de e-mail",
+   "expect": [
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/Plataforma/tenant/dominios-alternativos.md"
+    }
+   ]
+  },
+  {
+   "tag": "doc",
+   "query": "como capturar um heap dump da JVM de um pod e copiar para a minha máquina",
+   "kind": "doc",
+   "expect": [
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/Plataforma/coletar-dumps-jvm.md"
+    }
+   ]
+  },
+  {
+   "tag": "doc",
+   "query": "como acessar uma instância EC2 sem SSH usando o Session Manager",
+   "kind": "doc",
+   "expect": [
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/SRE/processos/acesso-instancias-aws-session-manager.md"
+    }
+   ]
+  },
+  {
+   "tag": "doc",
+   "query": "lock otimista com campo de versão nas entidades geradas pela EDL",
+   "kind": "doc",
+   "expect": [
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/DevExp/EDL/controle-concorrencia.md"
+    }
+   ]
+  },
+  {
+   "tag": "doc",
+   "query": "como o bot que abre merge requests de atualização de dependências funciona e como customizar",
+   "kind": "doc",
+   "expect": [
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/DevSecOps/Renovate-Bot.md"
+    }
+   ]
+  },
+  {
+   "tag": "doc",
+   "query": "quais cabeçalhos o webhook envia quando a assinatura HMAC está habilitada e como validar",
+   "kind": "doc",
+   "expect": [
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/Plataforma/Events-Hub/hmac.md"
+    }
+   ]
+  },
+  {
+   "tag": "doc",
+   "query": "escalar pods automaticamente com base em eventos como tamanho de fila",
+   "kind": "doc",
+   "expect": [
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/SRE/informacoes/AutoscalercomKeda.md"
+    }
+   ]
+  },
+  {
+   "tag": "doc",
+   "query": "API para ativar ou desativar a execução de um job agendado",
+   "kind": "doc",
+   "expect": [
+    {
+     "repo": "docs__openapi-platform",
+     "path": "platform/scheduler/9d6ea659ba9036a5ae94.md"
+    },
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/Plataforma/scheduler/agendamentos-api.md"
+    }
+   ]
+  },
+  {
+   "tag": "doc",
+   "query": "como atualizar o Kong da versão 4 para a 5",
+   "kind": "doc",
+   "expect": [
+    {
+     "repo": "snr-kong",
+     "path": "migration-guide.md"
+    },
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/Plataforma/Kong/atualizacao-kong.md"
+    }
+   ]
+  },
+  {
+   "tag": "doc",
+   "query": "como rodar o servidor MCP da Senior X na minha máquina e conectar um cliente",
+   "kind": "doc",
+   "expect": [
+    {
+     "repo": "snr-seniorx-mcp",
+     "path": "docs/desenvolvimento-local.md"
+    },
+    {
+     "repo": "snr-seniorx-mcp",
+     "path": "/README.md"
+    }
+   ]
+  },
+  {
+   "tag": "doc",
+   "query": "quando e como executar a sincronização do banco com o Redis das configurações de rate limit",
+   "repos": [
+    "snr-rate-limit-config-back"
+   ],
+   "expect": [
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/Plataforma/Rate-Limit/reconcile.md"
+    },
+    {
+     "repo": "snr-rate-limit-config-back",
+     "path": "/README.md"
+    },
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/Plataforma/Rate-Limit/documentacao-tecnica.md"
+    }
+   ]
+  },
+  {
+   "tag": "doc",
+   "query": "como os plugins do worker de exclusão de tenant são empacotados e carregados",
+   "repos": [
+    "snr-tenant-cleanup-worker-backend"
+   ],
+   "expect": [
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/Plataforma/Exclusao-de-Tenant/Plugins.md"
+    },
+    {
+     "repo": "snr-tenant-cleanup-worker-backend",
+     "path": "docs/external-plugins.md"
+    }
+   ]
+  },
+  {
+   "tag": "en",
+   "query": "how to generate pre-signed URLs that forward a request to another platform service without authentication",
+   "expect": [
+    {
+     "repo": "docs__wiki",
+     "path": "pt-br/Plataforma/presigned-urls/presigned-urls.md"
+    },
+    {
+     "repo": "snr-infra-presigned-urls",
+     "path": "/README.md"
     }
    ]
   }

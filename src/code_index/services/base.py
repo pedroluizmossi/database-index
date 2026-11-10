@@ -27,6 +27,7 @@ from ..infra.oauth_store import OAuthStore
 from ..infra.relation_store import RelationStore
 from ..infra.repo_store import RepoStore
 from ..infra.symbol_store import SymbolStore
+from ..infra.usage_store import UsageStore
 from ..infra.user_store import UserStore
 from ..retrieval.search import Searcher
 from ..settings import Settings
@@ -62,6 +63,7 @@ class ServiceBase:
         relations: RelationStore,
         oauth: OAuthStore,
         users: UserStore,
+        usage: UsageStore,
     ) -> None:
         self.settings = settings
         self._repos = repos
@@ -80,6 +82,7 @@ class ServiceBase:
         self._relations = relations
         self._oauth = oauth
         self._users = users
+        self._usage = usage
         self._job_lock = asyncio.Lock()  # checagem + criação de job, sem corrida entre requisições
         self._job_tasks: set[asyncio.Task[None]] = set()
         self._owner_cache: Any = None  # dono no DDD resolvido (services/ownership.py); limpo ao recalcular relações

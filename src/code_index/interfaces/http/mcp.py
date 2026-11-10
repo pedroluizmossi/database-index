@@ -6,7 +6,8 @@
   entra com Google ou Microsoft e aprova (servidor de autorização em mcp_oauth.py, metadados em /.well-known).
 - O MCP só lê: indexar fica na API e na interface, com confirmação.
 - Proteção contra DNS rebinding: só aceita os hosts/origens configurados.
-- Cada chamada de tool passa pelo rate limit e vai para a auditoria (sem o conteúdo retornado).
+- Cada chamada de tool passa pelo rate limit e vai para a auditoria e para o uso (`usage_events`: cliente MCP,
+  tempo, itens e tamanho da resposta, consumo da Voyage), nunca com o conteúdo retornado.
 """
 
 from __future__ import annotations
@@ -19,12 +20,13 @@ from urllib.parse import urlsplit
 
 from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
-from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 
 from ...domain.auth import SEARCH_READ, Principal
 from ...domain.oauth import OAUTH_SCOPES
+from ...domain.usage import client_from_user_agent
 from ...services import CodeIndexService
 from ...settings import Settings
 from .mcp_oauth import CodeIndexOAuthProvider
@@ -70,7 +72,30 @@ def _current_principal() -> Principal:
         scopes=frozenset(at.scopes),
         token_id=claims.get("token_id"),
         token_name=claims.get("token_name"),
+        oauth_client_id=claims.get("oauth_client_id"),
+        user_id=claims.get("user_id"),
     )
+
+
+def _client_of(ctx: Context[Any, Any] | None) -> tuple[str | None, str | None]:
+    """Cliente MCP da chamada: clientInfo do `initialize` (quando a sessão o tem) ou o User-Agent HTTP.
+    O servidor roda sem estado, então em geral é o User-Agent ('claude-code/2.0.31' → claude-code)."""
+    if ctx is None:
+        return None, None
+    try:
+        rc = ctx.request_context
+    except ValueError:
+        return None, None
+    try:
+        params = rc.session.client_params
+    except Exception:  # noqa: BLE001 - sessão sem initialize (modo sem estado)
+        params = None
+    info = getattr(params, "client_info", None)
+    if info is not None and getattr(info, "name", None):
+        return info.name, getattr(info, "version", None)
+    request = rc.request
+    headers = getattr(request, "headers", None)
+    return client_from_user_agent(headers.get("user-agent") if headers is not None else None)
 
 
 def transport_security(settings: Settings) -> TransportSecuritySettings:
@@ -104,31 +129,44 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
         ),
     )
 
-    async def run_tool(name: str, params: dict[str, Any], bucket: str, scope: str | None, fn: Callable[[CodeIndexService], Any]) -> Any:
+    async def run_tool(ctx: Context[Any, Any] | None, name: str, params: dict[str, Any], bucket: str,
+                       scope: str | None, fn: Callable[[CodeIndexService], Any]) -> Any:
         principal = _current_principal()
         svc = get_service()
+        client, client_version = _client_of(ctx)
+        started = time.monotonic()
+
+        async def done(status: int, result: Any = None, *, llm_usage: Any = None) -> None:
+            ms = int((time.monotonic() - started) * 1000)
+            await svc.audit(principal, f"mcp:{name}", params={**params, "ms": ms} if status == 200 else params,
+                            status=status)
+            extra = {"result": result} if status == 200 else {}
+            await svc.record_usage(principal, transport="mcp", action=name, status=status, duration_ms=ms,
+                                   llm_usage=llm_usage, client=client, client_version=client_version,
+                                   params=params, **extra)
+
         if scope and not principal.has(scope):
-            await svc.audit(principal, f"mcp:{name}", params=params, status=403)
+            await done(403)
             raise ToolError(f"scope necessário: {scope}")
         try:
             enforce_rate_limit(limiter, settings, principal, bucket)
         except Exception:
-            await svc.audit(principal, f"mcp:{name}", params=params, status=429)
+            await done(429)
             raise ToolError("limite de requisições atingido; tente mais tarde") from None
-        started = time.monotonic()
-        try:
-            result = await fn(svc)
-        except (ValueError, RuntimeError, PermissionError) as e:
-            await svc.audit(principal, f"mcp:{name}", params=params, status=400)
-            raise ToolError(str(e)) from None
-        except ToolError:
-            raise
-        except Exception:
-            log.exception("tool MCP %s falhou", name)
-            await svc.audit(principal, f"mcp:{name}", params=params, status=500)
-            raise ToolError("erro interno ao executar a tool; tente de novo mais tarde") from None
-        params = {**params, "ms": int((time.monotonic() - started) * 1000)}
-        await svc.audit(principal, f"mcp:{name}", params=params, status=200)
+        with svc.metered() as meter:
+            try:
+                result = await fn(svc)
+            except (ValueError, RuntimeError, PermissionError) as e:
+                await done(400, llm_usage=meter.snapshot())
+                raise ToolError(str(e)) from None
+            except ToolError:
+                await done(400, llm_usage=meter.snapshot())
+                raise
+            except Exception:
+                log.exception("tool MCP %s falhou", name)
+                await done(500, llm_usage=meter.snapshot())
+                raise ToolError("erro interno ao executar a tool; tente de novo mais tarde") from None
+        await done(200, result, llm_usage=meter.snapshot())
         return result
 
     @server.tool()
@@ -147,6 +185,7 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
         max_docs: int | None = None,
         domain: str | None = None,
         service: str | None = None,
+        ctx: Context | None = None,
     ) -> list[dict]:
         """Busca trechos de código e de documentação (README, docs/ e páginas de wiki).
 
@@ -186,7 +225,7 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
                                     domain=domain, service=service)
             return [_compact_hit(h.to_dict()) for h in hits]
 
-        return await run_tool("search_code", {"query": query, "top_k": top_k, "repos": repos, "language": language,
+        return await run_tool(ctx, "search_code", {"query": query, "top_k": top_k, "repos": repos, "language": language,
                                               "path_glob": path_glob, "mode": mode, "kind": kind,
                                               "include_linked_docs": include_linked_docs,
                                               "exclude_repos": exclude_repos,
@@ -195,7 +234,8 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
                                "search", None, fn)
 
     @server.tool()
-    async def read_file_lines(repo: str, path: str, start_line: int | None = None, end_line: int | None = None) -> str:
+    async def read_file_lines(repo: str, path: str, start_line: int | None = None, end_line: int | None = None,
+                              ctx: Context | None = None) -> str:
         """Lê um arquivo (ou intervalo de linhas) de um repositório indexado, com números de linha.
 
         `repo` aceita o nome como em list_repos ('org__repo') ou só 'repo'. Sem intervalo, devolve
@@ -203,13 +243,13 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
         Segredos (senhas, tokens, chaves) aparecem mascarados como ***.
         """
         return await run_tool(
-            "read_file_lines", {"repo": repo, "path": path, "start_line": start_line, "end_line": end_line},
+            ctx, "read_file_lines", {"repo": repo, "path": path, "start_line": start_line, "end_line": end_line},
             "read", None, lambda svc: svc.read_file(repo, path, start_line, end_line),
         )
 
     @server.tool()
     async def list_repos(status: str | None = None, org: str | None = None, name: str | None = None,
-                         domain: str | None = None) -> list[dict]:
+                         domain: str | None = None, ctx: Context | None = None) -> list[dict]:
         """Lista os repositórios conhecidos, seu estado de indexação e o dono no DDD (`owners`).
 
         Args:
@@ -226,11 +266,11 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
                 rows = [r for r in rows if any(o == want or o.startswith(want + "/") for o in r.owners)]
             return [_compact_repo(r.to_dict()) for r in rows]
 
-        return await run_tool("list_repos", {"status": status, "org": org, "name": name, "domain": domain},
+        return await run_tool(ctx, "list_repos", {"status": status, "org": org, "name": name, "domain": domain},
                               "read", None, fn)
 
     @server.tool()
-    async def list_domains() -> dict:
+    async def list_domains(ctx: Context | None = None) -> dict:
         """Domínios e serviços do DDD (do SDL e os definidos pela equipe), com rótulo e quantos repos cada
         um tem. Use os nomes técnicos em `search_code(domain=..., service=...)` e `list_repos(domain=...)`."""
 
@@ -249,10 +289,10 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
                 "coverage": {k: catalog["coverage"][k] for k in ("repos", "owned", "percent")},
             }
 
-        return await run_tool("list_domains", {}, "read", None, fn)
+        return await run_tool(ctx, "list_domains", {}, "read", None, fn)
 
     @server.tool()
-    async def find_repos(query: str, limit: int = 10) -> list[dict]:
+    async def find_repos(query: str, limit: int = 10, ctx: Context | None = None) -> list[dict]:
         """Descobre QUAL repo cuida de um assunto, pelo cartão do repo (resumo, capacidades, tags, operações SDL).
 
         Use antes de search_code quando não souber o repo: "quem envia e-mail", "serviço de tenants".
@@ -264,11 +304,11 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
             limit: máximo de repos (até 50).
         """
         limit = max(1, min(limit, 50))
-        return await run_tool("find_repos", {"query": query, "limit": limit}, "read", None,
+        return await run_tool(ctx, "find_repos", {"query": query, "limit": limit}, "read", None,
                               lambda svc: svc.find_repos(query, limit=limit))
 
     @server.tool()
-    async def find_api_impl(operation: str, service: str | None = None) -> list[dict]:
+    async def find_api_impl(operation: str, service: str | None = None, ctx: Context | None = None) -> list[dict]:
         """Onde uma operação da API da plataforma é implementada: repo, classe handler, arquivo e linha.
 
         Use com resultados de documentação de API (título 'POST /servico/queries/operacao') ou quando
@@ -278,11 +318,11 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
             operation: 'listBlacklistedEmails', 'email.listBlacklistedEmails' ou 'POST /email/queries/listBlacklistedEmails'.
             service: filtra pelo serviço (ex.: 'email').
         """
-        return await run_tool("find_api_impl", {"operation": operation, "service": service}, "read", None,
+        return await run_tool(ctx, "find_api_impl", {"operation": operation, "service": service}, "read", None,
                               lambda svc: svc.find_api_impl(operation, service=service))
 
     @server.tool()
-    async def related(entity: str, type: str | None = None) -> dict:
+    async def related(entity: str, type: str | None = None, ctx: Context | None = None) -> dict:
         """Tudo ligado a uma entidade: páginas que documentam um repo, repos relacionados, operação ↔ handler,
         página de API → operação, dono no DDD (repo → serviço/domínio). Cada relação traz a origem (manual, sdl,
         handler, tag, menção, repo irmão...).
@@ -293,11 +333,11 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
                 'dom:<domínio>'.
             type: filtra o tipo: documents | describes | implemented_by | related_to | belongs_to.
         """
-        return await run_tool("related", {"entity": entity, "type": type}, "read", None,
+        return await run_tool(ctx, "related", {"entity": entity, "type": type}, "read", None,
                               lambda svc: svc.related(entity, type_=type, limit=200))
 
     @server.tool()
-    async def repo_card(repo: str) -> dict:
+    async def repo_card(repo: str, ctx: Context | None = None) -> dict:
         """Cartão completo de um repo: resumo, capacidades, glossário, repos relacionados (com a base:
         "codigo" = referência vista no código, "nome" = só pelo nome), por onde começar a ler e os fatos
         extraídos sem LLM (catalog-info, operações e eventos do .sdl, propriedades do .pdl, pastas).
@@ -312,7 +352,7 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
                 raise ValueError(f"sem cartão nem fatos para {repo}")
             return info
 
-        return await run_tool("repo_card", {"repo": repo}, "read", None, fn)
+        return await run_tool(ctx, "repo_card", {"repo": repo}, "read", None, fn)
 
     @server.tool()
     async def find_symbol(
@@ -321,6 +361,7 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
         repos: list[str] | None = None,
         language: str | None = None,
         limit: int = 20,
+        ctx: Context | None = None,
     ) -> list[dict]:
         """Onde uma classe, interface, função, método ou recurso é DECLARADO (arquivo e linha).
 
@@ -340,7 +381,7 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
             hits = await svc.find_symbol(name, kind=kind, repos=repos, language=language, limit=limit)
             return [h.to_dict() for h in hits]
 
-        return await run_tool("find_symbol", {"name": name, "kind": kind, "repos": repos, "language": language},
+        return await run_tool(ctx, "find_symbol", {"name": name, "kind": kind, "repos": repos, "language": language},
                               "read", None, fn)
 
     @server.tool()
@@ -351,6 +392,7 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
         regex: bool = False,
         case_sensitive: bool = False,
         max_results: int = 50,
+        ctx: Context | None = None,
     ) -> dict:
         """Busca TEXTO EXATO (ou regex) nos repositórios: mensagens de erro, chaves de configuração,
         strings, chamadas específicas. Complementa search_code, que busca por significado.
@@ -371,7 +413,7 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
                                  case_sensitive=case_sensitive, max_results=max_results)
             return {"matches": [m.to_dict() for m in res.matches], "truncated": res.truncated}
 
-        return await run_tool("grep_code", {"pattern": pattern, "repos": repos, "path_glob": path_glob, "regex": regex},
+        return await run_tool(ctx, "grep_code", {"pattern": pattern, "repos": repos, "path_glob": path_glob, "regex": regex},
                               "search", None, fn)
 
     # ------------------------------------------------------------------ guia de uso

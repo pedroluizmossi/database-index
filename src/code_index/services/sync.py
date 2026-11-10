@@ -59,9 +59,11 @@ class SyncMixin(ApisMixin, EnrichMixin):
         return result
 
     async def after_index(self) -> dict[str, Any]:
-        """Fatos dos repos cuja revisão mudou + catálogo de documentos + relações derivadas."""
+        """Fatos dos repos cuja revisão mudou + catálogo de documentos + relações derivadas + resumos de
+        arquivos de volta nas colunas de busca (o sync regrava os trechos que reprocessa)."""
         facts = await self.enrich_facts(rebuild=False)
-        return {"facts": facts, "relations": await self.rebuild_relations()}
+        return {"facts": facts, "relations": await self.rebuild_relations(),
+                "summaries": await self.apply_file_summaries()}
 
     async def start_sync(
         self,

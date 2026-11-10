@@ -21,7 +21,7 @@ e textos ao usuário em **português**.
 uv sync                                   # dependências
 docker compose up -d                      # Postgres + pgvector (localhost:5432)
 uv run code-index serve                   # API + MCP em 127.0.0.1:8765 (docs em /docs)
-uv run code-index --help                  # CLI: org, repo, sync|index, watch, search, show, enrich, token, serve
+uv run code-index --help                  # CLI: org, repo, sync|index, watch, search, show, enrich, token, user, usage, serve
 uv run pytest -q -m "not integration"     # testes unitários (~2s, sem rede e sem banco)
 uv run pytest -q tests/unit/test_X.py     # só o que você mexeu
 uv run pytest -q -m integration           # integração (Postgres; schema isolado; LLM falso)
@@ -36,13 +36,13 @@ O executável `code-index` só existe no ambiente do projeto: use `uv run`.
 | Pasta/arquivo | Responsabilidade |
 |---|---|
 | `settings.py` | `Settings` (env/.env). `get_settings()`, `use_settings()` (testes), `bootstrap()` (efeitos de runtime) |
-| `domain/` | **Puro, sem I/O**: `models`, `file_patterns` (o que indexar/excluir), `policies` (lote, nomes), `auth` (scopes), `search_text` (tokenização de código para busca, pesos da fusão), `doc_links` (apelidos de repos via manifestos, menções das páginas), `repo_card` (fatos: SDL/PDL/catalog-info; schema, validação e texto da tarefa do cartão), `api_impl` (operação SDL → `<op>Handler`), `doc_task` (tarefa páginas da wiki → repos), `relations` (chaves de entidade, tipos de relação, **registro único de origens**), `documents` (tipos de documento), `ownership` (dono no DDD: catálogo do SDL, inferência sem LLM, resolução por origem, escopo da busca), `preferences` (**registro único** das configs por pessoa: padrão, validação, resolução) |
-| `infra/` | Mundo externo: `db` (pool, migrations, extensões), `repo_store`, `chunk_store` (busca: motor bm25/fts/fts-legacy detectado no banco), `symbol_store`, `relation_store` (**único** ponto que lê/grava relações; view `effective_relations`), `document_store` (catálogo `documents`: tipo, atributos, páginas ignoradas), `job_store`, `enrich_store` (cartões e fila de tarefas `next`/`submit`), `auth_store`, `user_store` (pessoas e as configs que elas mudaram), `oauth_store` (clientes, códigos e refresh tokens do OAuth do MCP), `config_file` (repos.toml), `git`, `github`, `grep` (ripgrep), `oidc` (base) + `google_oidc`/`entra_oidc` (provedores de login; registro em `login`), `llm` |
+| `domain/` | **Puro, sem I/O**: `models`, `file_patterns` (o que indexar/excluir), `policies` (lote, nomes), `auth` (scopes), `search_text` (tokenização de código para busca, pesos da fusão), `doc_links` (apelidos de repos via manifestos, menções das páginas), `repo_card` (fatos: SDL/PDL/catalog-info; schema, validação e texto da tarefa do cartão), `api_impl` (operação SDL → `<op>Handler`), `doc_task` (tarefa páginas da wiki → repos), `file_summary` (tarefa de resumo de arquivos de código: texto, validação e termos para a busca), `relations` (chaves de entidade, tipos de relação, **registro único de origens**), `documents` (tipos de documento), `ownership` (dono no DDD: catálogo do SDL, inferência sem LLM, resolução por origem, escopo da busca), `preferences` (**registro único** das configs por pessoa: padrão, validação, resolução), `usage` (evento de uso, canal, limpeza de parâmetros, contagem/tamanho da resposta) |
+| `infra/` | Mundo externo: `db` (pool, migrations, extensões), `repo_store`, `chunk_store` (busca: motor bm25/fts/fts-legacy detectado no banco), `symbol_store`, `relation_store` (**único** ponto que lê/grava relações; view `effective_relations`), `document_store` (catálogo `documents`: tipo, atributos, páginas ignoradas), `job_store`, `enrich_store` (cartões e fila de tarefas `next`/`submit`), `summary_store` (resumos de arquivos e a aplicação deles em `search_symbols`/`search_terms`), `auth_store`, `user_store` (pessoas: estado, `attrs` livres e as configs que elas mudaram), `usage_store` (eventos de uso e relatórios do dashboard), `oauth_store` (clientes, códigos e refresh tokens do OAuth do MCP), `config_file` (repos.toml), `git`, `github`, `grep` (ripgrep), `oidc` (base) + `google_oidc`/`entra_oidc` (provedores de login; registro em `login`), `llm` (inclui `metered()`: tokens/custo da Voyage por chamada) |
 | `sources/` | Contratos em `base.py`: `RepoSource` (descoberta de repos: `github_org`), `DocSourcePlugin` (fonte de documentação: `fetch`, `documents`, `preview`, `linkers`) e `Linker`. Plugins: `wikijs`, `openapi_s3`; registro em `registry.py` |
 | `indexing/` | `content` (máscara de segredos/skip/binários), `context` (linhas inteiras + cabeçalho do embedding), `code_flow` (app CocoIndex), `orchestrator` (sync em etapas), `enrich` (coleta do material do cartão, sem LLM), `linkers` (linkers do núcleo + `rebuild_relations`) |
 | `retrieval/` | `search` (híbrida + rerank), `files` (leitura com máscara) |
-| `services/` | Casos de uso: **único** ponto usado pelas interfaces (`CodeIndexService`, `open_service`). Um módulo por área: `repos`, `apis` (OpenAPI), `wiki`, `docs`, `search`, `sync`, `enrich`, `auth`, `oauth` (OAuth do MCP), `users` (pessoas e preferências), `ownership` (domínio/serviço); `base` tem as dependências e utilitários comuns |
-| `interfaces/` | `cli.py` e `http/` (`app.py` FastAPI, `mcp.py`, `mcp_oauth.py`, `security.py`): só parsing e formatação |
+| `services/` | Casos de uso: **único** ponto usado pelas interfaces (`CodeIndexService`, `open_service`). Um módulo por área: `repos`, `apis` (OpenAPI), `wiki`, `docs`, `search`, `sync`, `enrich`, `auth`, `oauth` (OAuth do MCP), `users` (pessoas e preferências), `usage` (registro de uso, dashboard, desativar pessoa, limpeza), `ownership` (domínio/serviço); `base` tem as dependências e utilitários comuns |
+| `interfaces/` | `cli.py` e `http/` (`app.py` FastAPI, `mcp.py`, `mcp_oauth.py`, `security.py`, `usage.py` middleware de uso da API): só parsing e formatação |
 
 Testes: `tests/unit/` (rápidos) e `tests/integration/` (marcados `integration`).
 
@@ -68,6 +68,13 @@ Testes: `tests/unit/` (rápidos) e `tests/integration/` (marcados `integration`)
   `domain/relations.ORIGINS` (rótulo, se é contestável): a API e a UI leem de lá.
 - **Config por pessoa = uma entrada em `domain/preferences.PREFS`** (sem migration; o banco guarda só o que a
   pessoa mudou). Preferência nunca concede acesso, e só sessão de navegador grava (`PATCH /api/v1/me/settings`).
+- **Usuário é a entidade central** (`users`): tokens apontam para ela (`api_tokens.user_id`) e o uso também
+  (`usage_events.user_id`). Atributo novo de perfil entra em `users.attrs` (jsonb) sem migration; vira coluna só
+  quando precisar de índice/regra. Usuário desativado (`disabled_at`) perde todas as credenciais no `authenticate`.
+- **Uso é medido nas bordas**: tool MCP pelo `run_tool` (cliente, tempo, itens, tamanho, Voyage), rota `/api/v1`
+  pelo `UsageMiddleware`. Nunca guarde o conteúdo devolvido nem segredos em `usage_events` (`clean_params`).
+  Rota de polling ou de observação (dashboard, auditoria) entra em `NOT_USAGE_PREFIXES` (não é uso).
+  "Consumo de contexto" conta só respostas do MCP (o que entra na janela do agent).
 - Leitura de vínculo só pela view `effective_relations` (via `RelationStore`): ela aplica status, remoções
   aprovadas e repos/páginas que saíram.
 
@@ -139,6 +146,14 @@ Podem rodar sem medo; só precisam do Postgres no ar (sem ele, são pulados).
   (`$1::text::pdb.boost(3)`); sem isso o asyncpg infere o tipo `pdb.boost` sem typmod e dá
   `invalid typemod -1`. O tokenizador `pdb.source_code` descarta o identificador inteiro: por isso a
   tokenização de código é feita em Python (`domain/search_text.py`) e o índice usa `pdb.whitespace`.
+- **HNSW (pgvector) perde vizinhos calado:** com o `hnsw.ef_search` padrão (40) ou com filtro seletivo
+  (`kind`, linguagem, caminho), a consulta devolve linhas, mas não as mais próximas. Por isso o `chunk_store`
+  define `ef_search` (`SEARCH_HNSW_EF_SEARCH`) e troca para a busca exata quando o planner estima poucos
+  trechos (`_few_rows`). Mexeu na consulta vetorial? Compare com a ordenação exata (`(embedding <=> $1) + 0`).
+- **Resumos de arquivos mexem em `code_chunks`:** o `summary_store` acrescenta os termos do resumo em
+  `search_symbols`/`search_terms` depois do marcador `xqzresumoxqz` (UPDATE idempotente; o embedding e o `code`
+  não mudam). O CocoIndex regrava essas colunas quando reprocessa um arquivo: por isso o `after_index` reaplica.
+  Mudou a tokenização (`code_terms`)? Os termos gravados em `file_summaries` ficam com a antiga até um novo resumo.
 - **Não troque a imagem do Postgres pela `paradedb/paradedb`:** ela traz `vector` 0.8.6, e o banco usa a
   0.8.7, o que seria um downgrade de extensão. Use `docker/postgres` (pgvector oficial + `pg_search`).
 - **SDK MCP:** tools que devolvem `list` vêm em `structured_content["result"]`; as que devolvem `dict`

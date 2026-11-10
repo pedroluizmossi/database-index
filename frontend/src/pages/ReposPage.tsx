@@ -587,7 +587,7 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
 
       <JobDialog job={jobDetail} onClose={() => setJobDetail(null)} />
       {barVisible && (
-        <div className="pointer-events-none fixed inset-x-0 bottom-4 z-40 flex justify-center px-4">
+        <div className="pointer-events-none fixed inset-x-0 bottom-4 z-30 flex justify-center px-4 lg:left-(--sidebar-w)">
           <div
             ref={selectionBar}
             className="pointer-events-auto relative flex max-w-full items-center gap-2 rounded-xl bg-ink-950 py-2 pr-2 pl-3 text-white shadow-[0_8px_24px_-8px_rgb(0_0_0/0.45)] ring-1 ring-white/10 animate-pop sm:gap-3 sm:pl-4"

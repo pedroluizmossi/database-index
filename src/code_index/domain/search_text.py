@@ -31,6 +31,14 @@ the an and or of to in on for with from by is are be was how where what which wh
 
 QueryKind = Literal["identifier", "natural"]
 
+# Constante da fusão RRF: score = Σ peso / (RRF_K + posição na fonte). Quanto menor, mais vale estar no topo
+# de UMA fonte. Com o 60 do artigo original, um trecho mediano nas duas fontes (até a 62ª posição) vencia o
+# 1º lugar de uma só, e aqui quase sempre uma fonte acerta e a outra é ruído: pergunta em português acha
+# código pelo vetor e wiki pelos termos. Calibrado em evals/queries.json, sem rerank: de 60 para 10, 10
+# perguntas subiram e 1 desceu (MRR 0,74 -> 0,80), e a resposta, que chegava a ficar na 34ª posição da fusão,
+# não passou da 14ª (o reranker só vê os primeiros RERANK_CANDIDATES).
+RRF_K = 10
+
 
 def fold(word: str) -> str:
     """Sem acentos: 'validação' -> 'validacao'."""

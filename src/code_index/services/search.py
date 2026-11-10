@@ -220,24 +220,18 @@ class SearchMixin(OwnershipMixin):
         if not targets:
             return GrepResult(matches=[], truncated=False)
 
-        masked: dict[Path, list[str] | None] = {}
-
         def masked_lines(path: Path) -> list[str] | None:
             try:
-                text = path.read_text(errors="replace")
+                # bytes → texto sem tradução de quebra de linha (read_text troca \r solto por \n e mudaria a numeração)
+                text = path.read_bytes().decode("utf-8", errors="replace")
             except OSError:
                 return None
             # `redact` preserva a contagem de linhas; split("\n") numera como o rg (splitlines quebraria em \r, \x0c...)
             return mask_output(text, file_language(path.name)).split("\n")
 
-        async def mask(path: Path, line_number: int, line: str) -> str:
-            """Linha mascarada com o arquivo inteiro como contexto (uma chave PEM só é reconhecida inteira)."""
-            if path not in masked:
-                masked[path] = await asyncio.to_thread(masked_lines, path)
-            lines = masked[path]
-            if lines is not None and 0 < line_number <= len(lines):
-                return lines[line_number - 1].rstrip("\r")
-            return mask_output(line, file_language(path.name))
+        async def mask(path: Path) -> list[str] | None:
+            """Arquivo inteiro mascarado (uma chave PEM só é reconhecida inteira)."""
+            return await asyncio.to_thread(masked_lines, path)
 
         return await self._grep.search(
             targets, pattern, regex=regex, case_sensitive=case_sensitive, path_glob=path_glob,

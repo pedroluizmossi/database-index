@@ -128,7 +128,8 @@ class SearchMixin(OwnershipMixin):
             for case in cases:
                 hits = await self._searcher.search(
                     case.query, top_k=top_k, repos=await self._resolve_repos(case.repos),
-                    kind=case.kind, mode=cfg.get("mode", "hybrid"), rerank=cfg.get("rerank", True),
+                    kind=case.kind, language=case.language, path_glob=case.path_glob,
+                    mode=cfg.get("mode", "hybrid"), rerank=cfg.get("rerank", True),
                     weights=cfg.get("weights"), rerank_options=cfg.get("rerank_options"),
                 )
                 results.append(CaseResult(case.query, first_hit(hits, case.expect),

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import asyncio
 import logging
 import secrets
 from collections.abc import AsyncIterator
@@ -31,12 +32,14 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ...domain.relations import origins_payload
-from ...domain.auth import ADMIN, INDEX_WRITE, SEARCH_READ, Principal
+from ...domain.auth import ADMIN, INDEX_WRITE, SEARCH_READ, Principal, session_provider
 from ...infra.login import configured_providers, open_provider
 from ...infra.oidc import LoginError, OIDCProvider
 from ...services import CodeIndexService, open_service
 from ...settings import Settings
+from ...domain.usage import result_count
 from .mcp import build_mcp, transport_security
+from .usage import STATE_PARAMS, STATE_RESULT_COUNT, UsageMiddleware
 from .mcp_oauth import load_pending, pending_signer
 from .security import (
     SESSION_COOKIE,
@@ -272,6 +275,23 @@ def _http_error(e: Exception) -> HTTPException:
     return HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
 
 
+HOUSEKEEPING_INTERVAL_S = 6 * 3600
+
+
+async def _housekeeping_loop(svc: CodeIndexService) -> None:
+    """Limpeza periódica (uso além da retenção, sessões vencidas): ao subir e a cada 6 horas."""
+    while True:
+        try:
+            removed = await svc.housekeeping()
+            if any(removed.values()):
+                log.info("limpeza: %s", removed)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - tenta de novo no próximo ciclo
+            log.exception("limpeza periódica falhou")
+        await asyncio.sleep(HOUSEKEEPING_INTERVAL_S)
+
+
 def create_app(settings: Settings) -> FastAPI:
     secret = settings.require_auth_secret()
     limiter = RateLimiter()
@@ -297,6 +317,8 @@ def create_app(settings: Settings) -> FastAPI:
             svc = await stack.enter_async_context(open_service(settings))
             holder["svc"] = app.state.service = svc
             await svc.recover_interrupted_jobs()  # jobs órfãos de uma execução anterior do servidor
+            housekeeping = asyncio.create_task(_housekeeping_loop(svc))
+            stack.callback(housekeeping.cancel)
             await stack.enter_async_context(mcp.session_manager.run())
             try:
                 yield
@@ -317,6 +339,7 @@ def create_app(settings: Settings) -> FastAPI:
     hostnames |= {h.rsplit(":", 1)[0] for h in settings.allowed_hosts}
     if settings.http_host in ("127.0.0.1", "localhost", "::1"):
         hostnames |= {"127.0.0.1", "localhost", "::1", "testserver"}
+    app.add_middleware(UsageMiddleware)  # mais interno: só vê requisições que passaram pelo TrustedHost
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=sorted(hostnames))
     app.add_middleware(RegisterRateLimit, limiter=limiter)
 
@@ -326,6 +349,7 @@ def create_app(settings: Settings) -> FastAPI:
     async def audited(request: Request, principal: Principal | None, action: str, params: dict[str, Any] | None,
                       fn: Any) -> Any:
         svc = get_service(request)
+        setattr(request.state, STATE_PARAMS, params)  # para o registro de uso (UsageMiddleware)
         try:
             result = await fn
         except (ValueError, RuntimeError, PermissionError) as e:
@@ -333,6 +357,7 @@ def create_app(settings: Settings) -> FastAPI:
             await svc.audit(principal, action, params=params, status=err.status_code, client_ip=client_ip(request))
             raise err from None
         await svc.audit(principal, action, params=params, status=200, client_ip=client_ip(request))
+        setattr(request.state, STATE_RESULT_COUNT, result_count(result))
         return result
 
     # ---------------------------------------------------------- saúde / login
@@ -389,7 +414,12 @@ def create_app(settings: Settings) -> FastAPI:
             await svc.audit(None, "auth:login", params={"provider": data.get("p"), "error": str(e)}, status=403,
                             client_ip=client_ip(request))
             return _login_page(403, "Acesso negado", str(e), retry=False)
-        token, info = await svc.start_session(identity.email, identity.provider, display_name=identity.name)
+        try:
+            token, info = await svc.start_session(identity.email, identity.provider, display_name=identity.name)
+        except PermissionError as e:  # usuário desativado por um admin
+            await svc.audit(None, "auth:login", params={"email": identity.email, "error": str(e)}, status=403,
+                            client_ip=client_ip(request))
+            return _login_page(403, "Acesso negado", str(e), retry=False)
         await svc.audit(None, "auth:login",
                         params={"email": identity.email, "provider": identity.provider, "scopes": list(info.scopes)},
                         status=200, client_ip=client_ip(request))
@@ -474,7 +504,7 @@ def create_app(settings: Settings) -> FastAPI:
     @app.get("/api/v1/me", tags=["auth"], summary="Quem sou eu")
     async def me(principal: Principal = Depends(require(SEARCH_READ))) -> dict[str, Any]:
         return {"subject": principal.subject, "kind": principal.kind, "scopes": sorted(principal.scopes),
-                "token_name": principal.token_name}
+                "token_name": principal.token_name, "provider": session_provider(principal)}
 
     @app.get("/api/v1/me/settings", tags=["auth"], summary="Minhas configurações (valores, padrões e schema)")
     async def my_settings(request: Request, principal: Principal = Depends(require(SEARCH_READ))) -> dict[str, Any]:
@@ -840,6 +870,44 @@ def create_app(settings: Settings) -> FastAPI:
         await audited(request, principal, "token:revoke", {"id": token_id},
                       get_service(request).revoke_token(principal, token_id))
         return {"id": token_id, "result": "revoked"}
+
+    # ---------------------------------------------------------- uso e usuários
+
+    @app.get("/api/v1/usage", tags=["uso"], summary="Dashboard de uso (admin): totais, por tool, cliente e consultas")
+    async def usage_report(request: Request, days: int = Query(30, ge=1, le=365), email: str | None = None,
+                           _: Principal = Depends(require(ADMIN))) -> dict[str, Any]:
+        try:
+            return await get_service(request).usage_report(days, email=email)
+        except ValueError as e:
+            raise _http_error(e) from None
+
+    @app.get("/api/v1/me/usage", tags=["uso"], summary="Meu uso (todas as minhas credenciais)")
+    async def my_usage(request: Request, days: int = Query(30, ge=1, le=365),
+                       principal: Principal = Depends(require(SEARCH_READ))) -> dict[str, Any]:
+        try:
+            return await get_service(request).my_usage(principal, days)
+        except ValueError as e:
+            raise _http_error(e) from None
+
+    @app.get("/api/v1/users", tags=["uso"], summary="Usuários: papel, estado e uso no período (admin)")
+    async def list_users(request: Request, days: int = Query(30, ge=1, le=365),
+                         _: Principal = Depends(require(ADMIN))) -> list[dict[str, Any]]:
+        return await get_service(request).users_overview(days)
+
+    @app.post("/api/v1/users/{email}/disable", tags=["uso"],
+              summary="Desativa o usuário: nenhuma credencial dele vale (admin, login no navegador)")
+    async def disable_user(email: str, request: Request,
+                           principal: Principal = Depends(require(ADMIN))) -> dict[str, Any]:
+        result: dict[str, Any] = await audited(request, principal, "user:disable", {"email": email},
+                                               get_service(request).set_user_disabled(principal, email, True))
+        return result
+
+    @app.post("/api/v1/users/{email}/enable", tags=["uso"], summary="Reativa o usuário (admin, login no navegador)")
+    async def enable_user(email: str, request: Request,
+                          principal: Principal = Depends(require(ADMIN))) -> dict[str, Any]:
+        result: dict[str, Any] = await audited(request, principal, "user:enable", {"email": email},
+                                               get_service(request).set_user_disabled(principal, email, False))
+        return result
 
     @app.get("/api/v1/audit", tags=["auditoria"])
     async def audit_log(request: Request, limit: int = Query(100, ge=1, le=1000), actor: str | None = None,

@@ -543,6 +543,12 @@ async def _cmd_enrich_submit(a: argparse.Namespace, settings: Settings) -> None:
         payload = sys.stdin.read()
     async with open_service(settings) as svc:
         res = await svc.enrich_submit(a.id, payload, agent=a.agent or "")
+    if res["kind"] == "file_summaries":
+        print(f"{res['files']} resumo(s) gravado(s) em {res['repo']} ({res['chunks']} trecho(s) atualizado(s) na busca). "
+              f"Arquivos na fila: {res['remaining']}.")
+        if res["remaining"]:
+            print("próxima: uv run code-index enrich next --kind file_summaries")
+        return
     if res["kind"] == "doc_links":
         print(f"{res['pages']} página(s) analisada(s), {res['suggested']} sugestão(ões) para revisar "
               f"({res['removals']} remoção(ões) de vínculo automático; code-index docs sugestoes). "
@@ -553,6 +559,12 @@ async def _cmd_enrich_submit(a: argparse.Namespace, settings: Settings) -> None:
     print(f"cartão de {res['repo']} gravado. Pendentes: {res['remaining']}.")
     if res["remaining"]:
         print("próxima: uv run code-index enrich next")
+
+
+async def _cmd_enrich_apply_summaries(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        res = await svc.apply_file_summaries()
+    print(f"{res['chunks']} trecho(s) atualizado(s); {res['pruned']} resumo(s) de arquivos que saíram do índice apagado(s).")
 
 
 async def _cmd_enrich_release(a: argparse.Namespace, settings: Settings) -> None:
@@ -578,6 +590,10 @@ async def _cmd_enrich_status(a: argparse.Namespace, settings: Settings) -> None:
               f"{d['pending_multi']} com vários repos) | analisadas {d['reviewed']}")
         print(f"  sugestões pendentes: {d['suggested_add']} adicionar, {d['suggested_remove']} remover | aprovadas: "
               f"{d['approved_add']} adicionadas, {d['approved_remove']} removidas | rejeitadas {d['rejected']}")
+    sm = st.get("summaries")
+    if sm and sm["files"]:
+        print(f"resumos de arquivos: {sm['fresh']} em dia | {sm['stale']} desatualizados | {sm['missing']} sem resumo "
+              f"(de {sm['files']} arquivos de código)")
     imp = st.get("impls")
     if imp:
         print(f"handlers de API (SDL, por nome): {imp['matched']} de {imp['operations']} operações")
@@ -731,12 +747,58 @@ async def _cmd_token_revoke(a: argparse.Namespace, settings: Settings) -> None:
 
 async def _cmd_user_list(a: argparse.Namespace, settings: Settings) -> None:
     async with open_service(settings) as svc:
-        users = await svc.list_users()
+        users = await svc.users_overview(a.days)
     if not users:
-        print("ninguém fez login ainda.")
+        print("nenhum usuário ainda (aparecem no primeiro login ou ao receber um token).")
+    print(f"{'usuário':<38} {'papel':<8} {'estado':<10} {'chamadas':>8} {'mcp':>6} {'US$':>8}  último acesso")
     for u in users:
-        last = f"{u['last_login_at'].astimezone():%Y-%m-%d %H:%M}" if u["last_login_at"] else "nunca"
-        print(f"{u['email']:<40} {u['display_name'] or '-':<30} último login {last}  configs alteradas: {u['changed']}")
+        seen = u["last_seen_at"] or u["last_login_at"]
+        last = str(seen)[:16].replace("T", " ") if seen else "nunca"
+        state = "ativo" if u["active"] else "desativado"
+        print(f"{u['email']:<38} {u['role']:<8} {state:<10} {u['calls']:>8} {u['mcp_calls']:>6} "
+              f"{u['cost_usd']:>8.4f}  {last}")
+    print(f"(uso nos últimos {a.days} dias)")
+
+
+async def _cmd_user_access(a: argparse.Namespace, settings: Settings) -> None:
+    disable = a.action == "disable"
+    async with open_service(settings) as svc:
+        res = await svc.set_user_disabled(None, a.email, disable)
+        await svc.audit(None, f"user:{a.action}:local", params={"email": a.email})
+    print(f"{res['email']}: {'desativado (nenhuma credencial vale)' if disable else 'reativado'}.")
+
+
+def _fmt_int(n: float | int | None) -> str:
+    return f"{int(n or 0):,}".replace(",", ".")
+
+
+async def _cmd_usage(a: argparse.Namespace, settings: Settings) -> None:
+    async with open_service(settings) as svc:
+        rep = await svc.usage_report(a.days, email=a.email)
+    if a.json:
+        print(json.dumps(rep, ensure_ascii=False, indent=2, default=str))
+        return
+    t = rep["totals"]
+    who = f" de {a.email}" if a.email else ""
+    print(f"Uso{who} nos últimos {rep['days']} dias")
+    print(f"  chamadas {_fmt_int(t['calls'])} (MCP {_fmt_int(t['mcp_calls'])}), erros {_fmt_int(t['errors'])}, "
+          f"usuários {t['users']}, clientes {t['clients']}")
+    print(f"  latência média {t['avg_ms']:.0f} ms, p95 {t['p95_ms']:.0f} ms; sem resultado: {_fmt_int(t['empty_results'])}")
+    print(f"  Voyage: {_fmt_int(t['embed_tokens'])} tokens de embedding, {_fmt_int(t['rerank_tokens'])} de rerank, "
+          f"US$ {t['cost_usd']:.4f}; contexto devolvido a agents (MCP) ~{_fmt_int(t['context_tokens'])} tokens")
+    print()
+    print(f"  {'canal':<5} {'ação':<40} {'chamadas':>8} {'erros':>6} {'p95 ms':>7} {'~tokens/resp':>12} {'US$':>8}")
+    for r in rep["by_action"][:25]:
+        print(f"  {r['channel']:<5} {r['action'][:40]:<40} {r['calls']:>8} {r['errors']:>6} {r['p95_ms']:>7.0f} "
+              f"{r['avg_context_tokens'] if r['avg_context_tokens'] is not None else '-':>12} {r['cost_usd']:>8.4f}")
+    if rep["by_client"]:
+        print()
+        print("  clientes: " + ", ".join(f"{c['client']} ({c['calls']})" for c in rep["by_client"][:10]))
+    if rep["empty_queries"]:
+        print()
+        print("  consultas sem resultado:")
+        for q in rep["empty_queries"][:10]:
+            print(f"    {q['calls']:>4}x  {q['action']:<16} {q['query'][:80]}")
 
 
 def _print_user_settings(info: dict[str, Any]) -> None:
@@ -1028,8 +1090,9 @@ def main() -> None:
     e.add_argument("--force", action="store_true", help="recoleta mesmo sem mudança")
     e.set_defaults(fn=_cmd_enrich_facts)
     e = en.add_parser("next", help="reserva a próxima tarefa e imprime instruções + dados para o agent")
-    e.add_argument("--kind", choices=["card", "doc_links"], default="card",
-                   help="card: cartão do repo (padrão); doc_links: páginas da wiki sem vínculo → repos")
+    e.add_argument("--kind", choices=["card", "doc_links", "file_summaries"], default="card",
+                   help="card: cartão do repo (padrão); doc_links: páginas da wiki sem vínculo → repos; "
+                        "file_summaries: lote de arquivos de código para resumir (melhora a busca por termos)")
     e.add_argument("--escopo", choices=["todas", "sem-vinculo", "varios"], default="todas",
                    help="doc_links: todas as páginas (padrão), só as sem vínculo, ou as ligadas a vários repos")
     e.add_argument("--agent", help="nome do agent/ferramenta (registro)")
@@ -1041,6 +1104,9 @@ def main() -> None:
     e.add_argument("-f", "--file")
     e.add_argument("--agent")
     e.set_defaults(fn=_cmd_enrich_submit)
+    e = en.add_parser("apply-summaries",
+                      help="reaplica os resumos de arquivos às colunas de busca (sem custo; o sync e o submit já fazem)")
+    e.set_defaults(fn=_cmd_enrich_apply_summaries)
     e = en.add_parser("release", help="devolve uma tarefa reservada à fila")
     e.add_argument("id")
     e.set_defaults(fn=_cmd_enrich_release)
@@ -1114,21 +1180,33 @@ def main() -> None:
     t.add_argument("id")
     t.set_defaults(fn=_cmd_token_revoke)
 
-    # pessoas e preferências (operador local)
-    us = sub.add_parser("user", help="pessoas que já fizeram login e suas configurações").add_subparsers(required=True)
-    u = us.add_parser("list", help="lista as pessoas")
+    # usuários e preferências (operador local)
+    us = sub.add_parser("user", help="usuários: uso, acesso e configurações").add_subparsers(required=True)
+    u = us.add_parser("list", help="lista os usuários, com papel, estado e uso no período")
+    u.add_argument("--days", type=int, default=30)
     u.set_defaults(fn=_cmd_user_list)
-    u = us.add_parser("settings", help="configurações de uma pessoa (valor atual e se foi alterada)")
+    for action, text in (("disable", "desativa o usuário (nenhuma credencial dele vale)"), ("enable", "reativa o usuário")):
+        u = us.add_parser(action, help=text)
+        u.add_argument("email")
+        u.set_defaults(fn=_cmd_user_access, action=action)
+    u = us.add_parser("settings", help="configurações de um usuário (valor atual e se foi alterada)")
     u.add_argument("email")
     u.set_defaults(fn=_cmd_user_settings)
-    u = us.add_parser("set", help="altera configurações de uma pessoa")
+    u = us.add_parser("set", help="altera configurações de um usuário")
     u.add_argument("email")
     u.add_argument("settings", nargs="+", metavar="chave=valor", help="ex.: ui.theme=dark ui.results_per_page=16")
     u.set_defaults(fn=_cmd_user_set)
-    u = us.add_parser("unset", help="volta configurações de uma pessoa ao padrão")
+    u = us.add_parser("unset", help="volta configurações de um usuário ao padrão")
     u.add_argument("email")
     u.add_argument("keys", nargs="+", metavar="chave")
     u.set_defaults(fn=_cmd_user_unset)
+
+    # uso da aplicação (MCP, API, interface)
+    ug = sub.add_parser("usage", help="relatório de uso: tools, clientes, custo da Voyage, consultas sem resultado")
+    ug.add_argument("--days", type=int, default=30)
+    ug.add_argument("--email", help="só o uso deste usuário")
+    ug.add_argument("--json", action="store_true", help="relatório completo em JSON")
+    ug.set_defaults(fn=_cmd_usage)
 
     a = p.parse_args()
     fn: CommandFn = a.fn

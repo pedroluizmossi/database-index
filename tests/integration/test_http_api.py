@@ -106,7 +106,11 @@ def test_saude_e_autenticacao(server: Server) -> None:
     assert client(server, "cix_inexistente").get("/api/v1/me").status_code == 401
     assert client(server, "revogado").get("/api/v1/me").status_code == 401
     me = client(server, "leitor").get("/api/v1/me").json()
-    assert me == {"subject": USER_EMAIL, "kind": "agent", "scopes": ["search:read"], "token_name": "leitor"}
+    assert me == {"subject": USER_EMAIL, "kind": "agent", "scopes": ["search:read"], "token_name": "leitor",
+                  "provider": None}
+    # sessão do navegador diz por qual provedor entrou (start_session usa "google" por padrão)
+    sessao = httpx.Client(base_url=server.url, cookies={"cix_session": server.tokens["sessao-dev"]}).get("/api/v1/me")
+    assert sessao.json()["provider"] == "google"
     # token na URL não é aceito
     assert client(server).get("/api/v1/me", params={"token": server.tokens["leitor"]}).status_code == 401
 
@@ -698,3 +702,113 @@ def test_oauth_cliente_confidencial_precisa_do_segredo(server: Server) -> None:
             "client_id": reg["client_id"], "redirect_uri": REDIRECT}
     assert _token(server, **base, client_secret="errado").status_code == 401
     assert _token(server, **base, client_secret=reg["client_secret"]).status_code == 200
+
+
+# ---------------------------------------------------------------- uso da aplicação e pessoas
+
+async def _mcp_como(server: Server, token: str, user_agent: str) -> None:
+    headers = {"Authorization": f"Bearer {server.tokens[token]}", "User-Agent": user_agent}
+    async with httpx2.AsyncClient(headers=headers, timeout=30) as http:
+        async with streamable_http_client(f"{server.url}/mcp", http_client=http) as (r, w), ClientSession(r, w) as s:
+            await s.initialize()
+            assert not (await s.call_tool("search_code", {"query": "ola", "mode": "keyword"})).is_error
+            assert not (await s.call_tool("grep_code", {"pattern": "nada-casa-isso"})).is_error
+            assert (await s.call_tool("repo_card", {"repo": "nao-existe"})).is_error
+
+
+def test_uso_registrado_por_pessoa_tool_e_cliente(server: Server) -> None:
+    asyncio.run(_mcp_como(server, "leitor", "claude-code/9.9.9 (cli)"))
+    r = client(server, "leitor", **{"User-Agent": "meu-script/1.0"}).post(
+        "/api/v1/search", json={"query": "ola mundo", "mode": "keyword"})
+    assert r.status_code == 200
+    client(server, "leitor").get("/api/v1/sync/jobs")  # polling da interface: não conta
+
+    rep = client(server, "admin-bot").get("/api/v1/usage", params={"days": 7}).json()
+    acoes = {(a["channel"], a["action"]): a for a in rep["by_action"]}
+    busca = acoes[("mcp", "search_code")]
+    assert busca["calls"] == 1 and busca["errors"] == 0 and busca["users"] == 1
+    assert busca["response_bytes"] > 0 and busca["avg_results"] is not None
+    assert acoes[("mcp", "repo_card")]["errors"] == 1
+    assert acoes[("mcp", "grep_code")]["empty_results"] == 1
+    assert acoes[("api", "POST /api/v1/search")]["calls"] == 1
+    # contexto de agent só no MCP; resposta da API não ocupa a janela de ninguém
+    assert acoes[("mcp", "grep_code")]["context_tokens"] > 0 and acoes[("api", "POST /api/v1/search")]["context_tokens"] is None
+    assert rep["totals"]["context_bytes"] < rep["totals"]["response_bytes"]
+    assert not any(a.startswith("GET /api/v1/sync/jobs") for _, a in acoes)
+    # olhar o dashboard não é uso
+    client(server, "admin-bot").get("/api/v1/users")
+    de_novo = client(server, "admin-bot").get("/api/v1/usage", params={"days": 7}).json()
+    assert not any(a["action"].startswith(("GET /api/v1/usage", "GET /api/v1/users")) for a in de_novo["by_action"])
+    clientes = {c["client"]: c for c in rep["by_client"]}
+    assert clientes["claude-code"]["last_version"] == "9.9.9" and "meu-script" in clientes
+    assert {"query": "nada-casa-isso", "action": "grep_code"}.items() <= next(
+        q for q in rep["empty_queries"] if q["action"] == "grep_code").items()
+    assert rep["totals"]["calls"] >= 4 and rep["totals"]["errors"] >= 1
+    assert len(rep["daily"]) == 7 and rep["daily"][-1]["mcp"] >= 3
+    assert {e["email"] for e in rep["recent"] if e["channel"] == "mcp"} == {USER_EMAIL}
+    assert "cix_" not in json.dumps(rep)  # nunca guarda tokens
+
+    # só admin vê o uso de todos; cada pessoa vê o próprio
+    assert client(server, "leitor").get("/api/v1/usage").status_code == 403
+    meu = client(server, "leitor").get("/api/v1/me/usage").json()
+    assert {e["email"] for e in meu["recent"]} == {USER_EMAIL}
+    assert client(server, "admin-bot").get("/api/v1/me/usage").json()["totals"]["mcp_calls"] == 0
+    filtrado = client(server, "admin-bot").get("/api/v1/usage", params={"email": USER_EMAIL}).json()
+    assert filtrado["totals"]["mcp_calls"] == 3
+    assert client(server, "admin-bot").get("/api/v1/usage", params={"email": "x@nada.com"}).status_code == 400
+
+    pessoas = {u["email"]: u for u in client(server, "admin-bot").get("/api/v1/users").json()}
+    assert pessoas[USER_EMAIL]["mcp_calls"] == 3 and pessoas[USER_EMAIL]["role"] == "leitura"
+    assert pessoas[USER_EMAIL]["active"] and pessoas[USER_EMAIL]["active_tokens"] == 2  # leitor + indexador
+    assert "claude-code" in pessoas[USER_EMAIL]["clients"]
+    assert pessoas[ADMIN_EMAIL]["role"] == "admin"
+    assert client(server, "leitor").get("/api/v1/users").status_code == 403
+
+
+def test_admin_desativa_e_reativa_pessoa(server: Server) -> None:
+    origin = {"Origin": server.url}
+    admin = httpx.Client(base_url=server.url, cookies={"cix_session": server.tokens["sessao-admin"]}, timeout=30)
+    # agent (mesmo admin) não bloqueia ninguém; leitor não é admin; CSRF vale
+    assert client(server, "admin-bot").post(f"/api/v1/users/{USER_EMAIL}/disable").status_code == 403
+    assert client(server, "leitor").post(f"/api/v1/users/{USER_EMAIL}/disable").status_code == 403
+    assert admin.post(f"/api/v1/users/{USER_EMAIL}/disable").status_code == 403
+    assert admin.post(f"/api/v1/users/{ADMIN_EMAIL}/disable", headers=origin).status_code == 403  # a si mesmo
+    assert admin.post("/api/v1/users/ninguem@example.com/disable", headers=origin).status_code == 400
+
+    r = admin.post(f"/api/v1/users/{USER_EMAIL}/disable", headers=origin)
+    assert r.status_code == 200 and r.json()["active"] is False
+    # nenhuma credencial da pessoa vale: token de agent, sessão e MCP
+    assert client(server, "leitor").get("/api/v1/me").status_code == 401
+    assert httpx.Client(base_url=server.url, cookies={"cix_session": server.tokens["sessao-dev"]}).get(
+        "/api/v1/me").status_code == 401
+    hdrs = {"Accept": "application/json, text/event-stream"}
+    assert client(server, "leitor", **hdrs).post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "ping"}).status_code == 401
+    pessoas = {u["email"]: u for u in client(server, "admin-bot").get("/api/v1/users").json()}
+    assert pessoas[USER_EMAIL]["active"] is False
+
+    async def novo_login() -> None:
+        async with open_service(server.settings) as svc:
+            with pytest.raises(PermissionError):
+                await svc.start_session(USER_EMAIL)
+
+    asyncio.run(novo_login())
+
+    assert admin.post(f"/api/v1/users/{USER_EMAIL}/enable", headers=origin).json()["active"] is True
+    assert client(server, "leitor").get("/api/v1/me").status_code == 200
+    acoes = {(e["action"], e["status"]) for e in client(server, "admin-bot").get("/api/v1/audit").json()}
+    assert ("user:disable", 200) in acoes and ("user:enable", 200) in acoes
+
+
+def test_token_da_cli_cria_a_pessoa(int_settings: Settings, fake_llm: Any) -> None:
+    settings = int_settings.model_copy(update={"auth_secret": SecretStr("s" * 48)})
+
+    async def scenario() -> None:
+        async with open_service(settings) as svc:
+            tok, _ = await svc.create_agent_token(None, name="bot", scopes=["search:read"], owner_email="Bot@Ex.com")
+            principal = await svc.authenticate(tok)
+            assert principal is not None and principal.user_id is not None
+            pessoas = {u["email"]: u for u in await svc.users_overview(30)}
+            assert pessoas["bot@ex.com"]["active_tokens"] == 1 and pessoas["bot@ex.com"]["calls"] == 0
+            assert (await svc.housekeeping())["usage_events"] == 0
+
+    asyncio.run(scenario())

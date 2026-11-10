@@ -159,3 +159,43 @@ async def test_identificador_nao_vai_ao_reranker(int_settings: Settings, tmp_pat
 
         await svc._searcher.search("PedidoService", rerank=True, rerank_options=RerankOptions())
         assert fake_llm.rerank_calls == 2  # sem a opção, identificador também vai
+
+
+async def test_busca_vetorial_exata_com_filtro_seletivo(int_settings: Settings, tmp_path: Path, fake_llm: Any) -> None:
+    """Filtro de tipo, linguagem ou caminho que deixa poucos trechos usa a busca vetorial exata; sem filtro
+    (ou com a busca exata desligada), o HNSW com ef_search configurado. O resultado é o mesmo nos dois."""
+    from code_index.infra.chunk_store import ChunkStore
+    from code_index.services import open_service
+
+    root = tmp_path / "proj"
+    (root / "src").mkdir(parents=True)
+    (root / "src" / "cobranca.py").write_text("def cobrar_cliente(valor):\n    return valor\n", encoding="utf-8")
+    (root / "src" / "Estoque.java").write_text("public class Estoque {\n    void baixar() {}\n}\n", encoding="utf-8")
+    (root / "README.md").write_text("# Cobrança\n\nComo cobrar o cliente pelo valor devido.\n", encoding="utf-8")
+
+    async with open_service(int_settings) as svc:
+        await svc.add_repo(str(root), name="org__proj")
+        await svc.sync(None, batch=None, do_discover=False, progress=False)
+        chunks = svc._chunks
+
+        assert await chunks._few_rows(None, None, "doc")
+        assert await chunks._few_rows("python", None, None)
+        assert await chunks._few_rows(None, "src/**", None)
+        assert not await chunks._few_rows(None, None, None)  # sem filtro: nada a estimar, fica o HNSW
+
+        approx = ChunkStore(chunks.pool, int_settings.model_copy(update={"search_exact_max_chunks": 0}))
+        assert not await approx._few_rows(None, None, "doc")
+
+        vec = await svc._searcher._embed_query("cobrar cliente valor")
+        for kw, paths in (
+            ({"kind": "doc"}, ["README.md"]),
+            ({"kind": "code"}, ["src/cobranca.py", "src/Estoque.java"]),
+            ({"language": "python"}, ["src/cobranca.py"]),
+            ({"path_glob": "src/*.java"}, ["src/Estoque.java"]),
+            ({}, ["src/cobranca.py", "README.md", "src/Estoque.java"]),
+        ):
+            for store in (chunks, approx):
+                hits = await store.hybrid_search(query_vec=vec, terms=[], limit=10, per_source=10, **kw)
+                assert sorted(h.path for h in hits) == sorted(paths), kw
+                assert hits[0].path != "src/Estoque.java" or len(paths) == 1, kw  # o mais parecido vem antes
+

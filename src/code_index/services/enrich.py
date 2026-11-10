@@ -12,9 +12,11 @@ from typing import Any
 from ..domain.models import RepoState
 from ..domain.api_impl import parse_operation_ref
 from ..domain.doc_task import DOC_BATCH, page_excerpt, page_folder, render_doc_task, search_text, validate_doc_links
+from ..domain.file_summary import FILE_BATCH, batch as summary_batch, excerpt, render_summary_task, validate_summaries
 from ..domain.repo_card import material_hash, parse_payload, related_candidates, render_card_task, validate_card
 from ..indexing import enrich as enrich_collect
 from ..indexing.orchestrator import configured_repos, repo_for_row
+from ..infra.summary_store import SummaryStore
 from ..retrieval.redaction import mask_output
 
 from .base import ServiceBase, _facts_key, _iso_local
@@ -73,12 +75,16 @@ class EnrichMixin(ServiceBase):
                           kind: str = "card", scope: str = "todas") -> dict[str, Any] | None:
         """Reserva a próxima tarefa e devolve o texto para o agent. None = nada pendente.
         kind "card": cartão de um repo; "doc_links": lote de páginas da wiki → repos (escopo: todas,
-        sem-vinculo ou varios), com veredito sobre os vínculos automáticos atuais."""
+        sem-vinculo ou varios), com veredito sobre os vínculos automáticos atuais; "file_summaries": lote de
+        arquivos de código de um repo para resumir em português (entra na busca por termos)."""
         if kind == "doc_links":
             await self._enrich.expire_leases()
             return await self._next_doc_links(agent=agent.strip()[:100], doc_repo=repo, scope=scope)
+        if kind == "file_summaries":
+            await self._enrich.expire_leases()
+            return await self._next_file_summaries(agent=agent.strip()[:100], repo=repo)
         if kind != "card":
-            raise ValueError("kind inválido: use card ou doc_links")
+            raise ValueError("kind inválido: use card, doc_links ou file_summaries")
         await self._enrich.expire_leases()
         await self.enrich_facts()
         wanted = (await self._resolve_repos([repo]) or [repo])[0] if repo else None
@@ -173,6 +179,62 @@ class EnrichMixin(ServiceBase):
         return {"kind": "doc_links", "repo": task.repo, "pages": len(results), "suggested": created,
                 "removals": removals, "remaining": remaining}
 
+    # ------------------------------------------------------------ resumos de arquivos de código
+
+    @property
+    def _summaries(self) -> SummaryStore:
+        return SummaryStore(self._chunks.pool, self.settings)
+
+    async def _next_file_summaries(self, *, agent: str, repo: str | None) -> dict[str, Any] | None:
+        wanted = (await self._resolve_repos([repo]) or [repo])[0] if repo else None
+        store = self._summaries
+        pending = await store.pending(wanted)
+        by_repo: dict[str, list[dict[str, Any]]] = {}
+        for f in pending:
+            by_repo.setdefault(f["repo"], []).append(f)
+        for name, files in by_repo.items():
+            head = files[:FILE_BATCH]
+            code = await store.file_code(name, [f["path"] for f in head])
+            items = [{**f, "code": excerpt(mask_output(code.get(f["path"], ""), f["language"]))} for f in head]
+            chosen = [dict(f) for f in summary_batch(items)]
+            task = await store.lease_batch(agent=agent, lease_minutes=self.settings.enrich_lease_minutes,
+                                           repo=name, files=chosen)
+            if task is None:  # outra reserva começou no mesmo arquivo
+                continue
+            remaining = len(pending) - len(chosen)
+            text = render_summary_task(task_id=task.id, repo=name, remaining_files=remaining, files=chosen)
+            return {"id": task.id, "kind": task.kind, "repo": name, "lease_until": _iso_local(task.lease_until),
+                    "remaining": remaining, "files": [f["path"] for f in chosen], "text": text}
+        return None
+
+    async def _submit_file_summaries(self, task: Any, payload: str, agent: str) -> dict[str, Any]:
+        paths = [f["path"] for f in (task.payload or {}).get("files", [])]
+        try:
+            results, errors = validate_summaries(parse_payload(payload), paths=paths)
+        except ValueError as e:
+            results, errors = None, [str(e)]
+        if results is None:
+            msg = "entrega recusada:\n" + "\n".join(f"- {e}" for e in errors)
+            await self._enrich.reject(task.id, msg)
+            raise ValueError(msg)
+        store = self._summaries
+        async with self._chunks.pool.acquire() as conn:
+            async with conn.transaction():
+                await store.complete(conn, task, results, agent or task.agent)
+                applied = await store.apply(conn, repo=task.repo, paths=paths)
+        return {"kind": "file_summaries", "repo": task.repo, "files": len(results), "chunks": applied,
+                "remaining": len(await store.pending())}
+
+    async def apply_file_summaries(self) -> dict[str, int]:
+        """Reaplica os resumos às colunas de busca (o sync regrava os trechos dos arquivos que reprocessa) e
+        apaga os de arquivos que saíram do índice. Sem LLM e sem Voyage."""
+        store = self._summaries
+        try:
+            return {"pruned": await store.prune(), "chunks": await store.apply()}
+        except Exception as e:  # noqa: BLE001 - a busca segue funcionando sem os resumos
+            log.warning("não foi possível aplicar os resumos de arquivos: %s", e)
+            return {"pruned": 0, "chunks": 0}
+
     async def enrich_submit(self, task_id: str, payload: str, *, agent: str = "") -> dict[str, Any]:
         """Valida e grava o cartão entregue. Entrega inválida → ValueError com os erros (a tarefa continua)."""
         task = await self._enrich.task(task_id.strip())
@@ -184,6 +246,8 @@ class EnrichMixin(ServiceBase):
             raise ValueError("tarefa devolvida à fila; pegue outra com `enrich next`")
         if task.kind == "doc_links":
             return await self._submit_doc_links(task, payload, agent.strip()[:100])
+        if task.kind == "file_summaries":
+            return await self._submit_file_summaries(task, payload, agent.strip()[:100])
         root = self._local_path(task.repo)
         try:
             raw = parse_payload(payload)
@@ -211,6 +275,7 @@ class EnrichMixin(ServiceBase):
         st["impls"] = {"operations": await self._enrich.sdl_operation_count(),
                        "matched": await self._relations.count("implemented_by")}
         st["docs"] = {**await self._enrich.doc_queue_stats(), **await self._relations.suggestion_stats()}
+        st["summaries"] = await self._summaries.stats()
         st["leased"] = [x | {"lease_until": _iso_local(x["lease_until"])} for x in st["leased"]]
         return st
 

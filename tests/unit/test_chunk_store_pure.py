@@ -1,10 +1,10 @@
-"""Funções puras do ChunkStore: montagem do tsquery de palavras-chave e conversão de glob para LIKE."""
+"""Funções puras do ChunkStore: tsquery de palavras-chave, conversão de glob para LIKE e leitura do EXPLAIN."""
 
 from __future__ import annotations
 
 import pytest
 
-from code_index.infra.chunk_store import _STOPWORDS, keyword_tsquery
+from code_index.infra.chunk_store import _STOPWORDS, keyword_tsquery, plan_rows
 
 
 @pytest.mark.parametrize("query", ["", "   ", "de a o", "the and of", "ab cd é"])
@@ -37,3 +37,10 @@ def test_pontuacao_e_operadores_de_tsquery_nao_passam() -> None:
 
 def test_identificadores_com_underscore_sao_um_termo() -> None:
     assert keyword_tsquery("getUserById(user_id)?") == "getuserbyid | user_id"
+
+
+def test_linhas_estimadas_pelo_planner() -> None:
+    # asyncpg devolve o EXPLAIN (FORMAT JSON) como texto; com codec de json, já vem como lista
+    plan = '[{"Plan": {"Node Type": "Seq Scan", "Plan Rows": 21381, "Plan Width": 4}}]'
+    assert plan_rows(plan) == 21381
+    assert plan_rows([{"Plan": {"Plan Rows": 1}}]) == 1

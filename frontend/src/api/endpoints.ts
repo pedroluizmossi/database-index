@@ -27,6 +27,9 @@ import type {
   TokenRequest,
   PrefValue,
   UserSettings,
+  UsageReport,
+  UserStatus,
+  UserUsage,
 } from "./types";
 
 /** Caminho de arquivo: `repo/dir/arquivo.ext`, com cada parte codificada. */
@@ -107,4 +110,13 @@ export const api = {
   // auditoria (admin)
   audit: (limit: number, actor: string) =>
     getJson<AuditEntry[]>("/api/v1/audit", { query: { limit, actor } }),
+
+  // uso: o próprio (qualquer sessão) e o de todos (admin)
+  myUsage: (days: number) => getJson<UsageReport>("/api/v1/me/usage", { query: { days } }),
+  usage: (days: number, email?: string) => getJson<UsageReport>("/api/v1/usage", { query: { days, email } }),
+
+  // usuários (admin; desativar/reativar só com login no navegador)
+  users: (days: number) => getJson<UserUsage[]>("/api/v1/users", { query: { days } }),
+  disableUser: (email: string) => postJson<UserStatus>(`/api/v1/users/${seg(email)}/disable`, undefined),
+  enableUser: (email: string) => postJson<UserStatus>(`/api/v1/users/${seg(email)}/enable`, undefined),
 };

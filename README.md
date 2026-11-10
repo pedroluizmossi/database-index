@@ -146,7 +146,10 @@ uv run code-index eval -v                                   # mede a qualidade d
 ```
 
 **Pipeline de busca.** Duas fontes, combinadas por RRF (Reciprocal Rank Fusion) **com pesos**:
-- **vetor** (pgvector HNSW), com o embedding do trecho mais um cabeçalho de contexto;
+- **vetor** (pgvector HNSW), com o embedding do trecho mais um cabeçalho de contexto. O HNSW examina
+  `SEARCH_HNSW_EF_SEARCH` vizinhos (padrão 400; com os 40 do pgvector, perdia resultados). Quando os filtros
+  (repos, domínio, `kind`, linguagem, caminho) deixam até `SEARCH_EXACT_MAX_CHUNKS` trechos, a busca vetorial é
+  exata, sem o índice: com filtro seletivo o HNSW devolve vizinhos errados;
 - **termos**, com tokenização própria para código (`domain/search_text.py`): `HmacServiceImpl` vira
   `hmacserviceimpl hmac service impl`, então a busca acha o nome exato e pedaços dele. Nomes de símbolos e
   o caminho pesam mais que o corpo do código. O motor é escolhido conforme o banco:
@@ -158,7 +161,10 @@ uv run code-index eval -v                                   # mede a qualidade d
   | `fts-legacy` | tabela antiga, antes de reindexar: full-text sobre o código |
 
 Os pesos da fusão dependem da consulta: frases favorecem o vetor (1,0 contra 0,7); consultas que parecem um
-identificador (`HmacServiceImpl`, `get_user`, `Classe.metodo`) favorecem os termos (1,0 contra 0,6). Os 40
+identificador (`HmacServiceImpl`, `get_user`, `Classe.metodo`) favorecem os termos (1,0 contra 0,6). A
+constante do RRF é 10, não o 60 usual (`RRF_K` em `domain/search_text.py`): quase sempre uma das fontes acerta
+e a outra é ruído, então o 1º lugar de uma fonte precisa valer mais que uma posição mediana nas duas (sem
+rerank, MRR de 0,74 para 0,80). Os 40
 melhores (`RERANK_CANDIDATES`) vão para o reranker (`RERANK_MODEL=voyage/rerank-2.5`), que devolve os top-k.
 Se o rerank falhar, a resposta usa a ordem da fusão.
 
@@ -175,8 +181,9 @@ Os termos ignoram acentos ("validacao" acha "validação"), e a consulta também
 arquivo), um trecho idêntico em vários repos (boilerplate) aparece uma vez, com os outros em `also_in`, e
 as páginas de documentação ficam limitadas a um quarto do top-k (mínimo 2; `--max-docs` muda isso).
 
-**Avaliação.** `evals/queries.json` tem perguntas com a resposta conhecida (repo, caminho e linha
-opcional). `code-index eval` mede hit@1, hit@3, hit@k e MRR em cada modo de busca, e `--grid` compara os
+**Avaliação.** `evals/queries.json` tem 150 perguntas com a resposta conhecida (repo, caminho e linha
+opcional), a maioria sem filtro de repo. Cada pergunta pode levar os filtros da busca (`repos`, `kind`,
+`language`, `path_glob`). `code-index eval` mede hit@1, hit@3, hit@k e MRR em cada modo de busca, e `--grid` compara os
 pesos da fusão sem rerank. Rode depois de mexer na busca ou no chunking. Cada pergunta custa um embedding
 de consulta e, nos modos com rerank, uma chamada ao reranker (centavos).
 
@@ -339,6 +346,33 @@ uv run code-index docs rejeitar <doc_repo> <caminho> <repo>
 
 A qualidade dos candidatos depende dos cartões: rode a fila de cartões antes da de páginas.
 
+**Resumos de arquivos de código (busca em português sobre código em inglês).** A busca por termos não casa
+"navegador" com `browser`. Na fila `file_summaries`, um agent descreve cada arquivo de código em português
+(resumo, três perguntas e palavras-chave); o `submit` valida e grava em `file_summaries`, e o resumo entra nas
+colunas de busca por termos dos trechos do arquivo. O embedding não muda: **não há custo de Voyage** nem
+chamada de API de modelo pelo projeto. Arquivo alterado volta para a fila (o resumo antigo continua valendo
+até lá); o sync reaplica os resumos sozinho.
+
+```bash
+uv run code-index enrich next --kind file_summaries [--repo <repo>]   # lote de até 10 arquivos + instruções
+uv run code-index enrich submit <id> -f resumos.json                  # valida, grava e atualiza a busca
+uv run code-index enrich status                                       # resumos em dia / desatualizados / faltando
+uv run code-index enrich apply-summaries                              # reaplica (o sync e o submit já fazem)
+```
+
+Laço sem interação com um CLI local (aqui o Claude Code com Haiku, sem ferramentas: o modelo só lê o texto
+e devolve o JSON). Uma entrega recusada fica reservada até o lease expirar e o laço segue para o próximo lote:
+
+```bash
+while t=$(uv run code-index enrich next --kind file_summaries) && [ "$t" != "nenhuma tarefa pendente." ]; do
+  id=$(printf '%s' "$t" | head -1 | awk '{print $2}')
+  printf '%s' "$t" | claude -p --model haiku --tools "" | uv run code-index enrich submit "$id" --agent haiku-cli
+done
+```
+
+Medido num piloto de 16 repos (961 arquivos), nas 28 perguntas do `eval` com resposta neles: MRR com rerank de
+0,83 para 0,98 e, só por termos, de 0,42 para 0,71; nas outras perguntas, nada mudou com rerank.
+
 - Interface: resumo e botão **Cartão** na aba Repositórios (o filtro também procura no resumo e nas tags);
   na Busca, o quadro "Repos que tratam do assunto" sugere o filtro de repo.
 
@@ -417,6 +451,30 @@ mesma pessoa vê os mesmos tokens entrando por qualquer um dos dois.
   tokens nem o conteúdo retornado. Admins consultam em `GET /api/v1/audit`.
 - **Segredos mascarados:** respostas de busca e de leitura de arquivo saem com a mesma máscara do índice.
 
+### Usuários e uso
+
+Toda credencial pertence a um usuário (`code_index.users`): quem entra pelo navegador e quem recebe um token
+pela CLI. Um admin (logado no navegador) pode **desativar** um usuário na aba **Usuários**: na hora, nenhuma
+credencial dele vale (sessão, tokens de agent e clientes OAuth), e ele não consegue entrar de novo até ser
+reativado.
+
+Cada chamada de tool do MCP e cada requisição à API vira um evento em `code_index.usage_events`, com qual usuário,
+canal (`mcp`, `api` ou `ui`), cliente (ex.: `claude-code`, pelo `clientInfo` ou `User-Agent`), tempo, itens
+devolvidos, tamanho da resposta (nas tools do MCP, vira o consumo de contexto do agent: ~bytes/4 tokens) e consumo da Voyage (tokens de
+embedding/rerank e custo estimado pelo LiteLLM). Nunca grava tokens nem o conteúdo devolvido.
+
+- **Dashboard** (aba **Uso**, só admin; as leituras do próprio painel não contam): chamadas por dia e canal, consumo por tool, clientes, consultas mais
+  frequentes e **consultas sem resultado** (o melhor sinal do que falta no índice). Cada usuário vê o próprio uso
+  nas configurações.
+- **Retenção:** `CODE_INDEX_USAGE_RETENTION_DAYS` (padrão 365); a limpeza roda ao subir o servidor e a cada 6 h.
+  `CODE_INDEX_USAGE_TRACKING=false` desliga o registro.
+
+```bash
+uv run code-index usage [--days 30] [--email usuario@x.com] [--json]
+uv run code-index user list [--days 30]
+uv run code-index user disable usuario@x.com      # e `user enable`
+```
+
 ### API REST (resumo)
 
 | Método e rota | Scope |
@@ -427,6 +485,9 @@ mesma pessoa vê os mesmos tokens entrando por qualquer um dos dois.
 | `POST /api/v1/sync` (job em background) · `GET /api/v1/sync/jobs` · `GET /api/v1/sync/jobs/{id}` | index:write |
 | `POST/DELETE /api/v1/repos…` · `POST/PATCH/DELETE /api/v1/orgs…` · `GET /api/v1/audit` | admin |
 | `GET/POST/DELETE /api/v1/tokens` | sessão do navegador (emitir); dono ou admin (revogar, inclusive clientes OAuth) |
+| `GET /api/v1/me/usage` | search:read (o próprio uso) |
+| `GET /api/v1/usage` · `GET /api/v1/users` | admin |
+| `POST /api/v1/users/{email}/disable` · `…/enable` | admin com sessão do navegador |
 | `GET /auth/providers` | público: provedores de login ativos |
 
 ### MCP no Claude Code

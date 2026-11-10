@@ -8,7 +8,7 @@ from datetime import timedelta
 from typing import Any
 
 
-from ..domain.auth import ADMIN, Principal, check_can_issue, scopes_for_user, validate_scopes
+from ..domain.auth import ADMIN, Principal, check_can_issue, scopes_for_user, session_token_name, validate_scopes
 from ..infra.auth_store import TokenInfo
 
 from .oauth import OAuthMixin
@@ -25,11 +25,14 @@ class AuthMixin(OAuthMixin):
         self, email: str, provider: str = "google", *, display_name: str | None = None,
     ) -> tuple[str, TokenInfo]:
         """Sessão de uma pessoa já autenticada no navegador (Google ou Microsoft). Scopes vêm da lista de admins.
-        Registra a pessoa em `users` (primeiro login) ou atualiza nome e data do último login."""
-        await self._users.record_login(email, display_name)
+        Registra a pessoa em `users` (primeiro login) ou atualiza nome e data do último login.
+        Usuário desativado por um admin não entra (PermissionError)."""
+        user = await self._users.record_login(email, display_name)
+        if user["disabled_at"] is not None:
+            raise PermissionError("seu acesso foi desativado; fale com um admin")
         scopes = scopes_for_user(email, self.settings.admin_emails)
         return await self._tokens.create(
-            kind="session", name=f"{provider}-session", owner_email=email, scopes=scopes,
+            kind="session", name=session_token_name(provider), owner_email=email, scopes=scopes,
             ttl=timedelta(hours=self.settings.session_ttl_hours),
         )
 

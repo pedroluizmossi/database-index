@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
-import { RotateCcw, ShieldOff } from "lucide-react";
+import { BarChart3, RotateCcw, ShieldOff } from "lucide-react";
 import { describeError } from "../api/client";
-import type { PrefSchema, PrefValue } from "../api/types";
+import { api } from "../api/endpoints";
+import type { PrefSchema, PrefValue, UsageReport } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { useToast } from "../components/Toaster";
-import { Alert, Badge, Button, EmptyState, Panel, Segmented, Select, Switch, inputClass } from "../components/ui";
+import { Alert, Badge, Button, EmptyState, Panel, Segmented, Select, Skeleton, Switch, inputClass } from "../components/ui";
+import { ActionTable, Section } from "../components/usage";
+import { PERIODS, UsageKpis, type Period } from "./UsagePage";
 import { usePrefs } from "../data/PrefsProvider";
 import { canWrite } from "../lib/capabilities";
 import { formatDateTime } from "../lib/utils";
@@ -82,7 +85,53 @@ export function SettingsPage() {
           );
         })}
       </Panel>
+
+      <MyUsage />
     </div>
+  );
+}
+
+/** Resumo do uso do próprio usuário: todas as credenciais dele (navegador, tokens e clientes MCP). */
+function MyUsage() {
+  const [days, setDays] = useState<Period>("30");
+  const [report, setReport] = useState<UsageReport | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    api.myUsage(Number(days)).then(
+      (r) => {
+        if (!alive) return;
+        setReport(r);
+        setError(null);
+      },
+      (err: unknown) => alive && setError(describeError(err)),
+    );
+    return () => {
+      alive = false;
+    };
+  }, [days]);
+
+  return (
+    <Section
+      title="Meu uso"
+      subtitle="Somando esta interface, os seus tokens e os seus clientes MCP. Custo estimado na Voyage."
+      actions={<Segmented label="Período" options={[...PERIODS]} value={days} onChange={setDays} />}
+    >
+      {error && <Alert>{error}</Alert>}
+      {!report && !error && <Skeleton className="h-48 rounded-xl" />}
+      {report && report.totals.calls === 0 && (
+        <Panel>
+          <EmptyState icon={BarChart3} title="Nenhum uso no período" text="Use a busca ou conecte um cliente MCP e os números aparecem aqui." />
+        </Panel>
+      )}
+      {report && report.totals.calls > 0 && (
+        <div className="space-y-4">
+          <UsageKpis report={report} showUsers={false} />
+          <ActionTable rows={report.by_action} compact />
+        </div>
+      )}
+    </Section>
   );
 }
 

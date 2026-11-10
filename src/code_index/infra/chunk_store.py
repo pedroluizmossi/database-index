@@ -12,12 +12,13 @@ enquanto o índice é migrado. Valores entram sempre como parâmetros; só nomes
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 import asyncpg
 import numpy as np
@@ -25,7 +26,7 @@ import numpy as np
 from code_index.domain.models import Hit
 from code_index.domain.ownership import Scope
 from code_index.domain.path_glob import glob_regex
-from code_index.domain.search_text import STOPWORDS
+from code_index.domain.search_text import RRF_K, STOPWORDS
 from code_index.infra.document_store import DocumentStore
 from code_index.infra.relation_store import RelationStore
 from code_index.infra.skip_store import SkipStore
@@ -33,7 +34,7 @@ from code_index.settings import Settings
 
 log = logging.getLogger(__name__)
 
-_RRF_K = 60
+_HNSW_EF_MAX = 1000       # teto do pgvector para hnsw.ef_search
 _CAPS_TTL = 30.0          # segundos entre rechecagens do que o banco oferece
 _BM25_SYMBOL_BOOST = 3    # nomes de símbolos/caminho valem mais que o corpo do código
 BM25_INDEX = "code_chunks_bm25"
@@ -61,6 +62,12 @@ def keyword_tsquery(query: str) -> str | None:
     return " | ".join(terms) or None
 
 
+
+
+def plan_rows(plan: str | list[Any]) -> int:
+    """Linhas que o planner espera devolver, a partir da saída de EXPLAIN (FORMAT JSON)."""
+    data = json.loads(plan) if isinstance(plan, str) else plan
+    return int(data[0]["Plan"]["Plan Rows"])
 
 
 def tsquery_or(terms: Sequence[str]) -> str | None:
@@ -246,16 +253,17 @@ class ChunkStore:
         exclude_path_glob: Sequence[str] | None = None,
         scope: Scope | None = None,
     ) -> list[Hit]:
-        """Fusão RRF ponderada: score = Σ peso_fonte / (60 + posição na fonte).
+        """Fusão RRF ponderada: score = Σ peso_fonte / (RRF_K + posição na fonte).
 
         `terms` já vêm tokenizados (domain.search_text.query_terms). `per_source` é quantos
         candidatos cada fonte traz; `limit` é quantos sobram após a fusão. Sem fontes → [].
         `kind`: 'code' | 'doc' | None. `include_linked_docs`: com `repos`, traz também as páginas
         de documentação externa ligadas a eles. `scope`: só o código de um domínio/serviço do DDD.
 
-        Com filtro de repos ou de domínio sobre um subconjunto pequeno (até SEARCH_EXACT_MAX_CHUNKS trechos),
-        a busca vetorial é exata (sem o HNSW): o índice aproximado descarta quase tudo quando o filtro é
-        seletivo e pode devolver poucos resultados.
+        Quando os filtros deixam um subconjunto pequeno (até SEARCH_EXACT_MAX_CHUNKS trechos), a busca
+        vetorial é exata (sem o HNSW): o índice aproximado descarta quase tudo quando o filtro é seletivo e
+        devolve vizinhos errados (com kind='doc', recall@10 de 0,87 e pior caso de 0,1). Sem filtro seletivo,
+        o HNSW examina SEARCH_HNSW_EF_SEARCH vizinhos (o padrão do pgvector, 40, perdia resultados).
         """
         if kind is not None and kind not in KINDS:
             raise ValueError(f"kind inválido: {kind} (use code ou doc)")
@@ -271,7 +279,8 @@ class ChunkStore:
         linked = self._relations.doc_links_sql() if ((repos or scope) and include_linked_docs) else None
         where = _filters(p, repos, language, path_glob, kind=kind, linked_docs_sql=linked,
                          exclude_repos=exclude_repos, exclude_path_glob=exclude_path_glob, scope=scope)
-        exact = use_vec and await self._small_subset(repos, scope)
+        exact = use_vec and (await self._small_subset(repos, scope)
+                             or await self._few_rows(language, path_glob, kind))
         # páginas de documentação ignoradas (docs ignore) não aparecem em nenhum resultado
         where = f"({where}) AND (repo, path) NOT IN ({self._documents.ignored_sql()})"
         t = self._table
@@ -298,7 +307,7 @@ class ChunkStore:
             return []
         sql = f"""
         WITH ranked AS ({" UNION ALL ".join(parts)}),
-        fused AS (SELECT repo, path, id, SUM(w / ({_RRF_K} + rnk)) AS score
+        fused AS (SELECT repo, path, id, SUM(w / ({RRF_K} + rnk)) AS score
                   FROM ranked GROUP BY repo, path, id)
         SELECT t.repo, t.path, t.language, t.start_line, t.end_line, t.code, f.score
         FROM fused f JOIN {t} t USING (repo, path, id)
@@ -310,6 +319,8 @@ class ChunkStore:
                     if use_vec and not exact:
                         # pgvector >= 0.8: continua varrendo o HNSW quando filtros descartam candidatos.
                         await conn.execute("SET LOCAL hnsw.iterative_scan = relaxed_order")
+                        ef = min(_HNSW_EF_MAX, max(self._settings.search_hnsw_ef_search, int(per_source)))
+                        await conn.execute(f"SET LOCAL hnsw.ef_search = {ef}")
                     rows = await conn.fetch(sql, *p.values)
         except (asyncpg.UndefinedTableError, asyncpg.UndefinedColumnError, asyncpg.UndefinedObjectError):
             # tabela/coluna/índice mudou no meio (sync recriando a tabela): recheca na próxima busca
@@ -317,7 +328,7 @@ class ChunkStore:
             return []
 
         # Normalizado pelo máximo possível (1º lugar em todas as fontes usadas).
-        max_score = sum(weights) / (_RRF_K + 1)
+        max_score = sum(weights) / (RRF_K + 1)
         hits = [
             Hit(
                 repo=r["repo"], path=r["path"], language=r["language"],
@@ -344,6 +355,24 @@ class ChunkStore:
         except asyncpg.UndefinedTableError:
             return False
         return int(n) <= self._settings.search_exact_max_chunks
+
+    async def _few_rows(self, language: str | None, path_glob: str | None, kind: str | None) -> bool:
+        """Os filtros de linguagem, caminho e tipo deixam poucos trechos (vale a busca vetorial exata)?
+
+        Usa a estimativa de linhas do planner (EXPLAIN: ~0,5 ms, pelas estatísticas, sem ler a tabela);
+        contar de verdade custa o mesmo que a própria busca exata. A estimativa erra em até ~40% e, sem
+        estatísticas (tabela recém-criada), para menos: o erro troca uma busca por outra mais lenta ou menos
+        precisa, nunca quebra a consulta."""
+        if not (language or path_glob or kind):
+            return False
+        p = _Params()
+        where = _filters(p, None, language, path_glob, kind=kind)
+        try:
+            plan = await self._pool.fetchval(
+                f"EXPLAIN (FORMAT JSON) SELECT 1 FROM {self._table} WHERE {where}", *p.values)
+        except asyncpg.UndefinedTableError:
+            return False
+        return plan_rows(plan) <= self._settings.search_exact_max_chunks
 
     @property
     def skips(self) -> SkipStore:

@@ -65,6 +65,7 @@ class TokenInfo:
 
 
 _COLS = "id::text, kind, name, owner_email, token_prefix, scopes, created_at, expires_at, last_used_at, revoked_at"
+_COLS_T = ", ".join(f"t.{c}" for c in _COLS.split(", "))
 
 
 def _info(r: asyncpg.Record) -> TokenInfo:
@@ -79,6 +80,7 @@ class TokenStore:
     def __init__(self, pool: asyncpg.Pool, settings: Settings) -> None:
         self._pool = pool
         self._t = f'"{settings.pg_schema}".api_tokens'
+        self._users = f'"{settings.pg_schema}".users'
         self._settings = settings
 
     def _secret(self) -> str:
@@ -97,10 +99,15 @@ class TokenStore:
         """Cria um token. Retorna (valor em claro — mostrar UMA vez, metadados)."""
         token = generate_token()
         expires = datetime.now(timezone.utc) + ttl if ttl else None
+        # O dono vira (ou já é) uma pessoa em `users`: todo token aponta para ela pelo user_id.
         row = await self._pool.fetchrow(
-            f"""INSERT INTO {self._t}
-                    (kind, name, owner_email, token_hash, token_prefix, scopes, expires_at, oauth_client_id)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING {_COLS}""",
+            f"""WITH u AS (
+                    INSERT INTO {self._users} (email) VALUES ($3) ON CONFLICT (email) DO UPDATE
+                    SET email = EXCLUDED.email RETURNING id
+                )
+                INSERT INTO {self._t}
+                    (kind, name, owner_email, token_hash, token_prefix, scopes, expires_at, oauth_client_id, user_id)
+                SELECT $1, $2, $3, $4, $5, $6, $7, $8, u.id FROM u RETURNING {_COLS}""",
             kind, name, owner_email.lower(), hash_token(token, self._secret()), token[:10], list(scopes), expires,
             oauth_client_id,
         )
@@ -110,9 +117,12 @@ class TokenStore:
         """Principal do token, ou None se inválido/expirado/revogado."""
         if not token.startswith(TOKEN_PREFIX) or len(token) > 200:
             return None
+        # Pessoa desativada: nenhuma credencial dela vale (sessão, agent ou OAuth), sem precisar revogar.
         row = await self._pool.fetchrow(
-            f"""SELECT {_COLS}, oauth_client_id FROM {self._t}
-                WHERE token_hash = $1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())""",
+            f"""SELECT {_COLS_T}, t.oauth_client_id, t.user_id::text AS user_id
+                FROM {self._t} t LEFT JOIN {self._users} u ON u.id = t.user_id
+                WHERE t.token_hash = $1 AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at > now())
+                  AND u.disabled_at IS NULL""",
             hash_token(token, self._secret()),
         )
         if row is None:
@@ -120,9 +130,14 @@ class TokenStore:
         info = _info(row)
         if info.last_used_at is None or datetime.now(timezone.utc) - info.last_used_at > _LAST_USED_RESOLUTION:
             await self._pool.execute(f"UPDATE {self._t} SET last_used_at = now() WHERE id = $1::uuid", info.id)
+            if row["user_id"]:
+                await self._pool.execute(
+                    f"UPDATE {self._users} SET last_seen_at = now() WHERE id = $1::uuid", row["user_id"]
+                )
         return Principal(
             subject=info.owner_email, kind=info.kind, scopes=effective_scopes(info.scopes),
             token_id=info.id, token_name=info.name, oauth_client_id=row["oauth_client_id"],
+            user_id=row["user_id"],
         )
 
     async def list(self, *, owner_email: str | None = None, include_inactive: bool = False) -> list[TokenInfo]:

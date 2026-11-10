@@ -138,7 +138,8 @@ class CodeIndexOAuthProvider:
             client_id=principal.oauth_client_id or principal.token_name or principal.kind,
             scopes=sorted(principal.scopes),
             subject=principal.subject,
-            claims={"kind": principal.kind, "token_id": principal.token_id, "token_name": principal.token_name},
+            claims={"kind": principal.kind, "token_id": principal.token_id, "token_name": principal.token_name,
+                    "user_id": principal.user_id, "oauth_client_id": principal.oauth_client_id},
         )
 
     async def revoke_token(self, token: AccessToken | RefreshToken) -> None:

@@ -83,8 +83,8 @@ class ServiceBase:
         self._oauth = oauth
         self._users = users
         self._usage = usage
-        self._job_lock = asyncio.Lock()  # checagem + criação de job, sem corrida entre requisições
-        self._job_tasks: set[asyncio.Task[None]] = set()
+        self._job_wakeup = asyncio.Event()  # job novo na fila: acorda o worker embutido sem esperar a consulta
+        self._job_tasks: set[asyncio.Task[Any]] = set()  # worker embutido (services/sync.py)
         self._owner_cache: Any = None  # dono no DDD resolvido (services/ownership.py); limpo ao recalcular relações
 
     # ------------------------------------------------------------ repos e fontes
@@ -176,7 +176,7 @@ class ServiceBase:
     # ------------------------------------------------------------ ciclo de vida e auditoria
 
     async def shutdown(self) -> None:
-        """Encerra os jobs em andamento (marca como interrompidos). Chamado antes de fechar o pool."""
+        """Encerra o worker embutido (o job em andamento volta à fila). Chamado antes de fechar o pool."""
         tasks = list(self._job_tasks)
         for t in tasks:
             t.cancel()

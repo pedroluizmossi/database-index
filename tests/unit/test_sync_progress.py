@@ -67,3 +67,16 @@ def test_repo_fora_da_selecao_e_ignorado() -> None:
     p.update("x", status="indexing")
     assert not p.tracks("x") and p.tracks("a")
     assert [r["name"] for r in p.snapshot()["repos"]] == ["a"]
+
+
+def test_selecionados_prontos_na_indexacao_mostram_verificacao_dos_demais() -> None:
+    p = SyncProgress()
+    p.select(["a"])
+    p.update("a", status="indexing", files_total=1)
+    p.attach("a", Source(process_file=counts(1, 1)))
+    p.set_phase("index")
+    p.refresh()
+    snap = p.snapshot()
+    assert (snap["phase"], snap["phase_label"]) == ("index", "verificando os demais repos")
+    p.set_phase("finish")
+    assert p.snapshot()["phase_label"] == "finalizando"

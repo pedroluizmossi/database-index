@@ -15,11 +15,10 @@ import {
   Network,
   Play,
   Plus,
-  RefreshCw,
   Trash2,
   Undo2,
 } from "lucide-react";
-import type { OrgSummary, OwnerOrigin, OwnershipCatalog, Repo, RepoProgress, RepoStatusValue, SyncJob } from "../api/types";
+import type { OwnerOrigin, OwnershipCatalog, Repo, RepoProgress, RepoStatusValue } from "../api/types";
 import { useIndex } from "../data/IndexProvider";
 import { useAuth } from "../auth/AuthProvider";
 import { api } from "../api/endpoints";
@@ -31,20 +30,32 @@ import { RepoDocsDialog } from "../components/RepoDocsDialog";
 import { RepoCardDialog } from "../components/RepoCardDialog";
 import { RepoSummariesLink } from "../components/summaries";
 import { OwnerDialog } from "../components/OwnerDialog";
-import { ORIGIN_HINT, ORIGIN_LABEL, ownerMatches, validOwner } from "../lib/ownership";
+import { ORIGIN_HINT, ORIGIN_LABEL, ownerMatches } from "../lib/ownership";
+import {
+  ALL_OWNERS,
+  CONFIDENCE_LABEL,
+  CONFIDENCE_VALUES,
+  NO_OWNER,
+  SEARCH_MAX,
+  isFilterActive,
+  readFiltersFromHash,
+  writeFiltersToHash,
+  type Confidence,
+  type ConfidenceFilter,
+  type Filters,
+  type StatusFilter,
+} from "../lib/repoFilters";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { SyncDialog } from "../components/SyncDialog";
-import { JobDialog, JobsPanel, RunningJobBanner, useJobs } from "../components/JobsPanel";
+import { ActiveJobNotice, useJobs } from "../components/JobsPanel";
+import { OwnershipStrip } from "../components/OwnershipStrip";
+import { useRepoCounts } from "../components/IndexCoverage";
 import { cx, formatDateTime, plural, repoShortName, timeAgo } from "../lib/utils";
-import { Alert, Badge, Button, EmptyState, Field, IconButton, Panel, ProgressBar, Segmented, Select, Skeleton, inputClass, tableHeadClass, type BadgeTone } from "../components/ui";
+import { Alert, Badge, Button, EmptyState, Field, IconButton, Panel, Segmented, Select, Skeleton, inputClass, tableHeadClass, type BadgeTone } from "../components/ui";
 import type { XrayTarget } from "../lib/xray";
 
-type StatusFilter = "all" | RepoStatusValue;
 type SortKey = "name" | "status" | "owner" | "language" | "files" | "chunks" | "indexed_at";
 
-// Filtro de domínio: todos, sem dono, ou um domínio ('hcm') / serviço ('hcm/payroll').
-const ALL_OWNERS = "";
-const NO_OWNER = "__sem_dono__";
 interface Sort {
   key: SortKey;
   dir: 1 | -1;
@@ -57,76 +68,10 @@ const STATUS_LABEL: Record<RepoStatusValue, string> = {
   ignored: "Ignorado",
 };
 
-/** Confiança do dono (vem do servidor; 'alta' é o padrão, sem filtro de origem). */
-type Confidence = "alta" | "media" | "baixa";
-type ConfidenceFilter = "" | Confidence;
-const CONFIDENCE_LABEL: Record<Confidence, string> = { alta: "alta", media: "média", baixa: "baixa" };
-const CONFIDENCE_VALUES = Object.keys(CONFIDENCE_LABEL) as Confidence[];
-const ORIGIN_VALUES = Object.keys(ORIGIN_LABEL) as OwnerOrigin[];
-const STATUS_VALUES: StatusFilter[] = ["all", "indexed", "pending", "error", "ignored"];
-const SEARCH_MAX = 200;
-
-/**
- * Filtros na URL: `#repos?status=pending&dominio=hcm&origem=sibling&confianca=media&q=texto`.
- * Chaves em português e valores ruins caem no padrão, sem erro.
- */
-const HASH_KEYS = { status: "status", domain: "dominio", origin: "origem", confidence: "confianca", search: "q" } as const;
-
-interface Filters {
-  status: StatusFilter;
-  domain: string;
-  origin: OwnerOrigin | "";
-  confidence: ConfidenceFilter;
-  search: string;
-}
-
-const DEFAULT_FILTERS: Filters = { status: "all", domain: ALL_OWNERS, origin: "", confidence: "", search: "" };
-
-function readFiltersFromHash(): Filters {
-  const hash = window.location.hash.slice(1);
-  const at = hash.indexOf("?");
-  if (at < 0) return DEFAULT_FILTERS;
-  const params = new URLSearchParams(hash.slice(at + 1));
-  const status = params.get(HASH_KEYS.status) as StatusFilter | null;
-  const domain = params.get(HASH_KEYS.domain) ?? "";
-  const origin = params.get(HASH_KEYS.origin) as OwnerOrigin | null;
-  const confidence = params.get(HASH_KEYS.confidence) as Confidence | null;
-  return {
-    status: status && STATUS_VALUES.includes(status) ? status : "all",
-    domain: domain === NO_OWNER || validOwner(domain) ? domain : ALL_OWNERS,
-    origin: origin && ORIGIN_VALUES.includes(origin) ? origin : "",
-    confidence: confidence && CONFIDENCE_VALUES.includes(confidence) ? confidence : "",
-    search: (params.get(HASH_KEYS.search) ?? "").slice(0, SEARCH_MAX),
-  };
-}
-
-/** Escreve os filtros no hash sem criar entrada no histórico; mantém o caminho e a busca da página. */
-function writeFiltersToHash(f: Filters) {
-  const params = new URLSearchParams();
-  if (f.status !== "all") params.set(HASH_KEYS.status, f.status);
-  if (f.domain !== ALL_OWNERS) params.set(HASH_KEYS.domain, f.domain);
-  if (f.origin) params.set(HASH_KEYS.origin, f.origin);
-  if (f.confidence) params.set(HASH_KEYS.confidence, f.confidence);
-  if (f.search.trim()) params.set(HASH_KEYS.search, f.search);
-  const query = params.toString();
-  const hash = query ? `#repos?${query}` : "#repos";
-  if (window.location.hash === hash) return;
-  try {
-    window.history.replaceState(window.history.state, "", `${window.location.pathname}${window.location.search}${hash}`);
-  } catch {
-    // Sem histórico gravável (ambiente restrito): os filtros continuam valendo na tela.
-  }
-}
-
-/** Algum filtro difere do padrão? */
-function isFilterActive(f: Filters): boolean {
-  return f.status !== "all" || f.domain !== ALL_OWNERS || f.origin !== "" || f.confidence !== "" || f.search.trim() !== "";
-}
-
 const numberFormat = new Intl.NumberFormat("pt-BR");
 
 export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) {
-  const { repos, orgs, loading, reload } = useIndex();
+  const { repos, loading, reload } = useIndex();
   const { session } = useAuth();
   const { push } = useToast();
   const [syncOpen, setSyncOpen] = useState<{ names: string[] | null } | null>(null);
@@ -147,15 +92,18 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
   const canIndex = writable && me !== null && hasScope(me, "index:write");
 
   const onFinished = useCallback(() => void reload(), [reload]);
-  // Jobs: leitura para quem tem index:write (vale também para API key com esse scope).
+  // Jobs: leitura para quem tem index:write (vale também para API key com esse scope). Aqui só o job ativo
+  // importa (selo na linha e botões); cobertura, fila e histórico ficam na página Indexação.
   const canSeeJobs = me !== null && hasScope(me, "index:write");
   const jobs = useJobs(canSeeJobs, onFinished);
-  const [jobDetail, setJobDetail] = useState<SyncJob | null>(null);
-  // Andamento ao vivo do job: o status gravado do repo só muda quando o lote inteiro termina.
-  const live = useMemo(
-    () => new Map((jobs.running?.progress?.repos ?? []).map((p) => [p.name, p] as const)),
-    [jobs.running],
-  );
+  // Selo ao vivo na linha: o status gravado do repo só muda quando o lote inteiro termina.
+  const live = useMemo(() => {
+    const job = jobs.running;
+    if (!job) return new Map<string, RepoProgress["status"]>();
+    // Na fila: os repos pedidos aparecem como "na fila" (o andamento gravado seria de uma tentativa anterior).
+    if (job.status === "queued") return new Map((job.params?.repos ?? []).map((name) => [name, "queued" as const]));
+    return new Map((job.progress?.repos ?? []).map((p) => [p.name, p.status] as const));
+  }, [jobs.running]);
 
   async function unignore(r: Repo) {
     try {
@@ -164,21 +112,6 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
       await reload();
     } catch (err) {
       push({ tone: "error", title: "Não consegui reativar", description: describeError(err) });
-    }
-  }
-
-  async function refreshOrg(org: OrgSummary) {
-    try {
-      const res = await api.refreshOrg(org.name);
-      const d = res[org.name];
-      push({
-        tone: "success",
-        title: `Descoberta de ${org.name} atualizada`,
-        description: d ? `${d.total} repositórios · ${d.new} ${plural(d.new, "novo", "novos")} · ${d.removed} ${plural(d.removed, "removido", "removidos")}` : undefined,
-      });
-      await reload();
-    } catch (err) {
-      push({ tone: "error", title: "Não consegui atualizar a org", description: describeError(err) });
     }
   }
 
@@ -206,23 +139,14 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
   const [status, setStatus] = useState<StatusFilter>(initial.status);
   const [originFilter, setOriginFilter] = useState<OwnerOrigin | "">(initial.origin);
   const [confidenceFilter, setConfidenceFilter] = useState<ConfidenceFilter>(initial.confidence);
+  const [outdatedOnly, setOutdatedOnly] = useState(initial.outdated);
   const [term, setTerm] = useState(initial.search);
   const [sort, setSort] = useState<Sort>({ key: "name", dir: 1 });
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState<PageSize>(25);
   const listTop = useRef<HTMLDivElement>(null);
 
-  const counts = useMemo(() => {
-    const byStatus: Record<RepoStatusValue, number> = { indexed: 0, pending: 0, error: 0, ignored: 0 };
-    let files = 0;
-    let chunks = 0;
-    for (const r of repos ?? []) {
-      byStatus[r.status] += 1;
-      files += r.files;
-      chunks += r.chunks;
-    }
-    return { total: repos?.length ?? 0, byStatus, files, chunks };
-  }, [repos]);
+  const counts = useRepoCounts(repos);
 
   const rows = useMemo(() => {
     const needle = term.trim().toLowerCase();
@@ -234,6 +158,7 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
       .filter((r) => originFilter === "" || r.owner_origin === originFilter)
       // Confiança só existe em repo com dono: com o filtro ligado, os sem dono saem.
       .filter((r) => confidenceFilter === "" || (r.owners.length > 0 && r.owner_confidence === confidenceFilter))
+      .filter((r) => !outdatedOnly || r.outdated)
       .filter(
         (r) =>
           !needle ||
@@ -243,17 +168,24 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
           r.tags.some((t) => t.toLowerCase().includes(needle)),
       )
       .sort((a, b) => compare(a, b, sort.key) * sort.dir || a.name.localeCompare(b.name));
-  }, [repos, status, term, sort, ownerFilter, originFilter, confidenceFilter]);
+  }, [repos, status, term, sort, ownerFilter, originFilter, confidenceFilter, outdatedOnly]);
 
   // Paginação: filtro, busca, ordenação ou tamanho da página voltam para a primeira página.
-  useEffect(() => setPage(0), [status, term, sort, pageSize, ownerFilter, originFilter, confidenceFilter]);
+  useEffect(() => setPage(0), [status, term, sort, pageSize, ownerFilter, originFilter, confidenceFilter, outdatedOnly]);
   const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
   const current = Math.min(page, pageCount - 1);
   const visible = rows.slice(current * pageSize, (current + 1) * pageSize);
 
   // Filtros na URL (sem entrada nova no histórico).
-  const filters: Filters = { status, domain: ownerFilter, origin: originFilter, confidence: confidenceFilter, search: term };
-  useEffect(() => writeFiltersToHash(filters), [status, ownerFilter, originFilter, confidenceFilter, term]);
+  const filters: Filters = {
+    status,
+    domain: ownerFilter,
+    origin: originFilter,
+    confidence: confidenceFilter,
+    outdated: outdatedOnly,
+    search: term,
+  };
+  useEffect(() => writeFiltersToHash(filters), [status, ownerFilter, originFilter, confidenceFilter, outdatedOnly, term]);
 
   // Domínio vindo da URL que não existe no catálogo (ou catálogo ainda não carregou): mostra a opção, para o select não mentir.
   const knownDomains = useMemo(() => {
@@ -372,24 +304,13 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Repositórios</h1>
           <p className="mt-1 text-sm text-stone-500 dark:text-stone-400">
-            Indexação e domínio (DDD) de cada repositório.
+            Catálogo do índice: o que cada repositório faz, documentação ligada e domínio (DDD).
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="secondary" size="sm" loading={loading} onClick={() => void reload()}>
             Atualizar
           </Button>
-          {canIndex && (
-            <Button
-              size="sm"
-              onClick={() => setSyncOpen({ names: null })}
-              disabled={jobs.running !== null}
-              title={jobs.running ? "Já existe uma indexação em andamento" : undefined}
-            >
-              <Play className="size-3.5" aria-hidden="true" />
-              Indexar lote
-            </Button>
-          )}
           {isAdmin && (
             <Button variant="secondary" size="sm" onClick={() => setAddOpen(true)}>
               <Plus className="size-3.5" aria-hidden="true" />
@@ -399,35 +320,29 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
         </div>
       </div>
 
-      {jobs.running && <RunningJobBanner job={jobs.running} onOpen={setJobDetail} />}
+      {jobs.running && <ActiveJobNotice job={jobs.running} />}
 
-      <Coverage
-        counts={counts}
-        orgs={orgs ?? []}
-        outdated={(repos ?? []).filter((r) => r.outdated).length}
+      {/* Faixa de domínio colada à lista: ela filtra o que está logo abaixo. */}
+      <div ref={listTop} className="scroll-mt-20 space-y-3">
+      <OwnershipStrip
+        coverage={catalog?.coverage ?? null}
         loading={repos === null && loading}
-        onFilter={(value) => {
-          setStatus(value);
-          listTop.current?.scrollIntoView({ block: "start", behavior: "smooth" });
-        }}
-        onRefresh={isAdmin && writable ? (org) => void refreshOrg(org) : undefined}
-        ownership={catalog?.coverage ?? null}
         originFilter={originFilter}
         onOrigin={(o) => {
           setOriginFilter((cur) => (cur === o ? "" : o));
           if (originFilter !== o) listTop.current?.scrollIntoView({ block: "start", behavior: "smooth" });
         }}
         onShowUnowned={() => {
-          // Sem dono: status, origem e confiança antigos não podem esconder a fila inteira.
+          // Sem dono: status, origem, confiança e push antigos não podem esconder a fila inteira.
           setStatus("all");
           setOriginFilter("");
           setConfidenceFilter("");
+          setOutdatedOnly(false);
           setOwnerFilter(NO_OWNER);
           listTop.current?.scrollIntoView({ block: "start", behavior: "smooth" });
         }}
       />
 
-      <div ref={listTop} className="scroll-mt-20" />
       <Panel className="overflow-hidden">
         <div className="flex flex-col gap-3 border-b border-stone-200 p-4 sm:flex-row sm:items-center sm:justify-between dark:border-stone-800">
           <Segmented label="Filtrar por status" value={status} onChange={setStatus} options={statusOptions} />
@@ -482,6 +397,7 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
               else if (key === "domain") setOwnerFilter(ALL_OWNERS);
               else if (key === "origin") setOriginFilter("");
               else if (key === "confidence") setConfidenceFilter("");
+              else if (key === "outdated") setOutdatedOnly(false);
               else setTerm("");
             }}
             onClearAll={() => {
@@ -489,6 +405,7 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
               setOwnerFilter(ALL_OWNERS);
               setOriginFilter("");
               setConfidenceFilter("");
+              setOutdatedOnly(false);
               setTerm("");
             }}
           />
@@ -585,10 +502,8 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
           />
         )}
       </Panel>
+      </div>
 
-      {canSeeJobs && <JobsPanel state={jobs} onOpen={setJobDetail} />}
-
-      <JobDialog job={jobDetail} onClose={() => setJobDetail(null)} />
       {barVisible && (
         <div className="pointer-events-none fixed inset-x-0 bottom-4 z-30 flex justify-center px-4 lg:left-(--sidebar-w)">
           <div
@@ -629,7 +544,7 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
                 className="shrink-0 px-2.5 sm:px-3"
                 onClick={() => setSyncOpen({ names: [...selected].sort() })}
                 disabled={jobs.running !== null}
-                title={jobs.running ? "Já existe uma indexação em andamento" : undefined}
+                title={jobs.running ? "Já existe uma indexação na fila ou em andamento (acompanhe em Indexação)" : undefined}
               >
                 <Play className="size-3.5" aria-hidden="true" />
                 <span className="sm:hidden">Indexar</span>
@@ -777,7 +692,7 @@ function AddRepoDialog({ open, onClose, onDone }: { open: boolean; onClose: () =
   );
 }
 
-type FilterKey = "status" | "domain" | "origin" | "confidence" | "search";
+type FilterKey = "status" | "domain" | "origin" | "confidence" | "outdated" | "search";
 
 /** Linha "Filtros ativos": um chip por filtro (com × para tirar só ele) e um botão para limpar tudo. */
 function ActiveFilters({
@@ -796,6 +711,7 @@ function ActiveFilters({
   }
   if (filters.origin) chips.push({ key: "origin", label: `Origem: ${ORIGIN_LABEL[filters.origin]}` });
   if (filters.confidence) chips.push({ key: "confidence", label: `Confiança: ${CONFIDENCE_LABEL[filters.confidence]}` });
+  if (filters.outdated) chips.push({ key: "outdated", label: "Com push novo" });
   if (filters.search.trim()) chips.push({ key: "search", label: `Busca: "${filters.search.trim()}"` });
 
   return (
@@ -927,192 +843,6 @@ function Pagination({
   );
 }
 
-/** Ordem e cor de cada status na barra de cobertura. */
-const COVERAGE: { status: RepoStatusValue; label: string; bar: string; key: string }[] = [
-  { status: "indexed", label: "Indexados", bar: "bg-emerald-500", key: "bg-emerald-500" },
-  { status: "error", label: "Com erro", bar: "bg-rose-500", key: "bg-rose-500" },
-  { status: "pending", label: "Pendentes", bar: "bg-stone-300 dark:bg-stone-600", key: "border-[1.5px] border-stone-500 dark:border-stone-500" },
-  { status: "ignored", label: "Ignorados", bar: "bg-stone-200 dark:bg-stone-800", key: "bg-stone-300 dark:bg-stone-600" },
-];
-
-interface Counts {
-  total: number;
-  byStatus: Record<RepoStatusValue, number>;
-  files: number;
-  chunks: number;
-}
-
-function percentOf(part: number, total: number): number {
-  return total > 0 ? Math.round((part / total) * 100) : 0;
-}
-
-/** Barra empilhada por status. A cor nunca é o único código: a legenda traz rótulo e número. */
-function CoverageBar({ byStatus, total, className }: { byStatus: Record<RepoStatusValue, number>; total: number; className?: string }) {
-  return (
-    <div className={cx("flex h-2.5 gap-px overflow-hidden rounded-full bg-stone-100 dark:bg-stone-800", className)} aria-hidden="true">
-      {COVERAGE.map(({ status, bar }) =>
-        byStatus[status] > 0 && total > 0 ? (
-          <span key={status} className={cx("h-full transition-[width] duration-500", bar)} style={{ width: `${(byStatus[status] / total) * 100}%` }} />
-        ) : null,
-      )}
-    </div>
-  );
-}
-
-/** Resumo do índice: quanto já foi indexado, por status e por org. Substitui cards soltos. */
-function Coverage({
-  counts,
-  orgs,
-  outdated,
-  loading,
-  onFilter,
-  onRefresh,
-  ownership,
-  originFilter,
-  onOrigin,
-  onShowUnowned,
-}: {
-  counts: Counts;
-  orgs: OrgSummary[];
-  outdated: number;
-  loading: boolean;
-  onFilter: (status: StatusFilter) => void;
-  onRefresh?: (org: OrgSummary) => void;
-  ownership: OwnershipCatalog["coverage"] | null;
-  originFilter: OwnerOrigin | "";
-  onOrigin: (origin: OwnerOrigin) => void;
-  onShowUnowned: () => void;
-}) {
-  if (loading) return <Skeleton className="h-40 w-full rounded-xl" />;
-  const single = orgs.length === 1 && orgs[0].total === counts.total ? orgs[0] : null;
-  const languages = single ? Object.entries(single.languages).slice(0, 3) : [];
-  const percent = percentOf(counts.byStatus.indexed, counts.total);
-
-  return (
-    <Panel className="p-5 sm:p-6">
-      <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
-        <div className="min-w-0">
-          <h2 className="truncate font-semibold">{single ? single.name : "Cobertura do índice"}</h2>
-          <p className="mt-0.5 text-sm text-stone-500 dark:text-stone-400">
-            {numberFormat.format(counts.total)} {plural(counts.total, "repositório", "repositórios")}
-            {languages.length > 0 && <> · {languages.map(([language, n]) => `${language} ${n}`).join(" · ")}</>}
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          {single && onRefresh && (
-            <Button variant="ghost" size="sm" onClick={() => onRefresh(single)}>
-              <RefreshCw className="size-3.5" aria-hidden="true" />
-              Atualizar descoberta
-            </Button>
-          )}
-        </div>
-      </div>
-
-      <div className="mt-6 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
-        <p className="text-sm text-stone-600 dark:text-stone-300">
-          <span className="text-2xl font-semibold tracking-tight text-stone-900 tabular-nums dark:text-white">{percent}%</span>
-          <span className="ml-2">indexado</span>
-          <span className="text-stone-500 dark:text-stone-400">
-            {" "}· {numberFormat.format(counts.byStatus.indexed)} de {numberFormat.format(counts.total)}
-          </span>
-        </p>
-        <p className="text-sm text-stone-500 tabular-nums dark:text-stone-400">
-          {numberFormat.format(counts.chunks)} {plural(counts.chunks, "trecho", "trechos")} em {numberFormat.format(counts.files)} {plural(counts.files, "arquivo", "arquivos")}
-        </p>
-      </div>
-
-      <CoverageBar byStatus={counts.byStatus} total={counts.total} className="mt-3" />
-
-      <ul className="mt-3 flex flex-wrap gap-x-1 gap-y-1 text-sm" aria-label="Repositórios por status">
-        {COVERAGE.map(({ status, label, key }) => (
-          <li key={status}>
-            <button
-              type="button"
-              onClick={() => onFilter(status)}
-              title={`Mostrar só ${label.toLowerCase()}`}
-              className="inline-flex items-center gap-2 rounded-md px-2 py-1 text-stone-600 outline-none transition hover:bg-stone-900/5 hover:text-stone-900 focus-visible:ring-2 focus-visible:ring-accent-500 dark:text-stone-300 dark:hover:bg-white/5 dark:hover:text-white"
-            >
-              <span className={cx("size-2 rounded-full", key)} aria-hidden="true" />
-              {label}
-              <span className="font-medium text-stone-900 tabular-nums dark:text-white">{numberFormat.format(counts.byStatus[status])}</span>
-            </button>
-          </li>
-        ))}
-        {outdated > 0 && (
-          <li className="inline-flex items-center gap-2 px-2 py-1 text-amber-700 dark:text-amber-300">
-            <span className="size-2 rounded-full bg-amber-500" aria-hidden="true" />
-            {numberFormat.format(outdated)} com push novo
-          </li>
-        )}
-      </ul>
-
-      {ownership && ownership.repos > 0 && (
-        <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-stone-100 pt-4 text-sm dark:border-stone-800">
-          <span className="text-stone-600 dark:text-stone-300">
-            <span className="font-medium text-stone-900 tabular-nums dark:text-white">{ownership.percent}%</span> com
-            domínio/serviço
-            <span className="text-stone-500 dark:text-stone-400">
-              {" "}· {numberFormat.format(ownership.owned)} de {numberFormat.format(ownership.repos)}
-            </span>
-          </span>
-          <ul className="flex flex-wrap items-center gap-x-0.5 gap-y-1 text-xs" aria-label="Repositórios por origem do domínio">
-            {ORIGIN_VALUES.filter((o) => (ownership.by_origin[o] ?? 0) > 0).map((o) => {
-              const pressed = originFilter === o;
-              return (
-                <li key={o}>
-                  <button
-                    type="button"
-                    aria-pressed={pressed}
-                    onClick={() => onOrigin(o)}
-                    title={`${ORIGIN_HINT[o]}. ${pressed ? "Clique para tirar o filtro." : "Clique para ver só estes."}`}
-                    className={cx(
-                      "inline-flex items-center gap-1.5 rounded-md px-2 py-1 outline-none transition focus-visible:ring-2 focus-visible:ring-accent-500",
-                      pressed
-                        ? "bg-accent-50 font-medium text-accent-700 dark:bg-accent-500/10 dark:text-accent-300"
-                        : "text-stone-600 hover:bg-stone-900/5 hover:text-stone-900 dark:text-stone-300 dark:hover:bg-white/5 dark:hover:text-white",
-                    )}
-                  >
-                    {ORIGIN_LABEL[o]}
-                    <span className="font-medium text-stone-900 tabular-nums dark:text-white">{numberFormat.format(ownership.by_origin[o] ?? 0)}</span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-          {ownership.repos > ownership.owned && (
-            <button
-              type="button"
-              onClick={onShowUnowned}
-              className="ml-auto rounded-md px-2 py-1 text-sm font-medium text-accent-700 outline-none transition hover:bg-accent-50 focus-visible:ring-2 focus-visible:ring-accent-500 dark:text-accent-300 dark:hover:bg-accent-500/10"
-            >
-              Ver {numberFormat.format(ownership.repos - ownership.owned)} sem domínio
-            </button>
-          )}
-        </div>
-      )}
-
-      {!single && orgs.length > 0 && (
-        <ul className="mt-5 divide-y divide-stone-100 border-t border-stone-100 dark:divide-stone-800 dark:border-stone-800">
-          {orgs.map((org) => (
-            <li key={org.name} className="grid grid-cols-[minmax(0,10rem)_1fr_auto] items-center gap-4 py-3 sm:grid-cols-[minmax(0,14rem)_1fr_auto_auto]">
-              <p className="truncate text-sm font-medium" title={org.name}>{org.name}</p>
-              <CoverageBar byStatus={org.status} total={org.total} className="h-1.5" />
-              <p className="text-sm text-stone-500 tabular-nums dark:text-stone-400">
-                {percentOf(org.status.indexed, org.total)}% de {org.total}
-              </p>
-              {onRefresh && (
-                <IconButton label={`Atualizar descoberta de ${org.name}`} onClick={() => onRefresh(org)} className="hidden sm:inline-flex">
-                  <RefreshCw className="size-4" />
-                </IconButton>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-    </Panel>
-  );
-}
-
 function SortHeader({
   label,
   sortKey,
@@ -1199,7 +929,7 @@ function Checkbox({
   );
 }
 
-function RepoRow({ repo: r, live, actions, selection, onXray }: { repo: Repo; live?: RepoProgress; actions: RowActions | null; selection: Selection | null; onXray: (target: XrayTarget) => void }) {
+function RepoRow({ repo: r, live, actions, selection, onXray }: { repo: Repo; live?: RepoProgress["status"]; actions: RowActions | null; selection: Selection | null; onXray: (target: XrayTarget) => void }) {
   const checked = selection?.isSelected(r) ?? false;
   return (
     <tr
@@ -1350,39 +1080,23 @@ const LIVE_LABEL: Partial<Record<RepoProgress["status"], { label: string; tone: 
   queued: { label: "Na fila", tone: "accent" },
   fetching: { label: "Baixando", tone: "accent" },
   indexing: { label: "Indexando", tone: "accent" },
-  done: { label: "Pronto", tone: "indexed" },
-  error: { label: "Erro", tone: "error" },
 };
 
-/** Status do repo: o gravado, ou o andamento do job em curso (com barra de arquivos) enquanto ele roda. */
-function RepoStatus({ repo: r, live }: { repo: Repo; live?: RepoProgress }) {
-  const shown = live ? LIVE_LABEL[live.status] : undefined;
-  if (!live || !shown) {
-    return (
-      <Badge tone={r.status} dot>
-        {STATUS_LABEL[r.status]}
-      </Badge>
-    );
-  }
+/**
+ * Status do repo: o gravado, ou um selo do job ativo ("na fila", "indexando") enquanto ele roda. O andamento
+ * (arquivos, etapa) fica na página Indexação.
+ */
+function RepoStatus({ repo: r, live }: { repo: Repo; live?: RepoProgress["status"] }) {
+  const shown = live ? LIVE_LABEL[live] : undefined;
   return (
-    <div className="w-32 space-y-1.5">
-      <Badge tone={shown.tone} dot>
-        {shown.label}
-      </Badge>
-      {live.status === "indexing" && live.files_total !== null && live.files_total > 0 && (
-        <>
-          <ProgressBar value={live.files_done} max={live.files_total} label={`Arquivos de ${repoShortName(r.name, r.org)}`} />
-          <p className="text-xs text-stone-500 tabular-nums dark:text-stone-400">
-            {numberFormat.format(live.files_done)}/{numberFormat.format(live.files_total)} arquivos
-          </p>
-        </>
-      )}
-    </div>
+    <Badge tone={shown ? shown.tone : r.status} dot>
+      {shown ? shown.label : STATUS_LABEL[r.status]}
+    </Badge>
   );
 }
 
 /** Cartão para telas pequenas: mostra o essencial e as ações com texto. */
-function RepoCard({ repo: r, live, actions, selection, onXray }: { repo: Repo; live?: RepoProgress; actions: RowActions | null; selection: Selection | null; onXray: (target: XrayTarget) => void }) {
+function RepoCard({ repo: r, live, actions, selection, onXray }: { repo: Repo; live?: RepoProgress["status"]; actions: RowActions | null; selection: Selection | null; onXray: (target: XrayTarget) => void }) {
   const checked = selection?.isSelected(r) ?? false;
   return (
     <li className={cx("space-y-3 p-4", checked && "bg-accent-50/60 dark:bg-accent-500/10")}>

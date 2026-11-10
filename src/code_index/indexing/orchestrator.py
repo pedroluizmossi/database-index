@@ -50,6 +50,10 @@ ProgressSink = Callable[[dict[str, Any]], Awaitable[None]]
 PROGRESS_INTERVAL_S = 2.0
 
 
+class SyncBusy(RuntimeError):
+    """Outro sync (CLI, watch ou worker) detém a trava neste computador."""
+
+
 class Indexer:
     def __init__(
         self,
@@ -160,10 +164,18 @@ class Indexer:
             try:
                 fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
-                raise RuntimeError(
-                    "já existe um sync em andamento (watch, MCP ou outro terminal)"
+                raise SyncBusy(
+                    "já existe um sync em andamento (watch, worker ou outro terminal)"
                 ) from None
             yield
+
+    def busy(self) -> bool:
+        """True se outro sync detém a trava agora (sonda sem esperar; o worker a usa antes de reservar um job)."""
+        try:
+            with self.exclusive():
+                return False
+        except SyncBusy:
+            return True
 
     async def _discover_all(self, orgs: list[Org], res: SyncResult) -> None:
         for org in orgs:

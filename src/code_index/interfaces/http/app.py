@@ -333,14 +333,16 @@ def create_app(settings: Settings) -> FastAPI:
         async with AsyncExitStack() as stack:
             svc = await stack.enter_async_context(open_service(settings))
             holder["svc"] = app.state.service = svc
-            await svc.recover_interrupted_jobs()  # jobs órfãos de uma execução anterior do servidor
+            await svc.recover_interrupted_jobs()  # lease vencido (servidor/worker caiu): volta à fila
+            if settings.sync_worker_embedded:
+                svc.start_background_worker()  # desligado: só o `code-index worker` executa os jobs
             housekeeping = asyncio.create_task(_housekeeping_loop(svc))
             stack.callback(housekeeping.cancel)
             await stack.enter_async_context(mcp.session_manager.run())
             try:
                 yield
             finally:
-                holder.pop("svc", None)  # open_service encerra os jobs em andamento
+                holder.pop("svc", None)  # open_service encerra o worker embutido (o job volta à fila)
 
     app = FastAPI(
         title="code-index",
@@ -924,7 +926,7 @@ def create_app(settings: Settings) -> FastAPI:
     # ---------------------------------------------------------- sync
 
     @app.post("/api/v1/sync", tags=["sync"], status_code=202,
-              summary="Indexa repos (job em background; dry_run responde na hora)")
+              summary="Enfileira uma indexação (job executado pelo worker; dry_run responde na hora)")
     async def sync(body: SyncIn, request: Request,
                    principal: Principal = Depends(require(INDEX_WRITE))) -> dict[str, Any]:
         svc = get_service(request)

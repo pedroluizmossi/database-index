@@ -67,3 +67,8 @@ export function formatDuration(ms: number): string {
   if (m > 0) return `${m} min${s ? ` ${s} s` : ""}`;
   return `${s} s`;
 }
+
+/** Job de sync ainda ativo: na fila (esperando o worker) ou rodando. */
+export function jobActive(job: { status: string }): boolean {
+  return job.status === "queued" || job.status === "running";
+}

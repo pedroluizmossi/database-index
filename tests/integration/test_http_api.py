@@ -465,7 +465,7 @@ def test_servidor_desliga_com_cliente_mcp_conectado(server: Server) -> None:
 
 
 def test_job_roda_ate_o_fim_e_fica_no_historico(server: Server, tmp_path: Any) -> None:
-    """Sync real (com LLM falso) em background: o job vai de running a done e fica consultável."""
+    """API enfileira, o worker embutido do `serve` executa (LLM falso): queued → running → done, no histórico."""
     repo_dir = tmp_path / "job-repo"
     repo_dir.mkdir()
     (repo_dir / "servico.py").write_text("def processa_pedido(pedido):\n    return pedido.total\n")
@@ -474,23 +474,80 @@ def test_job_roda_ate_o_fim_e_fica_no_historico(server: Server, tmp_path: Any) -
 
     r = admin.post("/api/v1/sync", json={"repos": ["job-repo"], "discover": False})
     assert r.status_code == 202, r.text
+    assert r.json()["status"] == "queued"
     job_id = r.json()["job_id"]
 
     deadline = time.monotonic() + 60
     job = admin.get(f"/api/v1/sync/jobs/{job_id}").json()
-    while job["status"] == "running" and time.monotonic() < deadline:
+    while job["status"] in ("queued", "running") and time.monotonic() < deadline:
         time.sleep(0.3)
         job = admin.get(f"/api/v1/sync/jobs/{job_id}").json()
     assert job["status"] == "done", job
     assert list(job["result"]["indexed"]) == ["job-repo"]
     assert job["requested_by"] == f"{ADMIN_EMAIL} [admin-bot]"
+    assert job["attempts"] == 1 and job["lease_until"] is None
 
     historico = [j["id"] for j in admin.get("/api/v1/sync/jobs").json()]
     assert job_id in historico
     assert client(server, "leitor").get("/api/v1/sync/jobs").status_code == 403  # só quem indexa vê os jobs
 
 
-async def _insert_running_job(settings: Settings) -> str:
+def test_sync_sem_worker_embutido_fica_na_fila_ate_o_worker(int_settings: Settings, fake_llm: Any,
+                                                             tmp_path: Any) -> None:
+    """`sync_worker_embedded=False`: a API só enfileira (e recusa um segundo pedido com 409); o worker separado
+    (o mesmo laço do `code-index worker`) executa o job, aplica a regra de admin guardada e audita."""
+    from starlette.testclient import TestClient
+
+    settings = int_settings.model_copy(update={"auth_secret": SecretStr("s" * 48), "admin_emails": [ADMIN_EMAIL],
+                                               "sync_worker_embedded": False})
+    use_settings(settings)
+    tokens, ids = asyncio.run(_setup_tokens(settings))
+    repo_dir = tmp_path / "fila-repo"
+    repo_dir.mkdir()
+    (repo_dir / "a.py").write_text("def soma(a, b):\n    return a + b\n")
+    with TestClient(create_app(settings), base_url="http://127.0.0.1:8765") as http:
+        auth = {"Authorization": f"Bearer {tokens['admin-bot']}"}
+        assert http.post("/api/v1/repos", json={"source": str(repo_dir), "name": "fila-repo"},
+                         headers=auth).status_code == 201
+        r = http.post("/api/v1/sync", json={"repos": ["fila-repo"], "discover": False}, headers=auth)
+        assert r.status_code == 202, r.text
+        job_id = r.json()["job_id"]
+        dup = http.post("/api/v1/sync", json={"repos": ["fila-repo"], "discover": False}, headers=auth)
+        assert dup.status_code == 409 and job_id in dup.json()["detail"] and "na fila" in dup.json()["detail"]
+        time.sleep(0.3)
+        assert http.get(f"/api/v1/sync/jobs/{job_id}", headers=auth).json()["status"] == "queued"
+
+    async def worker() -> None:
+        async with open_service(settings) as svc:
+            job = await svc.get_job(job_id)
+            assert job is not None and job.allow_register and job.token_id == ids["admin-bot"]
+            assert "token" not in json.dumps(job.params)  # nada de credencial nos parâmetros
+            assert await svc.run_sync_worker(once=True) == 1
+            job = await svc.get_job(job_id)
+            assert job is not None and job.status == "done", job
+            assert list((job.result or {})["indexed"]) == ["fila-repo"]
+
+    asyncio.run(worker())
+
+    async def audited() -> list[Any]:
+        import asyncpg
+
+        conn = await asyncpg.connect(settings.database_url)
+        try:
+            return list(await conn.fetch(
+                f"SELECT actor, token_id::text AS token_id, params FROM \"{settings.pg_schema}\".audit_log "
+                "WHERE action = 'sync:job'"))
+        finally:
+            await conn.close()
+
+    rows = asyncio.run(audited())
+    assert len(rows) == 1
+    assert rows[0]["actor"] == f"{ADMIN_EMAIL} [admin-bot]" and rows[0]["token_id"] == ids["admin-bot"]
+    assert json.loads(rows[0]["params"]) == {"job": job_id, "status": "done"}
+
+
+async def _insert_running_job(settings: Settings, *, attempts: int = 0, lease: str | None = None) -> str:
+    """Job `running` como o deixaria um servidor que caiu (lease nulo = de antes da fila, ou vencido)."""
     import asyncpg
 
     async with open_service(settings):  # garante schema/migrações
@@ -498,53 +555,69 @@ async def _insert_running_job(settings: Settings) -> str:
     conn = await asyncpg.connect(settings.database_url)
     try:
         return str(await conn.fetchval(
-            f'INSERT INTO "{settings.pg_schema}".sync_jobs (requested_by, status) '
-            "VALUES ('teste', 'running') RETURNING id::text"
+            f'INSERT INTO "{settings.pg_schema}".sync_jobs (requested_by, status, attempts, worker, lease_until) '
+            f"VALUES ('teste', 'running', $1, 'caiu', {lease or 'NULL'}) RETURNING id::text", attempts,
         ))
     finally:
         await conn.close()
 
 
-def test_job_interrompido_por_reinicio_vira_failed(int_settings: Settings, fake_llm: Any) -> None:
-    """Na inicialização do servidor, um job que ficou 'running' (servidor caiu) vira failed."""
+def test_job_interrompido_por_reinicio_volta_para_a_fila(int_settings: Settings, fake_llm: Any) -> None:
+    """Lease vencido (servidor caiu): o job volta à fila para ser retomado, em vez de falhar."""
 
     async def scenario() -> None:
-        job_id = await _insert_running_job(int_settings)
+        job_id = await _insert_running_job(int_settings, attempts=1, lease="now() - interval '1 minute'")
         async with open_service(int_settings) as svc:
             assert await svc.recover_interrupted_jobs() == 1
             job = await svc.get_job(job_id)
         assert job is not None
-        assert job.status == "failed" and "reiniciou" in (job.error or "")
+        assert job.status == "queued" and job.worker is None and "retomado" in (job.error or "")
+
+    asyncio.run(scenario())
+
+
+def test_job_interrompido_sem_tentativas_restantes_vira_failed(int_settings: Settings, fake_llm: Any) -> None:
+    settings = int_settings.model_copy(update={"sync_job_max_attempts": 2})
+
+    async def scenario() -> None:
+        job_id = await _insert_running_job(settings, attempts=2)
+        async with open_service(settings) as svc:
+            assert await svc.recover_interrupted_jobs() == 1
+            job = await svc.get_job(job_id)
+        assert job is not None
+        assert job.status == "failed" and job.finished_at is not None and "2 tentativa" in (job.error or "")
 
     asyncio.run(scenario())
 
 
 def test_comando_da_cli_nao_derruba_job_do_servidor(int_settings: Settings, fake_llm: Any) -> None:
-    """Regressão: abrir o serviço (como faz todo comando da CLI) não pode mexer no job de outro processo."""
+    """Regressão: abrir o serviço (como faz todo comando da CLI) não pode mexer no job de outro processo,
+    e a recuperação não toca em job com lease válido."""
 
     async def scenario() -> None:
-        job_id = await _insert_running_job(int_settings)
+        job_id = await _insert_running_job(int_settings, attempts=1, lease="now() + interval '1 hour'")
         async with open_service(int_settings) as svc:  # ex.: `code-index repo list`
             await svc.list_repos()
+            assert await svc.recover_interrupted_jobs() == 0
             job = await svc.get_job(job_id)
-        assert job is not None and job.status == "running"
+        assert job is not None and job.status == "running" and job.worker == "caiu"
 
     asyncio.run(scenario())
 
 
 def test_servidor_recupera_jobs_ao_subir(int_settings: Settings, fake_llm: Any) -> None:
-    """O caminho real: o lifespan do app HTTP marca os jobs órfãos ao iniciar."""
+    """O caminho real: o lifespan do app HTTP devolve à fila os jobs de lease vencido ao iniciar."""
     from starlette.testclient import TestClient
 
     job_id = asyncio.run(_insert_running_job(int_settings))
-    settings = int_settings.model_copy(update={"auth_secret": SecretStr("s" * 48)})
+    settings = int_settings.model_copy(update={"auth_secret": SecretStr("s" * 48), "sync_worker_embedded": False})
     with TestClient(create_app(settings), base_url="http://127.0.0.1:8765"):
         pass  # sobe e desce o lifespan
 
     async def check() -> None:
         async with open_service(int_settings) as svc:
             job = await svc.get_job(job_id)
-        assert job is not None and job.status == "failed"
+        assert job is not None and job.status == "queued"
 
     asyncio.run(check())
 

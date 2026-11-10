@@ -6,12 +6,14 @@ import { Spinner } from "./components/ui";
 import { IndexProvider } from "./data/IndexProvider";
 import { PrefsProvider } from "./data/PrefsProvider";
 import { canWrite } from "./lib/capabilities";
+import { NavigationContext, type Navigation } from "./lib/navigation";
 import { SettingsPage } from "./pages/SettingsPage";
 import { LoginPage } from "./pages/LoginPage";
 import { AuditPage } from "./pages/AuditPage";
 import { DocsPage } from "./pages/DocsPage";
 import { ApisPage } from "./pages/ApisPage";
 import { ReposPage } from "./pages/ReposPage";
+import { IndexingPage } from "./pages/IndexingPage";
 import { SearchPage } from "./pages/SearchPage";
 import { TokensPage } from "./pages/TokensPage";
 import { UsersPage } from "./pages/UsersPage";
@@ -39,7 +41,7 @@ export default function App() {
   );
 }
 
-const TAB_IDS: Tab[] = ["search", "repos", "docs", "apis", "xray", "tokens", "usage", "users", "audit", "settings"];
+const TAB_IDS: Tab[] = ["search", "repos", "docs", "apis", "xray", "indexing", "tokens", "usage", "users", "audit", "settings"];
 
 function Workspace() {
   const { session } = useAuth();
@@ -57,11 +59,15 @@ function Workspace() {
   const allowed = tab === "settings" ? canWrite(session) : tabs.some((t) => t.id === tab);
   const current = allowed ? tab : "search";
 
-  function changeTab(next: Tab) {
-    if (next === "usage") return filterUsage(usageEmail);
+  function changeTab(next: Tab, hash?: string) {
+    if (next === "usage" && !hash) return filterUsage(usageEmail);
     setTab(next);
-    window.history.replaceState(null, "", `#${next}`);
+    // O hash vai antes da troca de aba ser renderizada: a página nova lê os filtros dele ao montar.
+    window.history.replaceState(null, "", hash && hash.startsWith(`#${next}`) ? hash : `#${next}`);
   }
+
+  const canOpen = (t: Tab) => (t === "settings" ? canWrite(session) : tabs.some((x) => x.id === t));
+  const navigation: Navigation = { current, can: canOpen, open: changeTab };
 
   function filterUsage(email: string) {
     setUsageEmail(email);
@@ -80,6 +86,7 @@ function Workspace() {
     docs: <DocsPage onXray={openXray} />,
     apis: <ApisPage onXray={openXray} />,
     xray: <XrayPage initial={xrayTarget} />,
+    indexing: <IndexingPage />,
     tokens: <TokensPage />,
     usage: <UsagePage email={usageEmail} onEmail={filterUsage} />,
     users: <UsersPage onOpenUsage={filterUsage} />,
@@ -88,12 +95,14 @@ function Workspace() {
   }[current];
 
   return (
-    <AppShell tab={current} onTab={changeTab} tabs={tabs} wide={current === "repos" || current === "usage" || current === "users"}>
-      {/* A key remonta a página a cada troca de aba: ela entra com `animate-page-in` (só a nova sobe; nada de
-          retrato da página antiga, que distorcia telas longas). */}
-      <div key={current} className="animate-page-in">
-        {page}
-      </div>
-    </AppShell>
+    <NavigationContext.Provider value={navigation}>
+      <AppShell tab={current} onTab={changeTab} tabs={tabs} wide={current === "repos" || current === "usage" || current === "users"}>
+        {/* A key remonta a página a cada troca de aba: ela entra com `animate-page-in` (só a nova sobe; nada de
+            retrato da página antiga, que distorcia telas longas). */}
+        <div key={current} className="animate-page-in">
+          {page}
+        </div>
+      </AppShell>
+    </NavigationContext.Provider>
   );
 }

@@ -4,6 +4,7 @@ import {
   BookOpen,
   Braces,
   Database,
+  DatabaseZap,
   KeyRound,
   LogOut,
   Menu,
@@ -29,9 +30,9 @@ import { usePrefs } from "../data/PrefsProvider";
 import { cx } from "../lib/utils";
 import { IndexingIndicator, useActiveJob } from "./IndexingIndicator";
 
-export type Tab = "search" | "repos" | "docs" | "apis" | "xray" | "tokens" | "usage" | "users" | "audit" | "settings";
+export type Tab = "search" | "repos" | "docs" | "apis" | "xray" | "indexing" | "tokens" | "usage" | "users" | "audit" | "settings";
 
-type Group = "explore" | "account" | "admin";
+type Group = "explore" | "curate" | "account" | "admin";
 
 interface TabDef {
   id: Tab;
@@ -40,10 +41,13 @@ interface TabDef {
   group: Group;
 }
 
-const GROUP_LABELS: Record<Group, string> = { explore: "Explorar", account: "Conta", admin: "Administração" };
-const GROUP_ORDER: Group[] = ["explore", "account", "admin"];
+const GROUP_LABELS: Record<Group, string> = { explore: "Explorar", curate: "Curadoria", account: "Conta", admin: "Administração" };
+const GROUP_ORDER: Group[] = ["explore", "curate", "account", "admin"];
 
-/** Itens do menu visíveis para a sessão: tokens só com login no navegador; uso, usuários e auditoria só para admin. */
+/**
+ * Itens do menu visíveis para a sessão: indexação (cobertura, fila e histórico de jobs) com index:write; tokens só
+ * com login no navegador; uso, usuários e auditoria só para admin.
+ */
 export function tabsFor(session: Session | null): TabDef[] {
   const tabs: TabDef[] = [
     { id: "search", label: "Busca", icon: Search, group: "explore" },
@@ -52,6 +56,9 @@ export function tabsFor(session: Session | null): TabDef[] {
     { id: "apis", label: "APIs", icon: Braces, group: "explore" },
     { id: "xray", label: "Raio X", icon: Network, group: "explore" },
   ];
+  if (session && hasScope(session.me, "index:write")) {
+    tabs.push({ id: "indexing", label: "Indexação", icon: DatabaseZap, group: "curate" });
+  }
   if (session && canWrite(session)) tabs.push({ id: "tokens", label: "Tokens", icon: KeyRound, group: "account" });
   if (session && hasScope(session.me, "admin")) {
     tabs.push(
@@ -266,7 +273,7 @@ function SidebarContent({
           );
         })}
       </nav>
-      {job && <IndexingIndicator job={job} collapsed={collapsed} onOpen={() => onTab("repos")} />}
+      {job && <IndexingIndicator job={job} collapsed={collapsed} onOpen={() => onTab("indexing")} />}
       <SidebarFooter collapsed={collapsed} settingsOpen={tab === "settings"} onSettings={() => onTab("settings")} />
     </>
   );

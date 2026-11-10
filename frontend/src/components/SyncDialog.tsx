@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { CircleCheck, CircleX, Info, LoaderCircle } from "lucide-react";
+import { ArrowRight, CircleCheck, CircleX, Info, LoaderCircle } from "lucide-react";
 import { api } from "../api/endpoints";
 import { describeError } from "../api/client";
 import type { DocsPreview, Repo, SyncJob, SyncResult } from "../api/types";
 import { useIndex } from "../data/IndexProvider";
-import { formatDateTime, plural, repoShortName, timeAgo } from "../lib/utils";
+import { useNavigation } from "../lib/navigation";
+import { formatDateTime, jobActive, plural, repoShortName, timeAgo } from "../lib/utils";
 import { useToast } from "./Toaster";
 import { Dialog } from "./Dialog";
 import { Alert, Badge, Button, Field, Skeleton, inputClass } from "./ui";
@@ -111,6 +112,9 @@ function plan(repo: Repo | undefined): { label: string; tone: "accent" | "neutra
 export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished, onStarted }: SyncDialogProps) {
   const { push } = useToast();
   const { repos } = useIndex();
+  const nav = useNavigation();
+  // Fora da página Indexação, o sync disparado aponta para lá (fila, andamento por repo e histórico).
+  const followable = nav !== null && nav.current !== "indexing" && nav.can("indexing");
   const [batch, setBatch] = useState(defaultBatch);
   const [preview, setPreview] = useState<SyncResult | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
@@ -143,13 +147,13 @@ export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished,
 
   // Acompanha o job até terminar.
   useEffect(() => {
-    if (!job || job.status !== "running") return;
+    if (!job || !jobActive(job)) return;
     const timer = window.setTimeout(() => {
       api
         .syncJob(job.id)
         .then((next) => {
           setJob(next);
-          if (next.status !== "running") {
+          if (!jobActive(next)) {
             onFinished();
             const failedRepos = next.result ? Object.keys(next.result.errors).length : 0;
             push({
@@ -174,16 +178,25 @@ export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished,
     setStartError(null);
     try {
       const started = await api.syncStart(names, batch);
+      const status: SyncJob["status"] = started.status === "running" ? "running" : "queued";
       setJob({
         id: started.job_id,
         requested_by: "",
-        status: "running",
+        status,
         started_at: new Date().toISOString(),
         finished_at: null,
         result: null,
         error: null,
       });
       onStarted?.();
+      if (followable) {
+        push({
+          tone: "info",
+          title: status === "queued" ? "Indexação na fila" : "Indexação iniciada",
+          description: "O andamento de cada repositório fica na página Indexação.",
+          action: { label: "Acompanhar em Indexação", onClick: () => nav.open("indexing") },
+        });
+      }
     } catch (err) {
       setStartError(describeError(err));
     } finally {
@@ -199,7 +212,7 @@ export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished,
   const languages = [...new Set(details.map((d) => d.repo?.language).filter(Boolean))] as string[];
   const onlyDocs = details.length > 0 && details.every((d) => d.repo?.kind === "docs");
 
-  const finished = job !== null && job.status !== "running";
+  const finished = job !== null && !jobActive(job);
   const title = names
     ? names.length === 1
       ? `Indexar ${names[0]}`
@@ -216,14 +229,32 @@ export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished,
       footer={
         finished ? (
           <Button onClick={onClose}>Fechar</Button>
+        ) : job !== null ? (
+          // Job criado: o diálogo só acompanha. Fechar não cancela nada; o job segue no servidor.
+          <>
+            <Button variant={followable ? "ghost" : "primary"} onClick={onClose}>
+              Fechar
+            </Button>
+            {followable && (
+              <Button
+                onClick={() => {
+                  onClose();
+                  nav.open("indexing");
+                }}
+              >
+                Acompanhar em Indexação
+                <ArrowRight className="size-3.5" aria-hidden="true" />
+              </Button>
+            )}
+          </>
         ) : (
           <>
-            <Button variant="ghost" onClick={onClose} disabled={job?.status === "running"}>
+            <Button variant="ghost" onClick={onClose} disabled={job !== null && jobActive(job)}>
               Cancelar
             </Button>
             <Button
               onClick={() => void start()}
-              loading={starting || job?.status === "running"}
+              loading={starting || (job !== null && jobActive(job))}
               disabled={loadingPreview || !preview || selected.length === 0 || previewError !== null}
             >
               {selected.length > 0 ? `Indexar ${selected.length} ${plural(selected.length, "repositório", "repositórios")}` : "Nada a indexar"}
@@ -334,10 +365,16 @@ export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished,
       {job && (
         <div className="space-y-3">
           <p className="flex items-center gap-2 text-sm font-medium">
+            {job.status === "queued" && (
+              <>
+                <LoaderCircle className="size-4 animate-spin text-accent-500" /> Na fila: aguardando o worker de indexação. Você
+                pode fechar: o job segue no servidor e aparece na página Indexação.
+              </>
+            )}
             {job.status === "running" && (
               <>
                 <LoaderCircle className="size-4 animate-spin text-accent-500" /> Indexando… pode levar alguns minutos. Você
-                pode fechar: o andamento fica na seção Jobs.
+                pode fechar: o andamento fica na página Indexação.
               </>
             )}
             {job.status === "done" && (

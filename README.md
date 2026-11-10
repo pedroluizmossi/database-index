@@ -261,7 +261,8 @@ README, `docs/` e outros Markdown/RST/AsciiDoc dos repos contam como `doc`.
 
 ### APIs Swagger no S3
 
-A aba **APIs** permite listar domínios e serviços, ver uma prévia e iniciar a indexação (admin).
+A aba **APIs** permite listar domínios e serviços, ver uma prévia e iniciar a indexação (admin); o andamento e o
+histórico do job ficam na aba **Indexação**.
 A listagem e a prévia não geram embeddings. Pela CLI:
 
 ```bash
@@ -419,9 +420,16 @@ Medido num piloto de 16 repos (961 arquivos), nas 28 perguntas do `eval` com res
 `code-index serve` sobe num único processo:
 - a API REST em `/api/v1` (documentação interativa em `/docs`);
 - o login no navegador (Google e/ou Microsoft) em `/auth`;
-- o MCP (Streamable HTTP) em `/mcp`, com OAuth: o cliente MCP abre o navegador e recebe o token sozinho.
+- o MCP (Streamable HTTP) em `/mcp`, com OAuth: o cliente MCP abre o navegador e recebe o token sozinho;
+- o worker da fila de sync (embutido; `CODE_INDEX_SYNC_WORKER_EMBEDDED=false` desliga).
 
 Não existe mais MCP via stdio.
+
+Um sync pedido pela API ou pela interface entra numa fila durável no Postgres (`sync_jobs`) e é executado por um
+worker: o embutido no `serve` ou um processo separado (`uv run code-index worker`, que encerra limpo com
+SIGINT/SIGTERM devolvendo o job à fila). Com o worker separado, desligue o embutido e reimplante a API à vontade
+durante uma indexação. Só um job fica ativo (na fila ou rodando) por vez: outro pedido recebe 409. O `code-index
+sync` da CLI continua rodando direto, em primeiro plano; enquanto ele segura a trava, o worker deixa o job na fila.
 
 ```bash
 # .env: CODE_INDEX_AUTH_SECRET (obrigatório), GOOGLE_* e/ou AZURE_*, CODE_INDEX_ADMIN_EMAILS, CODE_INDEX_PUBLIC_URL
@@ -444,6 +452,13 @@ pnpm dev       # desenvolvimento em http://localhost:5173/ui/, com /api repassad
 
 Entre com uma API key (`cix_...`). A página só chama `/api/v1` com essa chave. O `pnpm dev` aponta para
 `http://127.0.0.1:8765`; use `CODE_INDEX_API` para outra porta.
+
+Páginas por tipo de trabalho: **Busca**, **Repositórios** (catálogo: resumo, cartão, documentação ligada, domínio
+DDD, e a ação "Indexar" por repo), **Documentação**, **APIs** e **Raio X** para todos; **Indexação** (com
+`index:write`) reúne a operação do índice: job ativo (na fila ou rodando, tentativa, worker e andamento por repo),
+cobertura por status e org, "Indexar lote", "Atualizar descoberta" (admin), atalhos para repos com erro/push novo
+(abrem Repositórios já filtrado, ex.: `#repos?status=error` ou `#repos?push=novo`) e o histórico de jobs de todas
+as fontes. O indicador de indexação no menu lateral abre essa página.
 
 ### Autenticação e permissões
 
@@ -483,7 +498,9 @@ mesma pessoa vê os mesmos tokens entrando por qualquer um dos dois.
 - **Registro de repos:** `sync`/`reindex` só registram repos desconhecidos para admins. Com `index:write`
   dá para indexar apenas repos já cadastrados.
 - **Jobs persistentes:** cada sync vira um registro em `code_index.sync_jobs`, com quem pediu, parâmetros,
-  resultado e erro. Um reinício do servidor no meio de uma indexação marca o job como `failed`.
+  resultado e erro (`queued` → `running` → `done`/`failed`). O worker reserva o job com um lease renovado a cada
+  1/3 de `SYNC_JOB_LEASE_SECONDS` (padrão 120). Se o worker ou o servidor cair, o lease vence e o job volta à fila
+  para ser retomado (o sync é incremental); só falha de vez depois de `SYNC_JOB_MAX_ATTEMPTS` (padrão 3) tentativas.
 - **Rate limit por token:** leitura 120/min, busca 30/min, sync 6/hora (configurável).
 - **Auditoria:** fica em `code_index.audit_log`, com quem, ação, parâmetros, status e IP. Nunca grava
   tokens nem o conteúdo retornado. Admins consultam em `GET /api/v1/audit`.
@@ -520,7 +537,7 @@ uv run code-index user disable usuario@x.com      # e `user enable`
 | `GET /api/v1/me` | search:read |
 | `POST /api/v1/search` · `GET /api/v1/files/{repo}/{path}` | search:read |
 | `GET /api/v1/repos` · `GET /api/v1/orgs` | search:read |
-| `POST /api/v1/sync` (job em background) · `GET /api/v1/sync/jobs` · `GET /api/v1/sync/jobs/{id}` | index:write |
+| `POST /api/v1/sync` (enfileira o job; 409 se já há um ativo) · `GET /api/v1/sync/jobs` · `GET /api/v1/sync/jobs/{id}` | index:write |
 | `POST/DELETE /api/v1/repos…` · `POST/PATCH/DELETE /api/v1/orgs…` · `GET /api/v1/audit` | admin |
 | `GET/POST/DELETE /api/v1/tokens` | sessão do navegador (emitir); dono ou admin (revogar, inclusive clientes OAuth) |
 | `GET /api/v1/me/usage` | search:read (o próprio uso) |

@@ -1,21 +1,30 @@
-"""Sync (indexação), jobs de sync da API e recálculo das relações."""
+"""Sync (indexação), fila durável de jobs de sync (pedido pela API, executado pelo worker) e recálculo
+das relações."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import socket
+import uuid
+from collections.abc import Coroutine
 from typing import Any, Literal
-
 
 from ..domain.auth import ADMIN, Principal
 from ..domain.models import SyncResult
-from ..indexing.orchestrator import ProgressSink
-from ..infra.job_store import JobRecord
+from ..indexing.orchestrator import ProgressSink, SyncBusy
+from ..infra.job_store import ActiveJobExists, JobRecord
 from .enrich import EnrichMixin
 from .apis import ApisMixin
 
 
 log = logging.getLogger(__name__)
+
+
+def worker_id(role: str) -> str:
+    """Identificação do worker no lease: papel, host, pid e um sufixo único (dois workers no mesmo pid)."""
+    return f"{role}@{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
 
 
 class SyncMixin(ApisMixin, EnrichMixin):
@@ -76,43 +85,115 @@ class SyncMixin(ApisMixin, EnrichMixin):
         openapi_domain: str | None = None,
         openapi_services: list[str] | None = None,
     ) -> JobRecord:
-        """Inicia uma indexação em segundo plano e devolve o job (já com id). Um por vez.
+        """Enfileira uma indexação e devolve o job (`queued`, já com id). Quem executa é o worker
+        (`run_sync_worker`: embutido no `serve` ou o `code-index worker`). Um job ativo por vez.
 
-        Levanta RuntimeError se já houver um job rodando.
+        Levanta RuntimeError (ActiveJobExists) se já houver um job na fila ou rodando.
         """
         actor = principal.actor if principal else "operador local"
         params: dict[str, Any] = {"repos": names, "batch": batch, "discover": do_discover, "pull": pull}
-        async with self._job_lock:
-            running = await self._jobs.running()
-            if running is not None:
-                raise RuntimeError(f"já existe um sync em andamento: job {running.id}")
-            if openapi_domain is not None:
-                if principal is not None and not principal.has(ADMIN):
-                    raise PermissionError("só administradores registram fontes")
-                names = [await self.register_openapi(openapi_domain, openapi_services)]
-                params["repos"] = names
-                params["openapi_domain"] = openapi_domain
-                params["openapi_services"] = openapi_services
-            job_id = await self._jobs.create(actor, params)
-            only = frozenset(openapi_services) if openapi_services is not None else None
-            task = asyncio.create_task(self._run_job(job_id, principal, names, batch, do_discover, pull, only))
-            self._job_tasks.add(task)
-            task.add_done_callback(self._job_tasks.discard)
+        active = await self._jobs.active()
+        if active is not None:  # antes de registrar fonte nova (a criação abaixo também recusa, atomicamente)
+            raise ActiveJobExists(active.id, active.status)
+        if openapi_domain is not None:
+            if principal is not None and not principal.has(ADMIN):
+                raise PermissionError("só administradores registram fontes")
+            params["repos"] = [await self.register_openapi(openapi_domain, openapi_services)]
+            params["openapi_domain"] = openapi_domain
+            params["openapi_services"] = openapi_services
+        # O worker não tem o Principal: guarda só a decisão (admin registra repo desconhecido) e o id do token.
+        job_id = await self._jobs.create(
+            actor, params, allow_register=principal is None or principal.has(ADMIN),
+            token_id=principal.token_id if principal else None,
+        )
+        self._job_wakeup.set()  # acorda o worker embutido, se houver
         job = await self._jobs.get(job_id)
         assert job is not None
         return job
 
-    async def _run_job(
-        self,
-        job_id: str,
-        principal: Principal | None,
-        names: list[str] | None,
-        batch: int,
-        do_discover: bool,
-        pull: bool,
-        doc_pages: frozenset[str] | None = None,
-    ) -> None:
-        status, result, error = "failed", None, None
+    # ------------------------------------------------------------ worker da fila
+
+    def start_background_worker(self) -> None:
+        """Worker embutido (o `serve` com `sync_worker_embedded`): o mesmo laço do `code-index worker`.
+        `shutdown()` o cancela e devolve à fila o job em andamento."""
+        task = asyncio.create_task(self.run_sync_worker(name=worker_id("serve")))
+        self._job_tasks.add(task)
+        task.add_done_callback(self._job_tasks.discard)
+
+    async def run_sync_worker(self, stop: asyncio.Event | None = None, *, name: str | None = None,
+                              once: bool = False) -> int:
+        """Laço do worker: devolve à fila jobs de lease vencido, reserva o próximo, executa renovando o lease.
+
+        `stop` encerra limpo: o job em andamento é interrompido e volta à fila (sem gastar tentativa).
+        Cancelar a task tem o mesmo efeito. `once`: tenta um job só e retorna (testes e scripts).
+        Devolve quantos jobs reservou.
+        """
+        stop = stop if stop is not None else asyncio.Event()
+        worker = name or worker_id("worker")
+        ran = 0
+        log.info("worker de sync %s aguardando jobs", worker)
+        while not stop.is_set():
+            job: JobRecord | None = None
+            try:
+                await self.recover_interrupted_jobs()
+                # Trava local ocupada (sync da CLI, watch): não reserva; o job espera na fila.
+                if not self._indexer.busy():
+                    job = await self._jobs.lease_next(worker=worker,
+                                                      lease_seconds=self.settings.sync_job_lease_seconds)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - banco fora do ar etc.: tenta de novo depois
+                log.exception("worker de sync: falha ao consultar a fila")
+            if job is not None:
+                ran += 1
+                await self._run_until_stop(self._execute_job(job, worker), stop)
+            if once:
+                break
+            if job is None:
+                await self._wait_for_work(stop)
+        log.info("worker de sync %s encerrado", worker)
+        return ran
+
+    @staticmethod
+    async def _run_until_stop(coro: Coroutine[Any, Any, None], stop: asyncio.Event) -> None:
+        """Roda `coro` até terminar; se `stop` disparar (ou esta task for cancelada), cancela e espera."""
+        task = asyncio.ensure_future(coro)
+        stopper = asyncio.ensure_future(stop.wait())
+        try:
+            await asyncio.wait({task, stopper}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            stopper.cancel()
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def _wait_for_work(self, stop: asyncio.Event) -> None:
+        waiters = {asyncio.ensure_future(self._job_wakeup.wait()), asyncio.ensure_future(stop.wait())}
+        try:
+            await asyncio.wait(waiters, timeout=self.settings.sync_worker_poll_seconds,
+                               return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for w in waiters:
+                w.cancel()
+            self._job_wakeup.clear()
+
+    async def _heartbeat(self, job_id: str, worker: str) -> None:
+        lease = self.settings.sync_job_lease_seconds
+        while True:
+            await asyncio.sleep(lease / 3)
+            try:
+                if not await self._jobs.renew(job_id, worker=worker, lease_seconds=lease):
+                    log.error("job de sync %s: lease perdido (outro worker pode retomá-lo)", job_id)
+                    return
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - tenta de novo no próximo intervalo (o lease ainda vale)
+                log.warning("job de sync %s: falha ao renovar o lease", job_id, exc_info=True)
+
+    async def _execute_job(self, job: JobRecord, worker: str) -> None:
+        """Executa um job reservado. Retomar = reexecutar com os mesmos parâmetros (o sync é incremental)."""
+        params = job.params
+        services = params.get("openapi_services")
         last: list[dict[str, Any]] = []
 
         async def save_progress(snapshot: dict[str, Any]) -> None:
@@ -122,40 +203,60 @@ class SyncMixin(ApisMixin, EnrichMixin):
             if last and last[0] == key:
                 return
             last[:] = [key]
-            await self._jobs.update_progress(job_id, snapshot)
+            await self._jobs.update_progress(job.id, snapshot, worker=worker)
 
+        status, result, error = "failed", None, None
+        heartbeat = asyncio.create_task(self._heartbeat(job.id, worker))
         try:
+            batch = params.get("batch")
             res = await self.sync(
-                names, batch=batch, do_discover=do_discover, pull=pull, progress=False,
-                allow_register=principal is None or principal.has(ADMIN),
-                doc_pages=doc_pages, on_progress=save_progress,
+                params.get("repos"), batch=self.settings.default_batch if batch is None else int(batch),
+                do_discover=bool(params.get("discover", True)), pull=bool(params.get("pull", True)),
+                progress=False, allow_register=job.allow_register,
+                doc_pages=frozenset(services) if services is not None else None, on_progress=save_progress,
             )
             status, result = "done", res.to_dict()
             if res.all_failed:
                 # Nada foi indexado e todos os selecionados falharam: o job falhou, não "concluiu".
                 status = "failed"
                 error = f"todos os {len(res.selected)} repo(s) falharam; ex.: {res.first_error()[:300]}"
+        except SyncBusy:
+            # Outro sync pegou a trava entre a sonda e a reserva: não conta tentativa, espera na fila.
+            await self._jobs.release(job.id, worker=worker)
+            return
         except asyncio.CancelledError:
-            error = "interrompido: o servidor foi encerrado durante a indexação"
-            await self._jobs.finish(job_id, status=status, result=None, error=error)
+            await self._jobs.release(job.id, worker=worker,
+                                     error="interrompido: o worker foi encerrado; o job voltou à fila")
+            log.warning("job de sync %s interrompido e devolvido à fila", job.id)
             raise
-        except Exception as e:  # noqa: BLE001 - o erro vai para o job, não derruba o servidor
+        except (ValueError, PermissionError) as e:  # pedido inválido: repetir não muda o resultado
             error = str(e)
-            log.exception("job de sync %s falhou", job_id)
-        await self._jobs.finish(job_id, status=status, result=result, error=error)
-        await self.audit(principal, "sync:job", params={"job": job_id, "status": status})
+        except Exception as e:  # noqa: BLE001 - o erro vai para o job, não derruba o worker
+            log.exception("job de sync %s falhou (tentativa %d)", job.id, job.attempts)
+            if job.attempts < self.settings.sync_job_max_attempts:
+                await self._jobs.release(job.id, worker=worker, count_attempt=True,
+                                         error=f"tentativa {job.attempts} falhou: {str(e)[:500]}")
+                return
+            error = f"falhou após {job.attempts} tentativa(s): {e}"
+        finally:
+            heartbeat.cancel()
+        if not await self._jobs.finish(job.id, status=status, result=result, error=error, worker=worker):
+            log.error("job de sync %s terminou, mas o lease já era de outro worker: resultado descartado", job.id)
+            return
+        await self._audit.record(actor=job.requested_by, token_id=job.token_id, action="sync:job",
+                                 params={"job": job.id, "status": status})
 
     async def recover_interrupted_jobs(self) -> int:
-        """Marca como `failed` os jobs que ficaram `running` de um servidor que caiu.
-
-        Chamar SÓ na inicialização do servidor HTTP, o único processo que executa jobs.
-        Não pode rodar em `open_service()`: todo comando da CLI abre o serviço, e marcaria
-        como falho o job que um servidor ainda está executando.
-        """
-        n = await self._jobs.fail_interrupted("o servidor reiniciou durante a indexação")
-        if n:
-            log.warning("%d job(s) de sync interrompido(s) por reinício marcados como falhos", n)
-        return n
+        """Jobs `running` cujo lease venceu (o worker caiu, o servidor reiniciou) voltam à fila; os que já
+        usaram `sync_job_max_attempts` tentativas viram `failed`. Seguro em qualquer processo: só toca em
+        lease vencido. O worker chama a cada volta do laço; o servidor, também ao subir."""
+        changed = await self._jobs.expire_leases(max_attempts=self.settings.sync_job_max_attempts)
+        for job_id, status in changed:
+            if status == "queued":
+                log.warning("job de sync %s: lease vencido, voltou à fila para ser retomado", job_id)
+            else:
+                log.error("job de sync %s: lease vencido e tentativas esgotadas, marcado como falho", job_id)
+        return len(changed)
 
     async def get_job(self, job_id: str) -> JobRecord | None:
         return await self._jobs.get(job_id)

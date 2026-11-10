@@ -344,12 +344,22 @@ export interface SyncJob {
   id: string;
   requested_by: string;
   params?: { repos?: string[] | null; batch?: number | null; discover?: boolean; pull?: boolean; openapi_domain?: string | null };
-  status: "running" | "done" | "failed";
+  status: "queued" | "running" | "done" | "failed";
+  /** Quando foi pedido (entrou na fila). */
   started_at: string;
   finished_at: string | null;
   result: SyncResult | null;
+  /** Erro final; num job de volta à fila, o motivo (tentativa que falhou, worker que parou). */
   error: string | null;
   progress?: SyncProgress | null;
+  /** Reservas feitas por workers (a atual inclusive). 0 = nunca saiu da fila. */
+  attempts?: number;
+  /** Até quando o worker atual detém o job (renovado por heartbeat). */
+  lease_until?: string | null;
+  /** Worker que detém o job (host:pid:id). */
+  worker?: string | null;
+  /** Início da tentativa atual (ou da última). */
+  run_started_at?: string | null;
 }
 
 export interface SyncStart {

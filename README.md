@@ -294,6 +294,13 @@ uv run code-index api impl email.listBlacklistedEmails     # ou só a operação
 
 API: `GET /api/v1/api-impls?operation=...`. MCP: `find_api_impl`.
 
+No **Raio X**, escolher um repositório abre a **ficha do repo**: tudo o que o índice sabe sobre ele numa
+página só. São sete seções: o que é (cartão, capacidades, dono, assuntos), por onde começar (entrypoints do
+cartão), APIs (operações do `.sdl` com o handler localizado), arquivos (a árvore indexada com o resumo de cada
+arquivo de código, filtro por caminho, resumo ou palavra-chave), documentação ligada, repos relacionados e o
+estado do enriquecimento (cartão, cobertura dos resumos, índice), com o comando para completar o que falta.
+A árvore vem de `GET /api/v1/repos/{nome}/files`.
+
 Na interface, **Raio X** permite navegar entre repos, documentos e serviços de API indexados. O vínculo
 de cada item ao repo mostra sua origem. Relações entre documentos e APIs por um repo em comum são
 indicadas como inferidas; não comprovam que o documento descreva aquela API. A consulta usa o índice
@@ -369,6 +376,29 @@ while t=$(uv run code-index enrich next --kind file_summaries) && [ "$t" != "nen
   printf '%s' "$t" | claude -p --model haiku --tools "" | uv run code-index enrich submit "$id" --agent haiku-cli
 done
 ```
+
+**Enriquecer de outra máquina.** A fila também está na API, atrás do scope `enrich:write` (não dá busca nem
+sync; admins o têm e podem emitir um token só com ele na aba Tokens): `POST /api/v1/enrich/next`,
+`POST /api/v1/enrich/tasks/{id}/submit` (o corpo é o JSON que o modelo produziu), `.../release` e
+`GET /api/v1/enrich/status`. O `scripts/enrich_worker.py` faz o laço sozinho: só precisa de Python e de um CLI
+de modelo, sem o projeto instalado e sem acesso ao banco. Vale para cartões, vínculos e resumos.
+
+```bash
+export CODE_INDEX_TOKEN=cix_...        # token com enrich:write
+python enrich_worker.py --server https://indice.exemplo.com --kind file_summaries [--repo <repo>] [--max N]
+python enrich_worker.py --server https://indice.exemplo.com --kind card --cmd 'claude -p --model haiku --tools ""'
+```
+
+O sync continua sendo só do servidor: os clones (`.repos/`) e o estado do CocoIndex (`.cocoindex/`) ficam na
+máquina dele, e uma segunda máquina escrevendo no mesmo banco reprocessaria tudo. De fora, dispare o sync pela
+API (`POST /api/v1/sync`, scope `index:write`).
+
+Onde os resumos aparecem, sempre com a mesma marca (ícone de brilho, violeta): no resultado da busca (faixa
+"Resumo" acima do trecho, com as palavras-chave), no painel do arquivo aberto (resumo, perguntas que o arquivo
+responde e aviso quando o arquivo mudou depois do resumo) e na aba Repositórios (atalho "Resumos N%", que abre a
+lista dos resumos do repo com filtro). Na API: o campo `summary` dos resultados de `/api/v1/search` (e do
+`search_code` no MCP), `GET /api/v1/summaries/file/{repo}/{caminho}`, `/api/v1/summaries/repo/{repo}` e
+`/api/v1/summaries/coverage`.
 
 Medido num piloto de 16 repos (961 arquivos), nas 28 perguntas do `eval` com resposta neles: MRR com rerank de
 0,83 para 0,98 e, só por termos, de 0,42 para 0,71; nas outras perguntas, nada mudou com rerank.

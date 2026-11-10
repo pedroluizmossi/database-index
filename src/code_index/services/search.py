@@ -14,6 +14,7 @@ from ..domain.models import Hit, SymbolHit
 from ..indexing.content import file_language
 from ..indexing.orchestrator import configured_repos, repo_for_row
 from ..infra.grep import GrepResult, GrepTarget
+from ..infra.summary_store import SummaryStore
 from ..retrieval import files as retrieval_files
 from ..retrieval.evaluation import CaseResult, ConfigReport, EvalCase, first_hit, load_cases
 from ..retrieval.redaction import mask_output
@@ -76,7 +77,17 @@ class SearchMixin(OwnershipMixin):
         for h in hits:  # regras de máscara que só valem na saída (ver retrieval/redaction)
             h.code = mask_output(h.code, h.language)
         await self.annotate_owners(hits)
+        await self.annotate_summaries(hits)
         return hits
+
+    async def annotate_summaries(self, hits: Sequence[Hit]) -> None:
+        """Preenche `summary`/`summary_keywords` dos resultados cujo arquivo tem resumo (fila file_summaries)."""
+        found = await SummaryStore(self._chunks.pool, self.settings).get_many(
+            sorted({(h.repo, h.path) for h in hits if h.kind != "doc"}))
+        for h in hits:
+            info = found.get((h.repo, h.path))
+            if info:
+                h.summary, h.summary_keywords = info["summary"], info["keywords"]
 
     async def read_file(
         self,

@@ -14,6 +14,7 @@ import { formatDateTime, timeAgo } from "../lib/utils";
 const SCOPES: { value: Scope; label: string; hint: string }[] = [
   { value: "search:read", label: "search:read", hint: "buscar e ler arquivos (agents)" },
   { value: "index:write", label: "index:write", hint: "indexar: gera custo na Voyage" },
+  { value: "enrich:write", label: "enrich:write", hint: "enriquecer de outra máquina: cartões e resumos (sem custo)" },
   { value: "admin", label: "admin", hint: "gerenciar repos, orgs e auditoria" },
 ];
 

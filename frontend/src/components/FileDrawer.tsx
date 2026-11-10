@@ -5,6 +5,7 @@ import { describeError } from "../api/client";
 import { parseNumberedLines } from "../lib/utils";
 import { CodeLines, type CodeLine } from "./CodeLines";
 import { EmptyState, IconButton, Skeleton } from "./ui";
+import { FileSummaryPanel } from "./summaries";
 
 export interface FileTarget {
   repo: string;
@@ -93,6 +94,8 @@ export function FileDrawer({ target, onClose }: FileDrawerProps) {
               <X className="size-4" />
             </IconButton>
           </header>
+
+          <FileSummaryPanel repo={target.repo} path={target.path} />
 
           <div ref={bodyRef} className="min-h-0 flex-1 overflow-auto bg-zinc-50/60 py-3 dark:bg-zinc-950/60">
             {error && <EmptyState icon={FileWarning} title="Não consegui abrir o arquivo" text={error} />}

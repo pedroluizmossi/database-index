@@ -32,7 +32,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ...domain.relations import origins_payload
-from ...domain.auth import ADMIN, INDEX_WRITE, SEARCH_READ, Principal, session_provider
+from ...domain.auth import ADMIN, ENRICH_WRITE, INDEX_WRITE, SEARCH_READ, Principal, session_provider
 from ...infra.login import configured_providers, open_provider
 from ...infra.oidc import LoginError, OIDCProvider
 from ...services import CodeIndexService, open_service
@@ -190,6 +190,12 @@ class OrgPatch(BaseModel):
     match: list[str] | None = None
     skip: list[str] | None = None
     max_size_mb: int | None = Field(None, description="0 remove o limite")
+
+
+class EnrichNextIn(BaseModel):
+    kind: Literal["card", "doc_links", "file_summaries"] = "card"
+    repo: str | None = Field(None, max_length=300, description="só este repo (doc_links: a fonte de documentação)")
+    scope: Literal["todas", "sem-vinculo", "varios"] = Field("todas", description="doc_links: quais páginas")
 
 
 class SyncIn(BaseModel):
@@ -562,6 +568,28 @@ def create_app(settings: Settings) -> FastAPI:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(e)) from None
         return Response(text, media_type="text/plain; charset=utf-8")
 
+    @app.get("/api/v1/repos/{name}/files", tags=["repos"],
+             summary="Arquivos indexados de um repo, com o resumo de cada um (escrito por agent), se houver")
+    async def repo_files(name: str, request: Request,
+                         _: Principal = Depends(require(SEARCH_READ))) -> list[dict[str, Any]]:
+        return await get_service(request).repo_files(name)
+
+    @app.get("/api/v1/summaries/coverage", tags=["busca"],
+             summary="Cobertura dos resumos de arquivos de código (total e por repo)")
+    async def summary_coverage(request: Request, _: Principal = Depends(require(SEARCH_READ))) -> dict[str, Any]:
+        return await get_service(request).summary_coverage()
+
+    @app.get("/api/v1/summaries/repo/{repo}", tags=["busca"], summary="Resumos dos arquivos de um repo")
+    async def repo_summaries(repo: str, request: Request,
+                             _: Principal = Depends(require(SEARCH_READ))) -> list[dict[str, Any]]:
+        return await get_service(request).repo_summaries(repo)
+
+    @app.get("/api/v1/summaries/file/{repo}/{path:path}", tags=["busca"],
+             summary="Resumo de um arquivo escrito por agent (null se não houver)")
+    async def file_summary(repo: str, path: str, request: Request,
+                           _: Principal = Depends(require(SEARCH_READ))) -> dict[str, Any] | None:
+        return await get_service(request).file_summary(repo, path)
+
     # ---------------------------------------------------------- repos
 
     @app.get("/api/v1/repos", tags=["repos"])
@@ -805,6 +833,44 @@ def create_app(settings: Settings) -> FastAPI:
             raise HTTPException(status_code=409, detail=str(e)) from e
         await svc.audit(principal, "openapi:index", params={"job": job.id, **body.model_dump()})
         return {"job_id": job.id, "status": job.status, "url": f"/api/v1/sync/jobs/{job.id}"}
+
+    # ---------------------------------------------------------- fila de enriquecimento (agents em outra máquina)
+
+    @app.post("/api/v1/enrich/next", tags=["enrich"],
+              summary="Reserva a próxima tarefa de enriquecimento (null = nada pendente)")
+    async def enrich_next(body: EnrichNextIn, request: Request,
+                          principal: Principal = Depends(require(ENRICH_WRITE))) -> dict[str, Any] | None:
+        """Devolve `id`, `text` (instruções + dados para o agent) e metadados. A tarefa fica reservada até o
+        lease expirar; entregue com `POST /api/v1/enrich/tasks/{id}/submit`."""
+        setattr(request.state, STATE_PARAMS, body.model_dump())
+        try:
+            return await get_service(request).enrich_next(agent=principal.actor[:100], repo=body.repo,
+                                                          kind=body.kind, scope=body.scope)
+        except ValueError as e:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from None
+
+    @app.post("/api/v1/enrich/tasks/{task_id}/submit", tags=["enrich"],
+              summary="Entrega uma tarefa: o corpo é o JSON que o agent produziu (texto puro)")
+    async def enrich_submit(task_id: str, request: Request,
+                            principal: Principal = Depends(require(ENRICH_WRITE))) -> dict[str, Any]:
+        """Entrega recusada responde 400 com os erros legíveis; a tarefa continua reservada para nova tentativa."""
+        raw = await request.body()
+        if len(raw) > 512_000:
+            raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "entrega grande demais")
+        payload = raw.decode("utf-8", errors="replace")
+        return await audited(request, principal, "enrich:submit", {"task": task_id},
+                             get_service(request).enrich_submit(task_id, payload, agent=principal.actor[:100]))
+
+    @app.post("/api/v1/enrich/tasks/{task_id}/release", tags=["enrich"], summary="Devolve uma tarefa reservada à fila")
+    async def enrich_release(task_id: str, request: Request,
+                             principal: Principal = Depends(require(ENRICH_WRITE))) -> dict[str, bool]:
+        released = await audited(request, principal, "enrich:release", {"task": task_id},
+                                 get_service(request).enrich_release(task_id))
+        return {"released": bool(released)}
+
+    @app.get("/api/v1/enrich/status", tags=["enrich"], summary="Progresso do enriquecimento: cartões, vínculos e resumos")
+    async def enrich_status(request: Request, _: Principal = Depends(require(ENRICH_WRITE))) -> dict[str, Any]:
+        return await get_service(request).enrich_status()
 
     # ---------------------------------------------------------- sync
 

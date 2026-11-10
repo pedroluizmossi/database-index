@@ -225,6 +225,8 @@ class Hit:
     also_in: list[str] = field(default_factory=list)       # outros repos com este mesmo trecho (boilerplate)
     implemented_in: list[str] = field(default_factory=list)  # página de API: handler da operação (repo/path:linha)
     owners: list[str] = field(default_factory=list)          # domínio/serviço do DDD dono do arquivo
+    summary: str | None = None              # resumo do arquivo escrito por agent (fila file_summaries), se houver
+    summary_keywords: list[str] = field(default_factory=list)  # palavras-chave desse resumo
 
     def to_dict(self) -> dict:
         return asdict(self)

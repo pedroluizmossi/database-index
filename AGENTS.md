@@ -103,7 +103,9 @@ Testes: `tests/unit/` (rápidos) e `tests/integration/` (marcados `integration`)
   devolver o valor, exceto uma vez na criação.
 - Só sessões de pessoas (login no navegador, Google ou Microsoft) emitem tokens, e só com scopes que já possuem. Um token nunca emite outro
   (`domain/auth.check_can_issue`). Vale também para tokens OAuth (kind `oauth`).
-- Scopes: `search:read` (leitura/MCP), `index:write` (sync, que custa dinheiro), `admin` (implica todos).
+- Scopes: `search:read` (leitura/MCP), `index:write` (sync, que custa dinheiro), `enrich:write` (fila de
+  enriquecimento pela API: reserva tarefas, cujo texto traz conteúdo dos repos, e entrega cartões e resumos;
+  não dá busca nem sync), `admin` (implica todos).
   Toda rota nova declara o scope via `require(...)`. Toda tool MCP nova passa por `run_tool`.
 - Sync via API só registra repo desconhecido para admin (`allow_register`). O MCP não indexa.
 - Conteúdo devolvido a clientes (busca, `read_file`, MCP) passa pelo `redact` de `indexing/content.py`.

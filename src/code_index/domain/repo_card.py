@@ -342,7 +342,8 @@ SUMMARY_MIN, SUMMARY_MAX = 40, 1200
 
 
 def parse_payload(text: str) -> Any:
-    """JSON da entrega; tolera cerca ```json ... ``` em volta."""
+    """JSON da entrega; tolera cerca ```json ... ``` em volta e texto antes/depois do objeto
+    (modelos pequenos às vezes comentam a resposta mesmo quando se pede só o JSON)."""
     raw = text.strip()
     fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", raw, re.S)
     if fenced:
@@ -350,6 +351,12 @@ def parse_payload(text: str) -> Any:
     try:
         return json.loads(raw)
     except json.JSONDecodeError as e:
+        start, end = raw.find("{"), raw.rfind("}")
+        if 0 <= start < end and (start > 0 or end < len(raw) - 1):
+            try:
+                return json.loads(raw[start:end + 1])
+            except json.JSONDecodeError:
+                pass
         raise ValueError(f"JSON inválido: {e.msg} (linha {e.lineno}, coluna {e.colno})") from None
 
 

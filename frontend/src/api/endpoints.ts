@@ -30,6 +30,9 @@ import type {
   UsageReport,
   UserStatus,
   UserUsage,
+  FileSummary,
+  RepoFile,
+  SummaryCoverage,
 } from "./types";
 
 /** Caminho de arquivo: `repo/dir/arquivo.ext`, com cada parte codificada. */
@@ -58,6 +61,11 @@ export const api = {
   orgs: () => getJson<OrgSummary[]>("/api/v1/orgs"),
   search: (body: SearchRequest) => postJson<Hit[]>("/api/v1/search", body),
   file: (repo: string, path: string) => getText(`/api/v1/files/${encodeRepoPath(repo, path)}`),
+  // resumos de arquivos escritos por agent (entram na busca por termos)
+  fileSummary: (repo: string, path: string) => getJson<FileSummary | null>(`/api/v1/summaries/file/${encodeRepoPath(repo, path)}`),
+  repoFiles: (repo: string) => getJson<RepoFile[]>(`/api/v1/repos/${seg(repo)}/files`),
+  repoSummaries: (repo: string) => getJson<FileSummary[]>(`/api/v1/summaries/repo/${seg(repo)}`),
+  summaryCoverage: () => getJson<SummaryCoverage>("/api/v1/summaries/coverage"),
   logout: () => postJson<{ status: string }>("/auth/logout", undefined),
 
   // sync (index:write). A prévia (dry_run) não custa nada; a indexação gera custo na Voyage.

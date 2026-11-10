@@ -3,6 +3,9 @@
 Scopes:
   search:read  — buscar, ler arquivos, listar repos/orgs           (agents, por padrão)
   index:write  — sync/reindex (gera custo na Voyage)              (automações específicas)
+  enrich:write — fila de enriquecimento pela API: reservar tarefas (o texto traz conteúdo dos repos) e
+                 entregar cartões, vínculos sugeridos e resumos de arquivos. Sem custo de Voyage.
+                                                                  (agents que enriquecem de outra máquina)
   admin        — gerenciar orgs/repos/tokens; implica os demais   (pessoas listadas como admin)
 
 Tipos de token:
@@ -24,8 +27,9 @@ from typing import Literal
 
 SEARCH_READ = "search:read"
 INDEX_WRITE = "index:write"
+ENRICH_WRITE = "enrich:write"
 ADMIN = "admin"
-ALL_SCOPES = (SEARCH_READ, INDEX_WRITE, ADMIN)
+ALL_SCOPES = (SEARCH_READ, INDEX_WRITE, ENRICH_WRITE, ADMIN)
 
 TokenKind = Literal["agent", "session", "oauth"]
 
@@ -49,7 +53,7 @@ def effective_scopes(scopes: Iterable[str]) -> frozenset[str]:
 def scopes_for_user(email: str, admin_emails: Iterable[str]) -> tuple[str, ...]:
     """Scopes de uma pessoa logada no navegador: admins listados têm tudo; demais, só leitura."""
     admins = {e.lower() for e in admin_emails}
-    return (ADMIN, INDEX_WRITE, SEARCH_READ) if email.lower() in admins else (SEARCH_READ,)
+    return (ADMIN, INDEX_WRITE, ENRICH_WRITE, SEARCH_READ) if email.lower() in admins else (SEARCH_READ,)
 
 
 @dataclass(frozen=True)

@@ -4,6 +4,7 @@ import { api } from "../api/endpoints";
 import { describeError } from "../api/client";
 import { API_DOC_TYPES, type OriginKind, type Repo, type XrayData } from "../api/types";
 import { FileDrawer, type FileTarget } from "../components/FileDrawer";
+import { RepoSheet } from "../components/RepoSheet";
 import { OriginBadges } from "../components/docs";
 import { Alert, Badge, Button, EmptyState, Panel, Skeleton, inputClass } from "../components/ui";
 import { useIndex } from "../data/IndexProvider";
@@ -151,7 +152,21 @@ export function XrayPage({ initial }: { initial: XrayTarget | null }) {
       </Panel>
       <div ref={detailRef} className="min-w-0 scroll-mt-32 space-y-5">
         {!chosen && <Panel className="px-6 py-16"><EmptyState icon={Network} title={selected && graph ? "Item não encontrado no índice" : "Comece por um item"} text="Escolha um repositório, documento ou API para explorar suas relações." /></Panel>}
-        {chosen && <>
+        {chosen?.kind === "repo" && chosen.repo && graph && (() => {
+          const docRows = relations.filter((r) => r.node.kind === "doc");
+          const apiRows = relations.filter((r) => r.node.kind === "api");
+          return <RepoSheet
+            repo={chosen.repo}
+            knownRepos={new Set(graph.nodes.filter((n) => n.kind === "repo").map((n) => n.id))}
+            onSelectRepo={(name) => select({ kind: "repo", id: name })}
+            onOpenFile={setFile}
+            docs={<RelationSection label="Documentos" icon={BookOpen} rows={docRows} onSelect={select} inferred={false} />}
+            docCount={docRows.length}
+            linkedApis={<RelationSection label="APIs documentadas" icon={Braces} rows={apiRows} onSelect={select} inferred={false} />}
+            linkedApiCount={apiRows.length}
+          />;
+        })()}
+        {chosen && !(chosen.kind === "repo" && chosen.repo) && <>
           <Panel className="overflow-hidden">
             <div className="border-b border-zinc-200 p-5 sm:p-6 dark:border-zinc-800">
               <div className="flex items-start gap-3"><div className="mt-1 text-zinc-400">{chosen.kind === "repo" ? <GitBranch className="size-5" /> : chosen.kind === "doc" ? <BookOpen className="size-5" /> : <Braces className="size-5" />}</div><div className="min-w-0 flex-1"><p className="text-xs font-medium text-zinc-500 dark:text-zinc-400">{chosen.kind === "repo" ? "Repositório" : chosen.kind === "doc" ? "Documento" : "API / serviço"}</p><h2 className="mt-1 break-words text-xl font-semibold tracking-tight">{chosen.title}</h2><p className="mt-1 break-all text-sm text-zinc-500 dark:text-zinc-400">{chosen.subtitle}</p></div></div>

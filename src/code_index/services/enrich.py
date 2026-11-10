@@ -225,6 +225,27 @@ class EnrichMixin(ServiceBase):
         return {"kind": "file_summaries", "repo": task.repo, "files": len(results), "chunks": applied,
                 "remaining": len(await store.pending())}
 
+    async def file_summary(self, repo: str, path: str) -> dict[str, Any] | None:
+        """Resumo de um arquivo (texto, perguntas, palavras-chave, quem escreveu e se está desatualizado)."""
+        repo = (await self._resolve_repos([repo]) or [repo])[0]
+        return await self._summaries.get(repo, path)
+
+    async def repo_summaries(self, repo: str) -> list[dict[str, Any]]:
+        """Resumos dos arquivos de um repo, por caminho."""
+        repo = (await self._resolve_repos([repo]) or [repo])[0]
+        return await self._summaries.list_repo(repo)
+
+    async def repo_files(self, repo: str) -> list[dict[str, Any]]:
+        """Arquivos indexados de um repo, com linguagem, tamanho e o resumo de cada um (se houver)."""
+        repo = (await self._resolve_repos([repo]) or [repo])[0]
+        return await self._summaries.repo_files(repo)
+
+    async def summary_coverage(self) -> dict[str, Any]:
+        """Cobertura dos resumos: total e por repo (arquivos de código, em dia, desatualizados)."""
+        repos = await self._summaries.coverage()
+        total = {k: sum(r[k] for r in repos) for k in ("files", "fresh", "stale")}
+        return {**total, "missing": total["files"] - total["fresh"] - total["stale"], "repos": repos}
+
     async def apply_file_summaries(self) -> dict[str, int]:
         """Reaplica os resumos às colunas de busca (o sync regrava os trechos dos arquivos que reprocessa) e
         apaga os de arquivos que saíram do índice. Sem LLM e sem Voyage."""

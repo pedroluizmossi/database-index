@@ -222,6 +222,55 @@ export interface Hit {
   linked_repos: string[];
   /** Página de operação da API: handler que a implementa ("repo/caminho:linha"). */
   implemented_in?: string[];
+  /** Resumo do arquivo em português, escrito por agent (`enrich next --kind file_summaries`), se houver. */
+  summary?: string | null;
+  summary_keywords?: string[];
+}
+
+/** Resumo de um arquivo de código escrito por agent: entra na busca por termos. */
+export interface FileSummary {
+  repo: string;
+  path: string;
+  summary: string;
+  /** Perguntas que o arquivo responde. */
+  questions: string[];
+  keywords: string[];
+  agent: string;
+  created_at: string;
+  /** O arquivo mudou no índice depois que o resumo foi escrito (só no resumo de um arquivo). */
+  stale?: boolean;
+}
+
+/** Arquivo indexado de um repo (GET /api/v1/repos/{name}/files), com o resumo quando existe. */
+export interface RepoFile {
+  path: string;
+  language: string;
+  chunks: number;
+  lines: number;
+  /** A linguagem entra na fila de resumos (código; configuração e documentação ficam de fora). */
+  summarizable: boolean;
+  summary: string | null;
+  keywords: string[];
+  /** O arquivo mudou depois que o resumo foi escrito. */
+  stale: boolean;
+}
+
+export interface SummaryCoverageRepo {
+  repo: string;
+  /** Arquivos de código indexados. */
+  files: number;
+  /** Com resumo em dia. */
+  fresh: number;
+  /** Com resumo escrito antes da última mudança do arquivo. */
+  stale: number;
+}
+
+export interface SummaryCoverage {
+  files: number;
+  fresh: number;
+  stale: number;
+  missing: number;
+  repos: SummaryCoverageRepo[];
 }
 
 export type HitKind = "code" | "doc";
@@ -238,7 +287,7 @@ export interface SearchRequest {
   include_linked_docs: boolean;
 }
 
-export type Scope = "search:read" | "index:write" | "admin";
+export type Scope = "search:read" | "index:write" | "enrich:write" | "admin";
 
 export interface SyncRequest {
   repos: string[] | null;

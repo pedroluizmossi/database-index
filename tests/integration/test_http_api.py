@@ -7,12 +7,15 @@ embeddings/rerank falsos (fixture fake_llm). Nenhuma chamada ao Google ou à Voy
 from __future__ import annotations
 
 import asyncio
+import os
+import sys
 import json
 import socket
 import threading
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -56,6 +59,7 @@ async def _setup_tokens(settings: Settings) -> tuple[dict[str, str], dict[str, s
             ("leitor", USER_EMAIL, ["search:read"]),
             ("indexador", USER_EMAIL, ["search:read", "index:write"]),
             ("admin-bot", ADMIN_EMAIL, ["admin"]),
+            ("enriquecedor", ADMIN_EMAIL, ["enrich:write"]),
             ("revogado", USER_EMAIL, ["search:read"]),
         ]:
             tok, info = await svc.create_agent_token(None, name=name, scopes=scopes, owner_email=owner)
@@ -165,6 +169,65 @@ def test_cartao_do_repo_pela_api(server: Server) -> None:
     assert leitor.post("/api/v1/docs/suggestions/review", json=body).status_code == 403
     assert client(server, "admin-bot").post("/api/v1/docs/suggestions/review", json=body).status_code == 404
     assert client(server).get("/api/v1/repos/find", params={"q": "x"}).status_code == 401
+
+
+def _fake_model(tmp_path: Any) -> str:
+    """Comando que faz o papel do modelo: lê a tarefa de resumos e devolve uma entrega válida."""
+    script = tmp_path / "modelo.py"
+    script.write_text(
+        "import json, re, sys\n"
+        "paths = re.findall(r'^--- ARQUIVO \\d+: (.+)$', sys.stdin.read(), re.M)\n"
+        "print('Aqui está:')\n"
+        "print(json.dumps({'files': [{'path': p, 'resumo': 'Devolve uma saudação fixa para quem chama.',\n"
+        "    'perguntas': ['O que faz?', 'O que devolve?', 'Quem usa?'], 'termos': ['saudação', 'exemplo', 'função']}\n"
+        "    for p in paths]}))\n", encoding="utf-8")
+    return f"{sys.executable} {script}"
+
+
+def test_fila_de_enriquecimento_pela_api(server: Server, tmp_path: Any) -> None:
+    import subprocess
+
+    async def index() -> None:
+        async with open_service(server.settings) as svc:
+            await svc.add_repo(str(tmp_path / "meu-repo"), name="meu-repo")
+            res = await svc.sync(["meu-repo"], batch=None, do_discover=False, progress=False)
+            assert res.errors == {}
+    asyncio.run(index())
+
+    body = {"kind": "file_summaries"}
+    assert client(server).post("/api/v1/enrich/next", json=body).status_code == 401
+    for sem_scope in ("leitor", "indexador"):   # ler e indexar não dão direito a enriquecer
+        assert client(server, sem_scope).post("/api/v1/enrich/next", json=body).status_code == 403
+        assert client(server, sem_scope).get("/api/v1/enrich/status").status_code == 403
+    bot = client(server, "enriquecedor")
+    assert bot.post("/api/v1/search", json={"query": "ola"}).status_code == 403
+    assert bot.post("/api/v1/enrich/next", json={"kind": "outro"}).status_code == 422
+
+    task = bot.post("/api/v1/enrich/next", json=body).json()
+    assert task["kind"] == "file_summaries" and task["files"] == ["app.py"] and "def ola()" in task["text"]
+    assert bot.post("/api/v1/enrich/next", json=body).json() is None      # lote reservado; nada mais pendente
+    url = f"/api/v1/enrich/tasks/{task['id']}"
+    bad = bot.post(f"{url}/submit", content="não é json")
+    assert bad.status_code == 400 and "JSON inválido" in bad.json()["detail"]
+    assert bot.post("/api/v1/enrich/tasks/nao-existe/submit", content="{}").status_code == 400
+    assert bot.post(f"{url}/release").json() == {"released": True}
+    assert bot.post(f"{url}/release").json() == {"released": False}
+
+    # o trabalhador remoto (só stdlib) esvazia a fila usando um "modelo" local
+    env = {**os.environ, "CODE_INDEX_TOKEN": server.tokens["enriquecedor"]}
+    worker = Path(__file__).parents[2] / "scripts" / "enrich_worker.py"
+    run = subprocess.run([sys.executable, str(worker), "--server", server.url, "--cmd", _fake_model(tmp_path)],
+                         env=env, capture_output=True, text=True, timeout=120)
+    assert run.returncode == 0, run.stderr
+    assert "ok   meu-repo" in run.stdout and "fila vazia. 1 entregue(s), 0 devolvida(s)." in run.stdout
+    st = bot.get("/api/v1/enrich/status").json()
+    assert st["summaries"] == {"files": 1, "fresh": 1, "stale": 0, "missing": 0}
+    summary = client(server, "leitor").get("/api/v1/summaries/file/meu-repo/app.py").json()
+    assert summary["summary"].startswith("Devolve uma saudação") and "enriquecedor" in summary["agent"]
+    files = client(server, "leitor").get("/api/v1/repos/meu-repo/files").json()
+    assert [(f["path"], bool(f["summary"])) for f in files] == [("app.py", True)]
+    actions = [e["action"] for e in client(server, "admin-bot").get("/api/v1/audit", params={"limit": 50}).json()]
+    assert "enrich:submit" in actions and "enrich:release" in actions
 
 
 def test_index_write_nao_registra_repo_desconhecido(server: Server) -> None:

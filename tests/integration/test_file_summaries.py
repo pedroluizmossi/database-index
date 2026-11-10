@@ -70,6 +70,20 @@ async def test_fila_de_resumos_e_busca(int_settings: Settings, tmp_path: Path, f
         hits = await svc.search("navegador", mode="keyword", rerank=False)
         assert hits and hits[0].path == "src/browser_version.py"
         assert MARK not in hits[0].code                                       # o código devolvido não muda
+        assert hits[0].summary and hits[0].summary.startswith("Detecta o navegador")   # resumo acompanha o resultado
+        assert hits[0].summary_keywords == ["navegador", "versão mínima", "compatibilidade"]
+        info = await svc.file_summary("portal", "src/browser_version.py")
+        assert info is not None and info["stale"] is False and len(info["questions"]) == 3 and info["agent"] == "teste"
+        assert await svc.file_summary("portal", "README.md") is None
+        assert [r["path"] for r in await svc.repo_summaries("portal")] == ["src/browser_version.py", "src/shade.py"]
+        files = {f["path"]: f for f in await svc.repo_files("portal")}
+        assert sorted(files) == ["README.md", "src/browser_version.py", "src/shade.py"]
+        assert files["README.md"]["summarizable"] is False and files["README.md"]["summary"] is None
+        assert files["src/shade.py"]["summary"].startswith("Clareia") and files["src/shade.py"]["stale"] is False
+        assert files["src/shade.py"]["lines"] >= 2 and files["src/shade.py"]["language"] == "python"
+        cov = await svc.summary_coverage()
+        assert (cov["files"], cov["fresh"], cov["missing"]) == (2, 2, 0)
+        assert cov["repos"] == [{"repo": "portal", "files": 2, "fresh": 2, "stale": 0}]
         assert (await svc.enrich_status())["summaries"]["fresh"] == 2
         with pytest.raises(ValueError, match="já entregue"):
             await svc.enrich_submit(task["id"], _delivery(task["files"]))
@@ -87,6 +101,8 @@ async def test_fila_de_resumos_e_busca(int_settings: Settings, tmp_path: Path, f
         assert "tonalidade" in await symbols("src/shade.py")
         st = (await svc.enrich_status())["summaries"]
         assert (st["fresh"], st["stale"]) == (1, 1)
+        stale = await svc.file_summary("portal", "src/shade.py")
+        assert stale is not None and stale["stale"] is True
         again = await svc.enrich_next(kind="file_summaries")
         assert again is not None and again["files"] == ["src/shade.py"]
         assert await svc.enrich_release(again["id"])

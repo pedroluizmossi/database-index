@@ -1170,7 +1170,7 @@ def main() -> None:
     t.add_argument("name", help="rótulo, ex.: 'claude-code pedro'")
     t.add_argument("--owner", required=True, help="e-mail do responsável")
     t.add_argument("--scopes", nargs="+", default=["search:read"],
-                   help="search:read (padrão), index:write, admin")
+                   help="search:read (padrão), index:write, enrich:write, admin")
     t.add_argument("--days", type=int, help=f"validade em dias (padrão {settings.token_ttl_days})")
     t.set_defaults(fn=_cmd_token_create)
     t = tk.add_parser("list", help="lista tokens de agents")

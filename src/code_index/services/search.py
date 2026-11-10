@@ -15,7 +15,9 @@ from ..indexing.content import file_language
 from ..indexing.orchestrator import configured_repos, repo_for_row
 from ..infra.grep import GrepResult, GrepTarget
 from ..retrieval import files as retrieval_files
-from ..retrieval.evaluation import CaseResult, ConfigReport, EvalCase, first_hit, load_cases
+from ..retrieval.evaluation import (
+    CaseResult, Comparison, ConfigReport, EvalCase, compare_all, first_hit, load_cases, load_reports,
+)
 from ..retrieval.redaction import mask_output
 from ..retrieval.search import RerankOptions
 
@@ -112,6 +114,15 @@ class SearchMixin(OwnershipMixin):
     def load_eval_cases(self, path: str | Path) -> list[EvalCase]:
         """Perguntas de avaliação de um arquivo JSON (formato de evals/queries.json)."""
         return load_cases(Path(path))
+
+    @staticmethod
+    def compare_eval(reports: list[ConfigReport], baseline_path: str | Path | None = None) -> list[Comparison]:
+        """Diferença entre configurações com teste de significância (retrieval.evaluation.compare).
+
+        Sem `baseline_path`: cada configuração contra a primeira. Com ele (JSON de uma execução
+        anterior de `eval --json`): cada configuração contra a de mesmo nome daquela execução.
+        """
+        return compare_all(reports, load_reports(Path(baseline_path)) if baseline_path else None)
 
     async def evaluate(self, cases: Sequence[EvalCase], configs: Sequence[dict[str, Any]],
                        *, top_k: int = 10) -> list[ConfigReport]:

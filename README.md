@@ -180,6 +180,16 @@ opcional). `code-index eval` mede hit@1, hit@3, hit@k e MRR em cada modo de busc
 pesos da fusão sem rerank. Rode depois de mexer na busca ou no chunking. Cada pergunta custa um embedding
 de consulta e, nos modos com rerank, uma chamada ao reranker (centavos).
 
+Com 60 perguntas, uma diferença pequena de MRR pode ser sorte. Por isso o `eval` também compara as
+configurações pergunta a pergunta (cada uma contra a primeira) e mostra a diferença de MRR, o intervalo de
+95% (bootstrap pareado), o `p` de um teste de permutação e o veredito: `melhor`, `pior` ou `indistinguível`.
+Para o antes e depois de uma mudança:
+
+```bash
+uv run code-index eval --json > antes.json      # antes de mexer
+uv run code-index eval --baseline antes.json    # depois: o que mudou e se é ruído
+```
+
 **Símbolos.** A tabela `code_symbols` é preenchida na indexação, sem custo de API, com as declarações de
 cada arquivo: nome, tipo, classe envolvente, linha e assinatura.
 

@@ -262,8 +262,11 @@ async def _cmd_eval(a: argparse.Namespace, settings: Settings) -> None:
     async with open_service(settings) as svc:
         cases = svc.load_eval_cases(a.file)
         reports = await svc.evaluate(cases, configs, top_k=a.top_k)
+    comparisons = CodeIndexService.compare_eval(reports, a.baseline)
     if a.json:
-        print(json.dumps([r.to_dict() for r in reports], indent=2, ensure_ascii=False))
+        by_name = {d.other: d.to_dict() for d in comparisons}
+        print(json.dumps([{**r.to_dict(), **({"compare": by_name[r.name]} if r.name in by_name else {})}
+                          for r in reports], indent=2, ensure_ascii=False))
         return
     print(f"{len(cases)} perguntas, top {a.top_k}\n")
     print(f"{'configuração':<20} {'hit@1':>6} {'hit@3':>6} {'hit@k':>6} {'MRR':>6}")
@@ -277,6 +280,14 @@ async def _cmd_eval(a: argparse.Namespace, settings: Settings) -> None:
         print(f"{'configuração':<20} " + " ".join(f"{t + f' ({counts[t]})':>11}" for t in tags))
         for r in reports:
             print(f"{r.name:<20} " + " ".join(f"{r.metrics(t)['mrr']:>11.2f}" for t in tags))
+    if comparisons:
+        ref = f"execução anterior ({a.baseline})" if a.baseline else f"'{comparisons[0].base}'"
+        print(f"\nDiferença contra {ref}: ΔMRR, intervalo de 95% e p (permutação pareada)")
+        print(f"{'configuração':<20} {'ΔMRR':>6} {'IC 95%':>16} {'p':>6} {'+/-/=':>9}  veredito")
+        for d in comparisons:
+            ci = f"[{d.ci_low:+.2f}, {d.ci_high:+.2f}]"
+            score = f"{d.wins}/{d.losses}/{d.ties}"
+            print(f"{d.other:<20} {d.delta_mrr:>+6.2f} {ci:>16} {d.p_value:>6.3f} {score:>9}  {d.verdict}")
     if a.verbose:
         for r in reports:
             print(f"\n\033[1m{r.name}\033[0m")
@@ -900,6 +911,8 @@ def main() -> None:
                     help="compara as variações do rerank (instrução, cabeçalho, só código) com a busca sem rerank")
     ev.add_argument("-v", "--verbose", action="store_true", help="mostra cada pergunta e o que veio nos erros")
     ev.add_argument("--json", action="store_true")
+    ev.add_argument("--baseline", metavar="ARQUIVO",
+                    help="JSON de uma execução anterior (`eval --json > antes.json`): mostra o que mudou e se é ruído")
     ev.set_defaults(fn=_cmd_eval)
 
     api_cmd = sub.add_parser("api", help="catálogo Swagger no S3").add_subparsers(dest="api_command", required=True)

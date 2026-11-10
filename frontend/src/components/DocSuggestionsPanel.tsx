@@ -53,11 +53,11 @@ export function DocSuggestionsPanel({ admin, onChanged }: { admin: boolean; onCh
           <Sparkles className="size-4 text-accent-500" aria-hidden="true" />
           Sugestões de vínculo ({items.length})
         </h2>
-        <p className="text-xs text-zinc-500 dark:text-zinc-400">
+        <p className="text-xs text-stone-500 dark:text-stone-400">
           Feitas por agent a partir da página e do cartão do repo. Só valem depois de aprovadas: “remover” tira um vínculo automático (menção ou tag).
         </p>
       </div>
-      <ul className="max-h-[28rem] divide-y divide-zinc-100 overflow-y-auto dark:divide-zinc-800">
+      <ul className="max-h-[28rem] divide-y divide-stone-100 overflow-y-auto dark:divide-stone-800">
         {items.map((s) => {
           const key = `${s.doc_repo}|${s.doc_path}|${s.repo}`;
           return (
@@ -73,15 +73,15 @@ export function DocSuggestionsPanel({ admin, onChanged }: { admin: boolean; onCh
                     <span className="font-medium">{s.title ?? s.doc_path}</span>
                   )}
                   <Badge tone={s.action === "remove" ? "error" : "accent"}>{s.action === "remove" ? "remover" : "adicionar"}</Badge>
-                  <span className="text-zinc-400">→</span>
+                  <span className="text-stone-400">→</span>
                   <span className={s.action === "remove" ? "font-medium line-through decoration-rose-400" : "font-medium"} title={s.repo}>
                     {shortName(s.repo)}
                   </span>
                   {s.confidence && <Badge tone={CONFIDENCE_TONE[s.confidence]}>{s.confidence}</Badge>}
                   {s.basis && <Badge>{s.basis === "pagina_cita" ? "a página cita" : "mesmo assunto"}</Badge>}
                 </div>
-                <p className="text-xs text-zinc-600 dark:text-zinc-300">{s.reason}</p>
-                <p className="truncate font-mono text-xs text-zinc-400" title={s.doc_path}>{s.doc_path}</p>
+                <p className="text-xs text-stone-600 dark:text-stone-300">{s.reason}</p>
+                <p className="truncate font-mono text-xs text-stone-400" title={s.doc_path}>{s.doc_path}</p>
               </div>
               {admin && (
                 <div className="flex shrink-0 gap-1">

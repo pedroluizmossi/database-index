@@ -6,8 +6,8 @@ import type { UserUsage } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useToast } from "../components/Toaster";
-import { Alert, Badge, Button, EmptyState, IconButton, Panel, Segmented, Skeleton } from "../components/ui";
-import { CHANNELS, fmtCompact, fmtInt, fmtUsd, numClass, rowClass, tbodyClass, thClass, theadClass } from "../components/usage";
+import { Alert, Badge, Button, EmptyState, IconButton, Panel, Segmented, Skeleton, tableHeadClass } from "../components/ui";
+import { CHANNELS, fmtCompact, fmtInt, fmtUsd, numClass, rowClass, tbodyClass, thClass } from "../components/usage";
 import { cx, formatDateTime, timeAgo } from "../lib/utils";
 import { PERIODS, type Period } from "./UsagePage";
 
@@ -60,7 +60,7 @@ export function UsersPage({ onOpenUsage }: { onOpenUsage: (email: string) => voi
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Usuários</h1>
-          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+          <p className="mt-1 text-sm text-stone-500 dark:text-stone-400">
             Quem já entrou, o papel de cada um e o uso no período. Clique num usuário para ver o uso dele em detalhe.
           </p>
         </div>
@@ -78,7 +78,7 @@ export function UsersPage({ onOpenUsage }: { onOpenUsage: (email: string) => voi
       <Panel className="overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full min-w-[1080px] text-sm">
-            <thead className={theadClass}>
+            <thead className={tableHeadClass}>
               <tr>
                 <th className={thClass}>Usuário</th>
                 <th className={thClass}>Papel</th>
@@ -110,7 +110,7 @@ export function UsersPage({ onOpenUsage }: { onOpenUsage: (email: string) => voi
                 </tr>
               )}
               {sorted?.map((u) => (
-                <tr key={u.id} className={cx(rowClass, !u.active && "text-zinc-500 dark:text-zinc-500")}>
+                <tr key={u.id} className={cx(rowClass, !u.active && "text-stone-500 dark:text-stone-500")}>
                   <td className="max-w-64 px-3 py-2.5">
                     <button
                       type="button"
@@ -119,7 +119,7 @@ export function UsersPage({ onOpenUsage }: { onOpenUsage: (email: string) => voi
                       title={`Ver o uso de ${u.email}`}
                     >
                       <span className="block truncate font-medium">{u.display_name ?? u.email.split("@")[0]}</span>
-                      <span className="block truncate text-xs text-zinc-500 dark:text-zinc-400">{u.email}</span>
+                      <span className="block truncate text-xs text-stone-500 dark:text-stone-400">{u.email}</span>
                     </button>
                   </td>
                   <td className="px-3 py-2.5">
@@ -145,14 +145,14 @@ export function UsersPage({ onOpenUsage }: { onOpenUsage: (email: string) => voi
                   <td className={numClass}>~{fmtCompact(u.context_tokens)}</td>
                   <td className={numClass}>{fmtUsd(u.cost_usd)}</td>
                   <td className="max-w-44 px-3 py-2.5">
-                    <span className="block truncate text-xs text-zinc-600 dark:text-zinc-300" title={u.clients.join(", ")}>
+                    <span className="block truncate text-xs text-stone-600 dark:text-stone-300" title={u.clients.join(", ")}>
                       {u.clients.length ? u.clients.join(", ") : "—"}
                     </span>
                   </td>
                   <td className="px-3 py-2.5 whitespace-nowrap">
                     <span title={formatDateTime(u.last_at ?? u.last_seen_at)}>{timeAgo(u.last_at ?? u.last_seen_at)}</span>
                     {u.top_action && (
-                      <span className="block max-w-40 truncate font-mono text-[11px] text-zinc-500 dark:text-zinc-400" title={`Mais usado: ${u.top_action}`}>
+                      <span className="block max-w-40 truncate font-mono text-[11px] text-stone-500 dark:text-stone-400" title={`Mais usado: ${u.top_action}`}>
                         {u.top_action}
                       </span>
                     )}
@@ -218,7 +218,7 @@ function CallsCell({ user, max }: { user: UserUsage; max: number }) {
   const title = parts.map((p) => `${CHANNELS[p.key].label} ${fmtInt(p.value)}`).join(" · ") + (user.errors ? ` · ${fmtInt(user.errors)} erros` : "");
   return (
     <div className="flex items-center justify-end gap-2" title={title}>
-      <span className="hidden h-1.5 w-20 gap-px overflow-hidden rounded-full bg-zinc-100 sm:flex dark:bg-zinc-800" aria-hidden="true">
+      <span className="hidden h-1.5 w-20 gap-px overflow-hidden rounded-full bg-stone-100 sm:flex dark:bg-stone-800" aria-hidden="true">
         {parts.map((p) =>
           p.value > 0 ? <span key={p.key} className={cx("h-full", CHANNELS[p.key].swatch)} style={{ width: `${(p.value / max) * 100}%` }} /> : null,
         )}

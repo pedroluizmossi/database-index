@@ -46,6 +46,9 @@ O executável `code-index` só existe no ambiente do projeto: use `uv run`.
 
 Testes: `tests/unit/` (rápidos) e `tests/integration/` (marcados `integration`).
 
+Interface web (`frontend/`, React + Tailwind): siga o `DESIGN.md` (paleta quente, tokens, tipografia e movimento).
+Nada de `zinc`/`gray`/branco puro em superfície; o que o produto é está em `PRODUCT.md`.
+
 ## Regras de arquitetura
 
 - Dependências só nesta direção: `interfaces → services → indexing/retrieval/sources → infra → domain/settings`.

@@ -3,7 +3,7 @@ import { Activity, BarChart3, CircleDollarSign, Gauge, RefreshCw, SearchX, Trian
 import { api } from "../api/endpoints";
 import { describeError } from "../api/client";
 import type { UsageReport, UserUsage } from "../api/types";
-import { Alert, Badge, Button, EmptyState, Field, Panel, Segmented, Select, Skeleton } from "../components/ui";
+import { Alert, Badge, Button, EmptyState, Field, Panel, Segmented, Select, Skeleton, tableHeadClass } from "../components/ui";
 import {
   ActionTable,
   ChannelBadge,
@@ -21,7 +21,6 @@ import {
   rowClass,
   tbodyClass,
   thClass,
-  theadClass,
 } from "../components/usage";
 import { cx, formatDateTime, timeAgo } from "../lib/utils";
 
@@ -69,7 +68,7 @@ export function UsagePage({ email, onEmail }: { email: string; onEmail: (email: 
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Uso</h1>
-          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+          <p className="mt-1 text-sm text-stone-500 dark:text-stone-400">
             Chamadas do MCP, da API e desta interface: quem usa, quanto custa e o que a busca não encontra.
           </p>
         </div>
@@ -205,7 +204,7 @@ function UsageReportView({ report, filtered }: { report: UsageReport; filtered: 
         <Panel className="overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full min-w-[640px] text-sm">
-              <thead className={theadClass}>
+              <thead className={tableHeadClass}>
                 <tr>
                   <th className={thClass}>Cliente</th>
                   <th className={thClass}>Canal</th>
@@ -222,10 +221,10 @@ function UsageReportView({ report, filtered }: { report: UsageReport; filtered: 
                     <td className="px-3 py-2.5">
                       <ChannelBadge channel={c.channel} />
                     </td>
-                    <td className="px-3 py-2.5 font-mono text-xs text-zinc-500 dark:text-zinc-400">{c.last_version ?? "—"}</td>
+                    <td className="px-3 py-2.5 font-mono text-xs text-stone-500 dark:text-stone-400">{c.last_version ?? "—"}</td>
                     <td className={numClass}>{fmtInt(c.calls)}</td>
                     <td className={numClass}>{fmtInt(c.users)}</td>
-                    <td className={cx(numClass, "text-zinc-500 dark:text-zinc-400")} title={formatDateTime(c.last_at)}>
+                    <td className={cx(numClass, "text-stone-500 dark:text-stone-400")} title={formatDateTime(c.last_at)}>
                       {timeAgo(c.last_at)}
                     </td>
                   </tr>
@@ -248,7 +247,7 @@ function RecentTable({ report }: { report: UsageReport }) {
     <Panel className="overflow-hidden">
       <div className="max-h-[32rem] overflow-auto">
         <table className="w-full min-w-[1000px] text-xs">
-          <thead className={cx(theadClass, "sticky top-0 z-10")}>
+          <thead className={cx(tableHeadClass, "sticky top-0 z-10")}>
             <tr>
               <th className={thClass}>Quando</th>
               <th className={thClass}>Quem</th>
@@ -269,7 +268,7 @@ function RecentTable({ report }: { report: UsageReport }) {
                 <td className="px-3 py-2 whitespace-nowrap" title={formatDateTime(e.at)}>
                   {timeAgo(e.at)}
                 </td>
-                <td className="max-w-48 truncate px-3 py-2 text-zinc-700 dark:text-zinc-300" title={e.email ?? undefined}>
+                <td className="max-w-48 truncate px-3 py-2 text-stone-700 dark:text-stone-300" title={e.email ?? undefined}>
                   {e.email ?? "—"}
                 </td>
                 <td className="px-3 py-2">
@@ -278,7 +277,7 @@ function RecentTable({ report }: { report: UsageReport }) {
                 <td className="max-w-56 truncate px-3 py-2 font-mono" title={e.action}>
                   {e.action}
                 </td>
-                <td className="px-3 py-2 whitespace-nowrap text-zinc-500 dark:text-zinc-400">
+                <td className="px-3 py-2 whitespace-nowrap text-stone-500 dark:text-stone-400">
                   {e.client ?? "—"}
                   {e.client_version && <span className="ml-1 font-mono">{e.client_version}</span>}
                 </td>
@@ -292,7 +291,7 @@ function RecentTable({ report }: { report: UsageReport }) {
                 <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap">{e.response_bytes === null ? "—" : fmtBytes(e.response_bytes)}</td>
                 <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap">{e.cost_usd > 0 ? fmtUsd(e.cost_usd) : "—"}</td>
                 <td className="max-w-xs px-3 py-2">
-                  <code className="block truncate font-mono text-zinc-500" title={e.params ? JSON.stringify(e.params) : undefined}>
+                  <code className="block truncate font-mono text-stone-500" title={e.params ? JSON.stringify(e.params) : undefined}>
                     {e.params ? JSON.stringify(e.params) : "—"}
                   </code>
                 </td>

@@ -95,12 +95,26 @@ class DocumentStore:
 
     async def listing(self, *, limit: int, offset: int = 0, exclude_types: Sequence[str] = ()) -> list[dict[str, Any]]:
         rows = await self._pool.fetch(
-            f"""SELECT doc_repo, path, key, type, title, url, attrs FROM {self.table}
+            f"""SELECT doc_repo, path, key, type, title, url, attrs, ignored FROM {self.table}
                 WHERE present AND NOT (type = ANY($3::text[]))
                 ORDER BY doc_repo, path LIMIT $1 OFFSET $2""",
             max(1, min(limit, 2000)), max(0, offset), list(exclude_types),
         )
         return [{**dict(r), "attrs": json.loads(r["attrs"])} for r in rows]
+
+    async def source_paths(self, doc_repo: str) -> dict[str, dict[str, bool]]:
+        """Caminho → {present, ignored} dos documentos de uma fonte (catálogo da escolha de páginas)."""
+        rows = await self._pool.fetch(
+            f"SELECT path, present, ignored FROM {self.table} WHERE doc_repo = $1 AND (present OR ignored)", doc_repo)
+        return {r["path"]: {"present": r["present"], "ignored": r["ignored"]} for r in rows}
+
+    async def source_counts(self) -> dict[str, dict[str, int]]:
+        """Por fonte: documentos presentes e páginas fora da busca."""
+        rows = await self._pool.fetch(
+            f"""SELECT doc_repo, count(*) FILTER (WHERE present) AS documents,
+                       count(*) FILTER (WHERE ignored) AS ignored
+                FROM {self.table} GROUP BY doc_repo""")
+        return {r["doc_repo"]: {"documents": r["documents"], "ignored": r["ignored"]} for r in rows}
 
     async def inventory(self) -> list[dict[str, Any]]:
         """Todos os documentos presentes (X-Ray)."""

@@ -36,7 +36,7 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { SyncDialog } from "../components/SyncDialog";
 import { JobDialog, JobsPanel, RunningJobBanner, useJobs } from "../components/JobsPanel";
 import { cx, formatDateTime, plural, repoShortName, timeAgo } from "../lib/utils";
-import { Alert, Badge, Button, EmptyState, Field, IconButton, Panel, ProgressBar, Segmented, Select, Skeleton, inputClass, type BadgeTone } from "../components/ui";
+import { Alert, Badge, Button, EmptyState, Field, IconButton, Panel, ProgressBar, Segmented, Select, Skeleton, inputClass, tableHeadClass, type BadgeTone } from "../components/ui";
 import type { XrayTarget } from "../lib/xray";
 
 type StatusFilter = "all" | RepoStatusValue;
@@ -371,7 +371,7 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Repositórios</h1>
-          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+          <p className="mt-1 text-sm text-stone-500 dark:text-stone-400">
             Indexação e domínio (DDD) de cada repositório.
           </p>
         </div>
@@ -429,7 +429,7 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
 
       <div ref={listTop} className="scroll-mt-20" />
       <Panel className="overflow-hidden">
-        <div className="flex flex-col gap-3 border-b border-zinc-200 p-4 sm:flex-row sm:items-center sm:justify-between dark:border-zinc-800">
+        <div className="flex flex-col gap-3 border-b border-stone-200 p-4 sm:flex-row sm:items-center sm:justify-between dark:border-stone-800">
           <Segmented label="Filtrar por status" value={status} onChange={setStatus} options={statusOptions} />
           <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
           <div className="w-full sm:w-52">
@@ -462,7 +462,7 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
             </Select>
           </div>
           <div className="relative w-full sm:w-64">
-            <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-zinc-400" aria-hidden="true" />
+            <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-stone-400" aria-hidden="true" />
             <input
               value={term}
               onChange={(e) => setTerm(e.target.value.slice(0, SEARCH_MAX))}
@@ -496,7 +496,7 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
 
         <div className="hidden overflow-x-auto md:block">
           <table className="w-full text-sm">
-            <thead className="border-b border-zinc-200 bg-zinc-50 text-left text-xs text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-400">
+            <thead className={tableHeadClass}>
               <tr>
                 {selection && (
                   <th className="w-10 py-3 pl-4">
@@ -518,13 +518,13 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
                 <th className="hidden px-4 py-3 font-medium 2xl:table-cell">Commit</th>
                 <SortHeader label="Indexado" sortKey="indexed_at" sort={sort} onSort={toggleSort} className="hidden lg:table-cell" />
                 {rowActions && (
-                  <th className="sticky right-0 z-[2] bg-zinc-50 px-4 py-3 text-right font-medium shadow-[-8px_0_8px_-8px_rgb(0_0_0/0.12)] dark:bg-zinc-900">
+                  <th className="sticky right-0 z-[2] bg-stone-50 px-4 py-3 text-right font-medium shadow-[-8px_0_8px_-8px_rgb(0_0_0/0.12)] dark:bg-stone-900">
                     Ações
                   </th>
                 )}
               </tr>
             </thead>
-            <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+            <tbody className="divide-y divide-stone-100 dark:divide-stone-800">
               {repos === null && loading && <SkeletonRows cols={cols} />}
               {repos === null && !loading && (
                 <tr>
@@ -555,7 +555,7 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
           </table>
         </div>
 
-        <ul className="divide-y divide-zinc-100 md:hidden dark:divide-zinc-800">
+        <ul className="divide-y divide-stone-100 md:hidden dark:divide-stone-800">
           {repos === null && loading && [0, 1, 2].map((i) => (
             <li key={i} className="p-4">
               <Skeleton className="h-16 w-full" />
@@ -591,7 +591,7 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
         <div className="pointer-events-none fixed inset-x-0 bottom-4 z-30 flex justify-center px-4 lg:left-(--sidebar-w)">
           <div
             ref={selectionBar}
-            className="pointer-events-auto relative flex max-w-full items-center gap-2 rounded-xl bg-ink-950 py-2 pr-2 pl-3 text-white shadow-[0_8px_24px_-8px_rgb(0_0_0/0.45)] ring-1 ring-white/10 animate-pop sm:gap-3 sm:pl-4"
+            className="pointer-events-auto relative flex max-w-full items-center gap-2 rounded-xl bg-ink-950/90 py-2 pr-2 pl-3 text-white shadow-[0_8px_24px_-8px_rgb(0_0_0/0.45)] ring-1 ring-white/10 backdrop-blur-md animate-pop sm:gap-3 sm:pl-4"
           >
             {selectionOpen && (
               <SelectionPanel
@@ -797,8 +797,8 @@ function ActiveFilters({
   if (filters.search.trim()) chips.push({ key: "search", label: `Busca: "${filters.search.trim()}"` });
 
   return (
-    <div className="flex flex-wrap items-center gap-2 border-b border-zinc-200 px-4 py-2.5 text-xs dark:border-zinc-800">
-      <span className="text-zinc-500 dark:text-zinc-400">Filtros ativos:</span>
+    <div className="flex flex-wrap items-center gap-2 border-b border-stone-200 px-4 py-2.5 text-xs dark:border-stone-800">
+      <span className="text-stone-500 dark:text-stone-400">Filtros ativos:</span>
       {chips.map((c) => (
         <span
           key={c.key}
@@ -891,7 +891,7 @@ function Pagination({
   const first = page * pageSize + 1;
   const last = Math.min(total, (page + 1) * pageSize);
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-zinc-200 px-4 py-3 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-stone-200 px-4 py-3 text-xs text-stone-500 dark:border-stone-800 dark:text-stone-400">
       <p>
         {numberFormat.format(first)}–{numberFormat.format(last)} de {numberFormat.format(total)}
         {total !== unfiltered && <> (filtrados de {numberFormat.format(unfiltered)})</>}
@@ -929,8 +929,8 @@ function Pagination({
 const COVERAGE: { status: RepoStatusValue; label: string; bar: string; key: string }[] = [
   { status: "indexed", label: "Indexados", bar: "bg-emerald-500", key: "bg-emerald-500" },
   { status: "error", label: "Com erro", bar: "bg-rose-500", key: "bg-rose-500" },
-  { status: "pending", label: "Pendentes", bar: "bg-zinc-300 dark:bg-zinc-600", key: "border-[1.5px] border-zinc-500 dark:border-zinc-500" },
-  { status: "ignored", label: "Ignorados", bar: "bg-zinc-200 dark:bg-zinc-800", key: "bg-zinc-300 dark:bg-zinc-600" },
+  { status: "pending", label: "Pendentes", bar: "bg-stone-300 dark:bg-stone-600", key: "border-[1.5px] border-stone-500 dark:border-stone-500" },
+  { status: "ignored", label: "Ignorados", bar: "bg-stone-200 dark:bg-stone-800", key: "bg-stone-300 dark:bg-stone-600" },
 ];
 
 interface Counts {
@@ -947,7 +947,7 @@ function percentOf(part: number, total: number): number {
 /** Barra empilhada por status. A cor nunca é o único código: a legenda traz rótulo e número. */
 function CoverageBar({ byStatus, total, className }: { byStatus: Record<RepoStatusValue, number>; total: number; className?: string }) {
   return (
-    <div className={cx("flex h-2.5 gap-px overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800", className)} aria-hidden="true">
+    <div className={cx("flex h-2.5 gap-px overflow-hidden rounded-full bg-stone-100 dark:bg-stone-800", className)} aria-hidden="true">
       {COVERAGE.map(({ status, bar }) =>
         byStatus[status] > 0 && total > 0 ? (
           <span key={status} className={cx("h-full transition-[width] duration-500", bar)} style={{ width: `${(byStatus[status] / total) * 100}%` }} />
@@ -991,7 +991,7 @@ function Coverage({
       <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
         <div className="min-w-0">
           <h2 className="truncate font-semibold">{single ? single.name : "Cobertura do índice"}</h2>
-          <p className="mt-0.5 text-sm text-zinc-500 dark:text-zinc-400">
+          <p className="mt-0.5 text-sm text-stone-500 dark:text-stone-400">
             {numberFormat.format(counts.total)} {plural(counts.total, "repositório", "repositórios")}
             {languages.length > 0 && <> · {languages.map(([language, n]) => `${language} ${n}`).join(" · ")}</>}
           </p>
@@ -1007,14 +1007,14 @@ function Coverage({
       </div>
 
       <div className="mt-6 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
-        <p className="text-sm text-zinc-600 dark:text-zinc-300">
-          <span className="text-2xl font-semibold tracking-tight text-zinc-900 tabular-nums dark:text-white">{percent}%</span>
+        <p className="text-sm text-stone-600 dark:text-stone-300">
+          <span className="text-2xl font-semibold tracking-tight text-stone-900 tabular-nums dark:text-white">{percent}%</span>
           <span className="ml-2">indexado</span>
-          <span className="text-zinc-500 dark:text-zinc-400">
+          <span className="text-stone-500 dark:text-stone-400">
             {" "}· {numberFormat.format(counts.byStatus.indexed)} de {numberFormat.format(counts.total)}
           </span>
         </p>
-        <p className="text-sm text-zinc-500 tabular-nums dark:text-zinc-400">
+        <p className="text-sm text-stone-500 tabular-nums dark:text-stone-400">
           {numberFormat.format(counts.chunks)} {plural(counts.chunks, "trecho", "trechos")} em {numberFormat.format(counts.files)} {plural(counts.files, "arquivo", "arquivos")}
         </p>
       </div>
@@ -1028,11 +1028,11 @@ function Coverage({
               type="button"
               onClick={() => onFilter(status)}
               title={`Mostrar só ${label.toLowerCase()}`}
-              className="inline-flex items-center gap-2 rounded-md px-2 py-1 text-zinc-600 outline-none transition hover:bg-zinc-900/5 hover:text-zinc-900 focus-visible:ring-2 focus-visible:ring-accent-500 dark:text-zinc-300 dark:hover:bg-white/5 dark:hover:text-white"
+              className="inline-flex items-center gap-2 rounded-md px-2 py-1 text-stone-600 outline-none transition hover:bg-stone-900/5 hover:text-stone-900 focus-visible:ring-2 focus-visible:ring-accent-500 dark:text-stone-300 dark:hover:bg-white/5 dark:hover:text-white"
             >
               <span className={cx("size-2 rounded-full", key)} aria-hidden="true" />
               {label}
-              <span className="font-medium text-zinc-900 tabular-nums dark:text-white">{numberFormat.format(counts.byStatus[status])}</span>
+              <span className="font-medium text-stone-900 tabular-nums dark:text-white">{numberFormat.format(counts.byStatus[status])}</span>
             </button>
           </li>
         ))}
@@ -1045,11 +1045,11 @@ function Coverage({
       </ul>
 
       {ownership && ownership.repos > 0 && (
-        <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-zinc-100 pt-4 text-sm dark:border-zinc-800">
-          <span className="text-zinc-600 dark:text-zinc-300">
-            <span className="font-medium text-zinc-900 tabular-nums dark:text-white">{ownership.percent}%</span> com
+        <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-stone-100 pt-4 text-sm dark:border-stone-800">
+          <span className="text-stone-600 dark:text-stone-300">
+            <span className="font-medium text-stone-900 tabular-nums dark:text-white">{ownership.percent}%</span> com
             domínio/serviço
-            <span className="text-zinc-500 dark:text-zinc-400">
+            <span className="text-stone-500 dark:text-stone-400">
               {" "}· {numberFormat.format(ownership.owned)} de {numberFormat.format(ownership.repos)}
             </span>
           </span>
@@ -1067,11 +1067,11 @@ function Coverage({
                       "inline-flex items-center gap-1.5 rounded-md px-2 py-1 outline-none transition focus-visible:ring-2 focus-visible:ring-accent-500",
                       pressed
                         ? "bg-accent-50 font-medium text-accent-700 dark:bg-accent-500/10 dark:text-accent-300"
-                        : "text-zinc-600 hover:bg-zinc-900/5 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-white/5 dark:hover:text-white",
+                        : "text-stone-600 hover:bg-stone-900/5 hover:text-stone-900 dark:text-stone-300 dark:hover:bg-white/5 dark:hover:text-white",
                     )}
                   >
                     {ORIGIN_LABEL[o]}
-                    <span className="font-medium text-zinc-900 tabular-nums dark:text-white">{numberFormat.format(ownership.by_origin[o] ?? 0)}</span>
+                    <span className="font-medium text-stone-900 tabular-nums dark:text-white">{numberFormat.format(ownership.by_origin[o] ?? 0)}</span>
                   </button>
                 </li>
               );
@@ -1090,12 +1090,12 @@ function Coverage({
       )}
 
       {!single && orgs.length > 0 && (
-        <ul className="mt-5 divide-y divide-zinc-100 border-t border-zinc-100 dark:divide-zinc-800 dark:border-zinc-800">
+        <ul className="mt-5 divide-y divide-stone-100 border-t border-stone-100 dark:divide-stone-800 dark:border-stone-800">
           {orgs.map((org) => (
             <li key={org.name} className="grid grid-cols-[minmax(0,10rem)_1fr_auto] items-center gap-4 py-3 sm:grid-cols-[minmax(0,14rem)_1fr_auto_auto]">
               <p className="truncate text-sm font-medium" title={org.name}>{org.name}</p>
               <CoverageBar byStatus={org.status} total={org.total} className="h-1.5" />
-              <p className="text-sm text-zinc-500 tabular-nums dark:text-zinc-400">
+              <p className="text-sm text-stone-500 tabular-nums dark:text-stone-400">
                 {percentOf(org.status.indexed, org.total)}% de {org.total}
               </p>
               {onRefresh && (
@@ -1135,8 +1135,8 @@ function SortHeader({
         type="button"
         onClick={() => onSort(sortKey)}
         className={cx(
-          "inline-flex items-center gap-1 rounded-md outline-none transition hover:text-zinc-900 focus-visible:ring-2 focus-visible:ring-accent-500 dark:hover:text-zinc-100",
-          active && "text-zinc-900 dark:text-zinc-100",
+          "inline-flex items-center gap-1 rounded-md outline-none transition hover:text-stone-900 focus-visible:ring-2 focus-visible:ring-accent-500 dark:hover:text-stone-100",
+          active && "text-stone-900 dark:text-stone-100",
         )}
       >
         {label}
@@ -1202,7 +1202,7 @@ function RepoRow({ repo: r, live, actions, selection, onXray }: { repo: Repo; li
   return (
     <tr
       className={cx(
-        "group align-top transition-colors hover:bg-zinc-50 dark:hover:bg-white/[0.02]",
+        "group align-top transition-colors hover:bg-stone-50 dark:hover:bg-white/[0.02]",
         checked && "bg-accent-50 hover:bg-accent-50 dark:bg-accent-500/10 dark:hover:bg-accent-500/10",
       )}
     >
@@ -1218,9 +1218,9 @@ function RepoRow({ repo: r, live, actions, selection, onXray }: { repo: Repo; li
       )}
       <td className="px-4 py-3">
         <div className="min-w-0 max-w-[18rem]">
-            <p className="truncate font-medium text-zinc-900 dark:text-zinc-100" title={r.name}>
+            <p className="truncate font-medium text-stone-900 dark:text-stone-100" title={r.name}>
               {repoShortName(r.name, r.org)}
-              {!r.org && <span className="ml-2 text-xs font-normal text-zinc-500 dark:text-zinc-400">avulso</span>}
+              {!r.org && <span className="ml-2 text-xs font-normal text-stone-500 dark:text-stone-400">avulso</span>}
             </p>
             <RepoSummary repo={r} />
             <RepoLinks repo={r} onXray={onXray} />
@@ -1241,12 +1241,12 @@ function RepoRow({ repo: r, live, actions, selection, onXray }: { repo: Repo; li
       <td className="hidden px-4 py-3 lg:table-cell">
         <OwnerCell repo={r} onOwn={ownerAction(actions, r)} />
       </td>
-      <td className="hidden px-4 py-3 text-zinc-600 xl:table-cell dark:text-zinc-300">{r.language ?? "—"}</td>
+      <td className="hidden px-4 py-3 text-stone-600 xl:table-cell dark:text-stone-300">{r.language ?? "—"}</td>
       <td className="hidden px-4 py-3 text-right tabular-nums 2xl:table-cell">{numberFormat.format(r.files)}</td>
       <td className="px-4 py-3 text-right tabular-nums">{numberFormat.format(r.chunks)}</td>
-      <td className="hidden px-4 py-3 font-mono text-xs text-zinc-500 2xl:table-cell dark:text-zinc-400">{r.commit ?? "—"}</td>
+      <td className="hidden px-4 py-3 font-mono text-xs text-stone-500 2xl:table-cell dark:text-stone-400">{r.commit ?? "—"}</td>
       <td className="hidden px-4 py-3 lg:table-cell">
-        <span title={formatDateTime(r.indexed_at)} className="block whitespace-nowrap text-zinc-600 dark:text-zinc-300">
+        <span title={formatDateTime(r.indexed_at)} className="block whitespace-nowrap text-stone-600 dark:text-stone-300">
           {timeAgo(r.indexed_at)}
         </span>
         {r.outdated && (
@@ -1261,8 +1261,8 @@ function RepoRow({ repo: r, live, actions, selection, onXray }: { repo: Repo; li
           className={cx(
             "sticky right-0 z-[1] px-4 py-3 shadow-[-8px_0_8px_-8px_rgb(0_0_0/0.12)]",
             checked
-              ? "bg-accent-50 group-hover:bg-accent-50 dark:bg-[color-mix(in_oklab,var(--color-accent-500)_10%,var(--color-zinc-900))] dark:group-hover:bg-[color-mix(in_oklab,var(--color-accent-500)_10%,var(--color-zinc-900))]"
-              : "bg-white group-hover:bg-zinc-50 dark:bg-zinc-900 dark:group-hover:bg-[color-mix(in_oklab,white_2%,var(--color-zinc-900))]",
+              ? "bg-accent-50 group-hover:bg-accent-50 dark:bg-[color-mix(in_oklab,var(--color-accent-500)_10%,var(--color-stone-900))] dark:group-hover:bg-[color-mix(in_oklab,var(--color-accent-500)_10%,var(--color-stone-900))]"
+              : "bg-sheet group-hover:bg-stone-50 dark:bg-stone-900 dark:group-hover:bg-[color-mix(in_oklab,white_2%,var(--color-stone-900))]",
           )}
         >
           <RepoActions repo={r} actions={actions} compact />
@@ -1290,7 +1290,7 @@ function ownerAction(actions: RowActions | null, r: Repo): (() => void) | undefi
  */
 function NoOwnerChip({ repoName, onOwn }: { repoName: string; onOwn?: () => void }) {
   const base =
-    "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap text-zinc-600 ring-1 ring-inset ring-zinc-500 dark:text-zinc-300";
+    "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap text-stone-600 ring-1 ring-inset ring-stone-500 dark:text-stone-300";
   if (!onOwn) return <span className={base}>sem domínio</span>;
   return (
     <button
@@ -1299,7 +1299,7 @@ function NoOwnerChip({ repoName, onOwn }: { repoName: string; onOwn?: () => void
       title={`Definir domínio de ${repoName}`}
       className={cx(
         base,
-        "cursor-pointer outline-none transition hover:bg-zinc-900/5 hover:text-accent-700 focus-visible:ring-2 focus-visible:ring-accent-500 dark:hover:bg-white/10 dark:hover:text-accent-300",
+        "cursor-pointer outline-none transition hover:bg-stone-900/5 hover:text-accent-700 focus-visible:ring-2 focus-visible:ring-accent-500 dark:hover:bg-white/10 dark:hover:text-accent-300",
       )}
     >
       sem domínio
@@ -1315,11 +1315,11 @@ function OwnerCell({ repo: r, onOwn }: { repo: Repo; onOwn?: () => void }) {
   const label = r.owners.join(", ");
   return (
     <div className="min-w-0 max-w-[12rem]">
-      <p className="truncate font-mono text-xs text-zinc-800 dark:text-zinc-200" title={label}>
+      <p className="truncate font-mono text-xs text-stone-800 dark:text-stone-200" title={label}>
         {label}
       </p>
       {r.owner_origin && (
-        <p className="truncate text-xs text-zinc-500 dark:text-zinc-400" title={ORIGIN_HINT[r.owner_origin]}>
+        <p className="truncate text-xs text-stone-500 dark:text-stone-400" title={ORIGIN_HINT[r.owner_origin]}>
           {ORIGIN_LABEL[r.owner_origin]}
           <ConfidenceNote value={r.owner_confidence} />
         </p>
@@ -1339,7 +1339,7 @@ function ConfidenceNote({ value }: { value: string | null }) {
     value === "baixa"
       ? "font-medium text-rose-700 dark:text-rose-300"
       : value === "media"
-        ? "text-zinc-600 dark:text-zinc-300"
+        ? "text-stone-600 dark:text-stone-300"
         : "";
   return <span className={tone}> ({label})</span>;
 }
@@ -1370,7 +1370,7 @@ function RepoStatus({ repo: r, live }: { repo: Repo; live?: RepoProgress }) {
       {live.status === "indexing" && live.files_total !== null && live.files_total > 0 && (
         <>
           <ProgressBar value={live.files_done} max={live.files_total} label={`Arquivos de ${repoShortName(r.name, r.org)}`} />
-          <p className="text-xs text-zinc-500 tabular-nums dark:text-zinc-400">
+          <p className="text-xs text-stone-500 tabular-nums dark:text-stone-400">
             {numberFormat.format(live.files_done)}/{numberFormat.format(live.files_total)} arquivos
           </p>
         </>
@@ -1396,9 +1396,9 @@ function RepoCard({ repo: r, live, actions, selection, onXray }: { repo: Repo; l
           </label>
         )}
         <div className="min-w-0 flex-1">
-          <p className="truncate font-medium text-zinc-900 dark:text-zinc-100" title={r.name}>
+          <p className="truncate font-medium text-stone-900 dark:text-stone-100" title={r.name}>
             {repoShortName(r.name, r.org)}
-            {!r.org && <span className="ml-2 text-xs font-normal text-zinc-500 dark:text-zinc-400">avulso</span>}
+            {!r.org && <span className="ml-2 text-xs font-normal text-stone-500 dark:text-stone-400">avulso</span>}
           </p>
           <RepoSummary repo={r} />
           <RepoLinks repo={r} onXray={onXray} />
@@ -1416,33 +1416,33 @@ function RepoCard({ repo: r, live, actions, selection, onXray }: { repo: Repo; l
       {r.error && <RepoError message={r.error} />}
       <dl className="grid grid-cols-3 gap-2 text-xs">
         <div>
-          <dt className="text-zinc-500 dark:text-zinc-400">Linguagem</dt>
+          <dt className="text-stone-500 dark:text-stone-400">Linguagem</dt>
           <dd className="truncate font-medium">{r.language ?? "—"}</dd>
         </div>
         <div>
-          <dt className="text-zinc-500 dark:text-zinc-400">Arquivos</dt>
+          <dt className="text-stone-500 dark:text-stone-400">Arquivos</dt>
           <dd className="font-medium tabular-nums">{numberFormat.format(r.files)}</dd>
         </div>
         <div>
-          <dt className="text-zinc-500 dark:text-zinc-400">Trechos</dt>
+          <dt className="text-stone-500 dark:text-stone-400">Trechos</dt>
           <dd className="font-medium tabular-nums">{numberFormat.format(r.chunks)}</dd>
         </div>
       </dl>
       <div className="text-xs">
-        <span className="text-zinc-500 dark:text-zinc-400">Domínio </span>
+        <span className="text-stone-500 dark:text-stone-400">Domínio </span>
         {r.owners.length ? (
-          <span className="font-mono text-zinc-800 dark:text-zinc-200">{r.owners.join(", ")}</span>
+          <span className="font-mono text-stone-800 dark:text-stone-200">{r.owners.join(", ")}</span>
         ) : (
           <NoOwnerChip repoName={repoShortName(r.name, r.org)} onOwn={ownerAction(actions, r)} />
         )}
         {r.owner_origin && (
-          <span className="text-zinc-500 dark:text-zinc-400">
+          <span className="text-stone-500 dark:text-stone-400">
             {" "}· {ORIGIN_LABEL[r.owner_origin]}
             <ConfidenceNote value={r.owner_confidence} />
           </span>
         )}
       </div>
-      <p className="text-xs text-zinc-500 dark:text-zinc-400">
+      <p className="text-xs text-stone-500 dark:text-stone-400">
         Indexado {timeAgo(r.indexed_at)}
         {r.outdated && <> · <span className="text-amber-700 dark:text-amber-300">novo push</span></>}
       </p>
@@ -1478,7 +1478,7 @@ function RepoError({ message }: { message: string }) {
 }
 
 const repoLinkClass =
-  "-my-1 inline-flex items-center gap-1 rounded-md py-1 text-xs font-medium text-zinc-500 underline-offset-2 outline-none transition hover:text-accent-600 hover:underline focus-visible:text-accent-600 focus-visible:underline focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:text-zinc-400 dark:hover:text-accent-400 dark:focus-visible:ring-offset-zinc-900";
+  "-my-1 inline-flex items-center gap-1 rounded-md py-1 text-xs font-medium text-stone-500 underline-offset-2 outline-none transition hover:text-accent-600 hover:underline focus-visible:text-accent-600 focus-visible:underline focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:text-stone-400 dark:hover:text-accent-400 dark:focus-visible:ring-offset-stone-900";
 
 /** Atalhos do repo: documentação ligada, cartão e Raio X. */
 function RepoLinks({ repo, onXray }: { repo: Repo; onXray: (target: XrayTarget) => void }) {
@@ -1500,7 +1500,7 @@ function RepoLinks({ repo, onXray }: { repo: Repo; onXray: (target: XrayTarget) 
 function RepoSummary({ repo }: { repo: Repo }) {
   if (!repo.summary) return null;
   return (
-    <p className="mt-0.5 line-clamp-2 max-w-md text-xs text-zinc-600 dark:text-zinc-300" title={repo.summary}>
+    <p className="mt-0.5 line-clamp-2 max-w-md text-xs text-stone-600 dark:text-stone-300" title={repo.summary}>
       {repo.summary}
     </p>
   );
@@ -1520,7 +1520,7 @@ function RepoCardButton({ repo }: { repo: Repo }) {
         <IdCard className="size-3.5" aria-hidden="true" />
         Cartão
         {repo.card_stale && (
-          <span className="font-normal text-zinc-600 dark:text-zinc-300" title="O repositório mudou desde que o cartão foi escrito">
+          <span className="font-normal text-stone-600 dark:text-stone-300" title="O repositório mudou desde que o cartão foi escrito">
             desatualizado
           </span>
         )}

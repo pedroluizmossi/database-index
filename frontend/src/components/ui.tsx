@@ -16,9 +16,9 @@ const BUTTON_VARIANT: Record<ButtonVariant, string> = {
   primary:
     "bg-accent-600 text-white shadow-sm shadow-accent-950/20 hover:bg-accent-700 dark:hover:bg-accent-500",
   secondary:
-    "border border-zinc-200 bg-white text-zinc-800 shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700",
+    "border border-stone-200 bg-sheet text-stone-800 shadow-sm hover:bg-stone-50 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-100 dark:hover:bg-stone-700",
   danger: "bg-rose-600 text-white shadow-sm shadow-rose-950/20 hover:bg-rose-700 dark:hover:bg-rose-500",
-  ghost: "text-zinc-600 hover:bg-zinc-900/5 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-white/10 dark:hover:text-white",
+  ghost: "text-stone-600 hover:bg-stone-900/5 hover:text-stone-900 dark:text-stone-300 dark:hover:bg-white/10 dark:hover:text-white",
 };
 
 const BUTTON_SIZE = {
@@ -75,10 +75,10 @@ export function IconButton({
       onClick={onClick}
       disabled={disabled}
       className={cx(
-        "inline-flex size-8 shrink-0 items-center justify-center rounded-lg text-zinc-500 transition outline-none focus-visible:ring-2 focus-visible:ring-accent-500 dark:text-zinc-400",
+        "inline-flex size-8 shrink-0 items-center justify-center rounded-lg text-stone-500 transition outline-none focus-visible:ring-2 focus-visible:ring-accent-500 dark:text-stone-400",
         disabled
           ? "cursor-not-allowed opacity-40"
-          : "hover:bg-zinc-900/5 hover:text-zinc-900 dark:hover:bg-white/10 dark:hover:text-white",
+          : "hover:bg-stone-900/5 hover:text-stone-900 dark:hover:bg-white/10 dark:hover:text-white",
         className,
       )}
     >
@@ -91,20 +91,20 @@ export type BadgeTone = "indexed" | "pending" | "error" | "ignored" | "warning" 
 
 const BADGE_TONE: Record<BadgeTone, string> = {
   indexed: "bg-emerald-500/10 text-emerald-700 ring-emerald-600/20 dark:text-emerald-400",
-  pending: "bg-zinc-500/5 text-zinc-700 ring-zinc-400/40 dark:text-zinc-300 dark:ring-zinc-600",
+  pending: "bg-stone-500/5 text-stone-700 ring-stone-400/40 dark:text-stone-300 dark:ring-stone-600",
   error: "bg-rose-500/10 text-rose-700 ring-rose-600/20 dark:text-rose-300",
-  ignored: "bg-transparent text-zinc-500 ring-zinc-300 dark:text-zinc-400 dark:ring-zinc-700",
+  ignored: "bg-transparent text-stone-500 ring-stone-300 dark:text-stone-400 dark:ring-stone-700",
   warning: "bg-amber-500/10 text-amber-700 ring-amber-600/20 dark:text-amber-300",
-  neutral: "bg-zinc-500/10 text-zinc-700 ring-zinc-500/20 dark:text-zinc-300",
+  neutral: "bg-stone-500/10 text-stone-700 ring-stone-500/20 dark:text-stone-300",
   accent: "bg-accent-500/10 text-accent-700 ring-accent-600/20 dark:text-accent-300",
 };
 
 const DOT_TONE: Partial<Record<BadgeTone, string>> = {
   indexed: "bg-emerald-500",
   // Pendente é ausência de índice, não um estado com cor: anel vazio.
-  pending: "border-[1.5px] border-zinc-500 dark:border-zinc-500",
+  pending: "border-[1.5px] border-stone-500 dark:border-stone-500",
   error: "bg-rose-500",
-  ignored: "bg-zinc-300 dark:bg-zinc-600",
+  ignored: "bg-stone-300 dark:bg-stone-600",
 };
 
 export function Badge({
@@ -138,7 +138,7 @@ export function Kbd({ className, children }: { className?: string; children: Rea
     <kbd
       aria-hidden="true"
       className={cx(
-        "inline-flex h-6 min-w-6 items-center justify-center rounded-md border border-zinc-200 bg-zinc-50 px-1.5 font-mono text-[11px] text-zinc-500 shadow-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-400",
+        "inline-flex h-6 min-w-6 items-center justify-center rounded-md border border-stone-200 bg-stone-50 px-1.5 font-mono text-[11px] text-stone-500 shadow-sm dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400",
         className,
       )}
     >
@@ -151,7 +151,7 @@ export function Panel({ className, children }: { className?: string; children: R
   return (
     <div
       className={cx(
-        "rounded-xl border border-zinc-200 bg-white shadow-[0_1px_2px_0_rgb(24_24_27/0.04)] dark:border-zinc-800 dark:bg-zinc-900",
+        "rounded-xl border border-stone-200 bg-sheet/85 backdrop-blur-md dark:border-stone-800 dark:bg-stone-900/80",
         className,
       )}
     >
@@ -204,7 +204,7 @@ export function Segmented<T extends string>({
     <div
       role="radiogroup"
       aria-label={label}
-      className="inline-flex max-w-full flex-wrap gap-1 rounded-xl bg-zinc-900/5 p-1 dark:bg-white/5"
+      className="inline-flex max-w-full flex-wrap gap-1 rounded-xl bg-stone-900/5 p-1 dark:bg-white/5"
     >
       {options.map((option, index) => {
         const active = option.value === value;
@@ -227,8 +227,8 @@ export function Segmented<T extends string>({
             className={cx(
               "h-8 rounded-lg px-3 text-xs font-medium whitespace-nowrap transition outline-none focus-visible:ring-2 focus-visible:ring-accent-500",
               active
-                ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-800 dark:text-white"
-                : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-white",
+                ? "bg-sheet text-stone-900 shadow-sm dark:bg-stone-800 dark:text-white"
+                : "text-stone-600 hover:text-stone-900 dark:text-stone-300 dark:hover:text-white",
             )}
           >
             {option.label}
@@ -257,7 +257,7 @@ export function Switch({
       onClick={() => onChange(!checked)}
       className={cx(
         "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition duration-200",
-        checked ? "bg-accent-600" : "bg-zinc-300 dark:bg-zinc-700",
+        checked ? "bg-accent-600" : "bg-stone-300 dark:bg-stone-700",
       )}
     >
       <span
@@ -270,14 +270,19 @@ export function Switch({
   );
 }
 
+/** Cabeçalho de tabela no estilo de etiqueta de espécime: mono pequeno, maiúsculas e espaçado (também nos botões de
+ *  ordenação, que o preflight do Tailwind deixa sem `text-transform`). */
+export const tableHeadClass =
+  "border-b border-stone-200 bg-stone-50 text-left font-mono text-[10px] tracking-[0.14em] text-stone-500 uppercase dark:border-stone-800 dark:bg-stone-900/60 dark:text-stone-400 [&_button]:uppercase";
+
 /** Classes dos campos de texto e seleção. */
 export const inputClass =
-  "h-10 w-full rounded-xl border border-zinc-200 bg-white px-3 text-sm text-zinc-900 shadow-sm outline-none transition placeholder:text-zinc-500 dark:placeholder:text-zinc-400 hover:border-zinc-300 focus:border-accent-500 focus:ring-4 focus:ring-accent-500/15 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:border-zinc-600";
+  "h-10 w-full rounded-xl border border-stone-200 bg-sheet px-3 text-sm text-stone-900 shadow-sm outline-none transition placeholder:text-stone-500 dark:placeholder:text-stone-400 hover:border-stone-300 focus:border-accent-500 focus:ring-4 focus:ring-accent-500/15 dark:border-stone-700 dark:bg-stone-900 dark:text-stone-100 dark:hover:border-stone-600";
 
 export function Field({ label, className, children }: { label: string; className?: string; children: ReactNode }) {
   return (
     <label className={cx("flex min-w-0 flex-col gap-1.5", className)}>
-      <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">{label}</span>
+      <span className="text-xs font-medium text-stone-500 dark:text-stone-400">{label}</span>
       {children}
     </label>
   );
@@ -305,14 +310,14 @@ export function Select({
       >
         {children}
       </select>
-      <ChevronDown className="pointer-events-none absolute top-1/2 right-3 size-4 -translate-y-1/2 text-zinc-500 dark:text-zinc-400" aria-hidden="true" />
+      <ChevronDown className="pointer-events-none absolute top-1/2 right-3 size-4 -translate-y-1/2 text-stone-500 dark:text-stone-400" aria-hidden="true" />
     </div>
   );
 }
 
 const ALERT_TONE = {
   error: "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/40 dark:text-rose-300",
-  info: "border-zinc-200 bg-zinc-50 text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300",
+  info: "border-stone-200 bg-stone-50 text-stone-700 dark:border-stone-800 dark:bg-stone-900 dark:text-stone-300",
 } as const;
 
 /** Aviso em linha. `error` é falha; `info` é um estado normal que pede atenção (ex.: nada indexado ainda). */
@@ -352,7 +357,7 @@ export function ProgressBar({
       aria-valuemin={0}
       aria-valuemax={max ?? undefined}
       aria-valuenow={max ? value : undefined}
-      className={cx("h-1.5 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800", className)}
+      className={cx("h-1.5 overflow-hidden rounded-full bg-stone-200 dark:bg-stone-800", className)}
     >
       <div className={cx("h-full rounded-full transition-[width] duration-700 ease-out", fill)} style={{ width: `${percent}%` }} />
     </div>
@@ -369,7 +374,7 @@ export function Skeleton({ className, style }: { className?: string; style?: CSS
       aria-hidden="true"
       style={style}
       className={cx(
-        "rounded-md bg-[length:200%_100%] bg-linear-to-r from-zinc-200 via-zinc-100 to-zinc-200 animate-shimmer dark:from-zinc-800 dark:via-zinc-700 dark:to-zinc-800",
+        "rounded-md bg-[length:200%_100%] bg-linear-to-r from-stone-200 via-stone-100 to-stone-200 animate-shimmer dark:from-stone-800 dark:via-stone-700 dark:to-stone-800",
         className,
       )}
     />
@@ -388,15 +393,47 @@ export function EmptyState({
   action?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-3 px-6 py-14 text-center">
-      <div className="flex size-12 items-center justify-center rounded-xl bg-zinc-900/5 text-zinc-500 dark:bg-white/5 dark:text-zinc-400">
-        <Icon className="size-6" aria-hidden="true" />
-      </div>
+    <div className="flex flex-col items-center justify-center gap-4 px-6 py-14 text-center">
+      <Constellation icon={Icon} />
       <div className="max-w-md">
-        <p className="font-medium">{title}</p>
-        {text && <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">{text}</p>}
+        <p className="font-serif text-xl italic">{title}</p>
+        {text && <p className="mt-1.5 text-sm text-stone-500 dark:text-stone-400">{text}</p>}
       </div>
       {action}
+    </div>
+  );
+}
+
+/** Pontos e fios ao redor de um anel vazio, no traço do mapa do Raio X: o lugar onde algo estaria. */
+const STARS: [number, number, number][] = [
+  [16, 22, 1.6],
+  [32, 60, 1.4],
+  [112, 12, 1.8],
+  [128, 48, 1.4],
+  [98, 64, 1.6],
+  [52, 8, 1.1],
+];
+
+function Constellation({ icon: Icon }: { icon: LucideIcon }) {
+  return (
+    <div className="relative h-[72px] w-[144px] animate-fade-in" aria-hidden="true">
+      <svg viewBox="0 0 144 72" className="absolute inset-0 size-full overflow-visible">
+        <g className="stroke-stone-300 dark:stroke-stone-700" fill="none" strokeWidth={0.6}>
+          <circle cx={72} cy={36} r={29} strokeDasharray="1 3" />
+          {STARS.map(([x, y]) => (
+            <line key={`${x}-${y}`} x1={72} y1={36} x2={x} y2={y} strokeDasharray={x < 40 ? "3 3" : undefined} />
+          ))}
+          <line x1={112} y1={12} x2={128} y2={48} />
+          <line x1={16} y1={22} x2={32} y2={60} strokeDasharray="1 3" />
+        </g>
+        <g className="fill-stone-400 dark:fill-stone-500">
+          {STARS.map(([x, y, r]) => (
+            <circle key={`${x}-${y}`} cx={x} cy={y} r={r} />
+          ))}
+        </g>
+        <circle cx={72} cy={36} r={17} className="fill-sheet stroke-stone-400 dark:fill-stone-900 dark:stroke-stone-500" strokeWidth={0.8} />
+      </svg>
+      <Icon className="absolute top-1/2 left-1/2 size-4.5 -translate-x-1/2 -translate-y-1/2 text-stone-500 dark:text-stone-400" />
     </div>
   );
 }

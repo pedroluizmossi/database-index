@@ -50,19 +50,19 @@ export function Dialog({ open, onClose, title, description, children, footer, si
       aria-labelledby={titleId}
       aria-describedby={description ? descriptionId : undefined}
       className={cx(
-        "m-auto w-[calc(100%-2rem)] rounded-xl border border-zinc-200 bg-white p-0 text-zinc-900 outline-none shadow-[0_24px_48px_-12px_rgb(0_0_0/0.25)] backdrop:bg-ink-950/50 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100 dark:backdrop:bg-black/60",
+        "m-auto w-[calc(100%-2rem)] animate-pop rounded-xl border border-stone-200 bg-sheet p-0 text-stone-900 outline-none shadow-[0_24px_48px_-12px_rgb(0_0_0/0.25)] backdrop:animate-fade-in backdrop:bg-ink-950/40 backdrop:backdrop-blur-[3px] dark:border-stone-800 dark:bg-stone-900 dark:text-stone-100 dark:backdrop:bg-black/55",
         size === "md" ? "max-w-md" : size === "lg" ? "max-w-2xl" : "max-w-5xl",
       )}
     >
       {open && (
         <div className="flex max-h-[85dvh] flex-col">
-          <header className="flex items-start gap-3 border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
+          <header className="flex items-start gap-3 border-b border-stone-200 px-5 py-4 dark:border-stone-800">
             <div className="min-w-0 flex-1">
               <h2 id={titleId} className="text-base font-semibold">
                 {title}
               </h2>
               {description && (
-                <p id={descriptionId} className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+                <p id={descriptionId} className="mt-1 text-sm text-stone-500 dark:text-stone-400">
                   {description}
                 </p>
               )}
@@ -75,7 +75,7 @@ export function Dialog({ open, onClose, title, description, children, footer, si
             {children}
           </div>
           {footer && (
-            <footer className="flex flex-wrap items-center justify-end gap-2 border-t border-zinc-200 px-5 py-3 dark:border-zinc-800">
+            <footer className="flex flex-wrap items-center justify-end gap-2 border-t border-stone-200 px-5 py-3 dark:border-stone-800">
               {footer}
             </footer>
           )}

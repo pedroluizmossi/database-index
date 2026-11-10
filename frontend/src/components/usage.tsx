@@ -2,7 +2,7 @@ import { useState, type ReactNode } from "react";
 import { TriangleAlert, type LucideIcon } from "lucide-react";
 import type { UsageAction, UsageChannel, UsageDay, UsageQuery } from "../api/types";
 import { cx, formatDateTime, timeAgo } from "../lib/utils";
-import { Panel, Segmented } from "./ui";
+import { Panel, Segmented, tableHeadClass } from "./ui";
 
 /* Peças do painel de uso (aba "Uso", aba "Usuários" e "Meu uso" nas configurações).
    Gráficos desenhados com divs, sem biblioteca. Cores dos canais: três primeiras posições da paleta
@@ -58,7 +58,7 @@ export const CHANNELS: Record<UsageChannel, { label: string; hint: string; swatc
 export const CHANNEL_ORDER: UsageChannel[] = ["mcp", "api", "ui"];
 
 function channelMeta(channel: string) {
-  return CHANNELS[channel as UsageChannel] ?? { label: channel, hint: channel, swatch: "bg-zinc-400 dark:bg-zinc-500" };
+  return CHANNELS[channel as UsageChannel] ?? { label: channel, hint: channel, swatch: "bg-stone-400 dark:bg-stone-500" };
 }
 
 /** Canal com a mesma marca de cor do gráfico: a cor identifica, o texto diz qual é. */
@@ -67,7 +67,7 @@ export function ChannelBadge({ channel }: { channel: string }) {
   return (
     <span
       title={meta.hint}
-      className="inline-flex items-center gap-1.5 rounded-full bg-zinc-500/10 px-2 py-0.5 text-xs font-medium whitespace-nowrap text-zinc-700 ring-1 ring-zinc-500/20 ring-inset dark:text-zinc-300"
+      className="inline-flex items-center gap-1.5 rounded-full bg-stone-500/10 px-2 py-0.5 text-xs font-medium whitespace-nowrap text-stone-700 ring-1 ring-stone-500/20 ring-inset dark:text-stone-300"
     >
       <span className={cx("size-2 rounded-sm", meta.swatch)} aria-hidden="true" />
       {meta.label}
@@ -102,12 +102,12 @@ export function StatTile({
 }) {
   return (
     <Panel className="px-4 py-3.5">
-      <p className="flex items-center gap-1.5 text-xs font-medium text-zinc-500 dark:text-zinc-400">
-        <Icon className={cx("size-3.5", tone === "warning" ? "text-amber-600 dark:text-amber-400" : "text-zinc-400 dark:text-zinc-500")} aria-hidden="true" />
+      <p className="flex items-center gap-1.5 text-xs font-medium text-stone-500 dark:text-stone-400">
+        <Icon className={cx("size-3.5", tone === "warning" ? "text-amber-600 dark:text-amber-400" : "text-stone-400 dark:text-stone-500")} aria-hidden="true" />
         {label}
       </p>
       <p className="mt-1.5 text-2xl font-semibold tracking-tight tabular-nums">{value}</p>
-      {hint && <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">{hint}</p>}
+      {hint && <p className="mt-0.5 text-xs text-stone-500 dark:text-stone-400">{hint}</p>}
     </Panel>
   );
 }
@@ -118,7 +118,7 @@ export function Section({ title, subtitle, actions, children }: { title: string;
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h2 className="text-base font-semibold tracking-tight">{title}</h2>
-          {subtitle && <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">{subtitle}</p>}
+          {subtitle && <p className="mt-0.5 text-xs text-stone-500 dark:text-stone-400">{subtitle}</p>}
         </div>
         {actions}
       </div>
@@ -128,10 +128,8 @@ export function Section({ title, subtitle, actions, children }: { title: string;
 }
 
 export const thClass = "px-3 py-2.5 font-medium whitespace-nowrap";
-export const theadClass =
-  "border-b border-zinc-200 bg-zinc-50 text-left text-xs text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-400";
-export const tbodyClass = "divide-y divide-zinc-100 dark:divide-zinc-800";
-export const rowClass = "transition-colors hover:bg-zinc-50 dark:hover:bg-white/[0.02]";
+export const tbodyClass = "divide-y divide-stone-100 dark:divide-stone-800";
+export const rowClass = "transition-colors hover:bg-stone-50 dark:hover:bg-white/[0.02]";
 export const numClass = "px-3 py-2.5 text-right tabular-nums whitespace-nowrap";
 const numSmClass = "px-3 py-1.5 text-right tabular-nums whitespace-nowrap";
 
@@ -151,7 +149,7 @@ export function DailyChart({ daily }: { daily: UsageDay[] }) {
   return (
     <div>
       {/* Legenda: sempre presente; a cor nunca é a única pista (o detalhe e a tabela dizem o canal). */}
-      <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-zinc-600 dark:text-zinc-300">
+      <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-stone-600 dark:text-stone-300">
         {CHANNEL_ORDER.map((c) => (
           <span key={c} className="inline-flex items-center gap-1.5">
             <span className={cx("size-2.5 rounded-sm", CHANNELS[c].swatch)} aria-hidden="true" />
@@ -170,8 +168,8 @@ export function DailyChart({ daily }: { daily: UsageDay[] }) {
         {/* Eixo e grade discretos: só o máximo e a metade. */}
         <div className="pointer-events-none absolute inset-y-0 left-0 w-full" style={{ height: CHART_HEIGHT }} aria-hidden="true">
           {[1, 0.5].map((f) => (
-            <div key={f} className="absolute right-0 left-10 border-t border-dashed border-zinc-200 dark:border-zinc-800" style={{ top: CHART_HEIGHT * (1 - f) }}>
-              <span className="absolute -top-2 -left-10 w-8 text-right text-[10px] text-zinc-400 tabular-nums dark:text-zinc-500">
+            <div key={f} className="absolute right-0 left-10 border-t border-dashed border-stone-200 dark:border-stone-800" style={{ top: CHART_HEIGHT * (1 - f) }}>
+              <span className="absolute -top-2 -left-10 w-8 text-right text-[10px] text-stone-400 tabular-nums dark:text-stone-500">
                 {fmtCompact(Math.round(max * f))}
               </span>
             </div>
@@ -181,7 +179,7 @@ export function DailyChart({ daily }: { daily: UsageDay[] }) {
         <div
           role="img"
           aria-label={`Chamadas por dia nos últimos ${daily.length} dias; máximo de ${fmtInt(max)} num dia.`}
-          className="relative flex items-end gap-px border-b border-zinc-300 dark:border-zinc-700"
+          className="relative flex items-end gap-px border-b border-stone-300 dark:border-stone-700"
           style={{ height: CHART_HEIGHT }}
           onMouseLeave={() => setActive(null)}
         >
@@ -197,7 +195,7 @@ export function DailyChart({ daily }: { daily: UsageDay[] }) {
                 onBlur={() => setActive(null)}
                 className={cx(
                   "group flex h-full min-w-0 flex-1 flex-col-reverse gap-[2px] rounded-t outline-none focus-visible:bg-accent-500/10",
-                  active === i && "bg-zinc-900/[0.04] dark:bg-white/[0.04]",
+                  active === i && "bg-stone-900/[0.04] dark:bg-white/[0.04]",
                 )}
               >
                 {CHANNEL_ORDER.map((c, ci) => {
@@ -226,7 +224,7 @@ export function DailyChart({ daily }: { daily: UsageDay[] }) {
           </div>
         )}
 
-        <div className="relative mt-1.5 h-4 text-[10px] text-zinc-400 tabular-nums dark:text-zinc-500" aria-hidden="true">
+        <div className="relative mt-1.5 h-4 text-[10px] text-stone-400 tabular-nums dark:text-stone-500" aria-hidden="true">
           {ticks.map((t, k) => (
             <span
               key={t}
@@ -239,35 +237,35 @@ export function DailyChart({ daily }: { daily: UsageDay[] }) {
         </div>
 
         {/* Detalhe do dia: faixa fixa abaixo do gráfico, sem cobrir as barras. */}
-        <div className="mt-2 min-h-[2.75rem] rounded-lg bg-zinc-50 px-3 py-2 text-xs dark:bg-white/[0.03]" aria-live="polite">
+        <div className="mt-2 min-h-[2.75rem] rounded-lg bg-stone-50 px-3 py-2 text-xs dark:bg-white/[0.03]" aria-live="polite">
           {focus ? (
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-              <span className="font-medium text-zinc-900 dark:text-zinc-100">{fmtDay(focus.day, true)}</span>
+              <span className="font-medium text-stone-900 dark:text-stone-100">{fmtDay(focus.day, true)}</span>
               {CHANNEL_ORDER.map((c) => (
-                <span key={c} className="inline-flex items-center gap-1.5 text-zinc-600 dark:text-zinc-300">
+                <span key={c} className="inline-flex items-center gap-1.5 text-stone-600 dark:text-stone-300">
                   <span className={cx("size-2 rounded-sm", CHANNELS[c].swatch)} aria-hidden="true" />
-                  {CHANNELS[c].label} <span className="font-medium tabular-nums text-zinc-900 dark:text-zinc-100">{fmtInt(focus[c])}</span>
+                  {CHANNELS[c].label} <span className="font-medium tabular-nums text-stone-900 dark:text-stone-100">{fmtInt(focus[c])}</span>
                 </span>
               ))}
-              <span className={cx("inline-flex items-center gap-1", focus.errors > 0 ? "text-rose-700 dark:text-rose-300" : "text-zinc-500 dark:text-zinc-400")}>
+              <span className={cx("inline-flex items-center gap-1", focus.errors > 0 ? "text-rose-700 dark:text-rose-300" : "text-stone-500 dark:text-stone-400")}>
                 {focus.errors > 0 && <TriangleAlert className="size-3" aria-hidden="true" />}
                 {fmtInt(focus.errors)} {focus.errors === 1 ? "erro" : "erros"}
               </span>
-              <span className="text-zinc-500 dark:text-zinc-400">{fmtInt(focus.users)} {focus.users === 1 ? "usuário" : "usuários"}</span>
-              <span className="text-zinc-500 dark:text-zinc-400">{fmtUsd(focus.cost_usd)}</span>
+              <span className="text-stone-500 dark:text-stone-400">{fmtInt(focus.users)} {focus.users === 1 ? "usuário" : "usuários"}</span>
+              <span className="text-stone-500 dark:text-stone-400">{fmtUsd(focus.cost_usd)}</span>
             </div>
           ) : (
-            <span className="text-zinc-500 dark:text-zinc-400">Passe o mouse sobre um dia para ver o detalhe.</span>
+            <span className="text-stone-500 dark:text-stone-400">Passe o mouse sobre um dia para ver o detalhe.</span>
           )}
         </div>
       </div>
 
       {/* Visão em tabela, para leitor de tela e para conferir números. */}
       <details className="mt-3 text-xs">
-        <summary className="cursor-pointer text-zinc-500 select-none hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white">Ver como tabela</summary>
-        <div className="mt-2 max-h-72 overflow-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
+        <summary className="cursor-pointer text-stone-500 select-none hover:text-stone-900 dark:text-stone-400 dark:hover:text-white">Ver como tabela</summary>
+        <div className="mt-2 max-h-72 overflow-auto rounded-lg border border-stone-200 dark:border-stone-800">
           <table className="w-full text-xs">
-            <thead className={theadClass}>
+            <thead className={tableHeadClass}>
               <tr>
                 <th className={thClass}>Dia</th>
                 <th className={cx(thClass, "text-right")}>MCP</th>
@@ -312,7 +310,7 @@ export function ActionTable({ rows, compact = false }: { rows: UsageAction[]; co
       <Panel className="overflow-hidden">
         <div className="overflow-x-auto">
           <table className={cx("w-full text-sm", compact ? "min-w-[640px]" : "min-w-[1100px]")}>
-            <thead className={theadClass}>
+            <thead className={tableHeadClass}>
               <tr>
                 <th className={thClass}>Canal</th>
                 <th className={thClass}>Tool / rota</th>
@@ -331,7 +329,7 @@ export function ActionTable({ rows, compact = false }: { rows: UsageAction[]; co
             <tbody className={tbodyClass}>
               {shown.length === 0 && (
                 <tr>
-                  <td colSpan={12} className="px-4 py-8 text-center text-sm text-zinc-500 dark:text-zinc-400">
+                  <td colSpan={12} className="px-4 py-8 text-center text-sm text-stone-500 dark:text-stone-400">
                     Nada nesse canal no período.
                   </td>
                 </tr>
@@ -348,7 +346,7 @@ export function ActionTable({ rows, compact = false }: { rows: UsageAction[]; co
                   </td>
                   <td className={numClass}>
                     <div className="flex items-center justify-end gap-2">
-                      <span className="hidden h-1.5 w-16 overflow-hidden rounded-full bg-zinc-100 sm:block dark:bg-zinc-800" aria-hidden="true">
+                      <span className="hidden h-1.5 w-16 overflow-hidden rounded-full bg-stone-100 sm:block dark:bg-stone-800" aria-hidden="true">
                         <span className={cx("block h-full rounded-full", channelMeta(r.channel).swatch)} style={{ width: `${(r.calls / maxCalls) * 100}%` }} />
                       </span>
                       {fmtInt(r.calls)}
@@ -358,7 +356,7 @@ export function ActionTable({ rows, compact = false }: { rows: UsageAction[]; co
                     {r.errors > 0 ? `${fmtInt(r.errors)} (${fmtPct(r.errors, r.calls)})` : "0"}
                   </td>
                   {!compact && <td className={numClass}>{fmtInt(r.users)}</td>}
-                  <td className={cx(numClass, "text-zinc-600 dark:text-zinc-300")}>
+                  <td className={cx(numClass, "text-stone-600 dark:text-stone-300")}>
                     {fmtMs(r.p50_ms)} / {fmtMs(r.p95_ms)}
                   </td>
                   {!compact && <td className={numClass}>{fmtDec(r.avg_results)}</td>}
@@ -386,24 +384,24 @@ export function ActionTable({ rows, compact = false }: { rows: UsageAction[]; co
 export function QueryList({ title, subtitle, rows, empty, tone = "neutral" }: { title: string; subtitle: string; rows: UsageQuery[]; empty: string; tone?: "neutral" | "warning" }) {
   return (
     <Panel className="flex flex-col overflow-hidden">
-      <div className="border-b border-zinc-100 px-4 py-3 dark:border-zinc-800">
+      <div className="border-b border-stone-100 px-4 py-3 dark:border-stone-800">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold">
           {tone === "warning" && <TriangleAlert className="size-3.5 text-amber-600 dark:text-amber-400" aria-hidden="true" />}
           {title}
         </h3>
-        <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">{subtitle}</p>
+        <p className="mt-0.5 text-xs text-stone-500 dark:text-stone-400">{subtitle}</p>
       </div>
       {rows.length === 0 ? (
-        <p className="px-4 py-8 text-center text-sm text-zinc-500 dark:text-zinc-400">{empty}</p>
+        <p className="px-4 py-8 text-center text-sm text-stone-500 dark:text-stone-400">{empty}</p>
       ) : (
-        <ol className="max-h-96 divide-y divide-zinc-100 overflow-y-auto dark:divide-zinc-800">
+        <ol className="max-h-96 divide-y divide-stone-100 overflow-y-auto dark:divide-stone-800">
           {rows.map((q) => (
             <li key={`${q.action}:${q.query}`} className="flex items-start gap-3 px-4 py-2.5">
               <div className="min-w-0 flex-1">
-                <p className="truncate font-mono text-xs text-zinc-900 dark:text-zinc-100" title={q.query}>
+                <p className="truncate font-mono text-xs text-stone-900 dark:text-stone-100" title={q.query}>
                   {q.query}
                 </p>
-                <p className="mt-0.5 truncate text-[11px] text-zinc-500 dark:text-zinc-400">
+                <p className="mt-0.5 truncate text-[11px] text-stone-500 dark:text-stone-400">
                   {q.action} · {fmtInt(q.users)} {q.users === 1 ? "usuário" : "usuários"}
                   {q.avg_results !== null && ` · média ${fmtDec(q.avg_results)} result.`} · <span title={formatDateTime(q.last_at)}>{timeAgo(q.last_at)}</span>
                 </p>

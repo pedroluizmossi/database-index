@@ -8,6 +8,7 @@ import { formatDateTime, plural, repoShortName, timeAgo } from "../lib/utils";
 import { useToast } from "./Toaster";
 import { Dialog } from "./Dialog";
 import { Alert, Badge, Button, Field, Skeleton, inputClass } from "./ui";
+import { KindIcon } from "./kind";
 
 interface SyncDialogProps {
   open: boolean;
@@ -51,7 +52,7 @@ function DocsPreviewBlock({ name }: { name: string }) {
   if (!data) return <Skeleton className="h-24 w-full" />;
 
   return (
-    <section className="space-y-3 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+    <section className="space-y-3 rounded-xl border border-stone-200 p-3 dark:border-stone-800">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <p className="text-sm font-medium">
           {numberFormat.format(data.total)} {plural(data.total, "página", "páginas")} em {data.roots.length} {plural(data.roots.length, "raiz", "raízes")}
@@ -67,16 +68,16 @@ function DocsPreviewBlock({ name }: { name: string }) {
           </Badge>
         ))}
       </div>
-      <ul className="max-h-[30dvh] divide-y divide-zinc-100 overflow-y-auto rounded-lg border border-zinc-100 dark:divide-zinc-800 dark:border-zinc-800">
+      <ul className="max-h-[30dvh] divide-y divide-stone-100 overflow-y-auto rounded-lg border border-stone-100 dark:divide-stone-800 dark:border-stone-800">
         {data.pages.map((p) => (
           <li key={p.path} className="px-2.5 py-2">
             <p className="truncate text-sm" title={p.title}>{p.title}</p>
-            <p className="truncate font-mono text-xs text-zinc-500 dark:text-zinc-400">{p.path}</p>
+            <p className="truncate font-mono text-xs text-stone-500 dark:text-stone-400">{p.path}</p>
           </li>
         ))}
       </ul>
       {data.truncated && (
-        <p className="text-xs text-zinc-500 dark:text-zinc-400">
+        <p className="text-xs text-stone-500 dark:text-stone-400">
           Mostrando {numberFormat.format(data.pages.length)} de {numberFormat.format(data.total)} (o restante entra normalmente na indexação).
         </p>
       )}
@@ -88,6 +89,14 @@ function plan(repo: Repo | undefined): { label: string; tone: "accent" | "neutra
   if (!repo || repo.chunks === 0) {
     const what = repo?.kind === "docs" ? "as páginas selecionadas" : "todo o código (após os filtros)";
     return { label: "1ª indexação", tone: "accent", hint: `${what} vai para a Voyage` };
+  }
+  if (repo.kind === "docs") {
+    // A fonte não tem "push": a lista da origem é comparada a cada sync.
+    return {
+      label: "Atualizar páginas",
+      tone: "warning",
+      hint: "páginas novas ou alteradas na fonte vão para a Voyage; as que saíram da seleção são apagadas",
+    };
   }
   if (repo.outdated) {
     return { label: "Atualizar", tone: "warning", hint: "houve push: só arquivos alterados vão para a Voyage" };
@@ -188,6 +197,7 @@ export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished,
   const firstTime = details.filter((d) => plan(d.repo).tone === "accent").length;
   const totalKb = details.reduce((sum, d) => sum + (d.repo?.size_kb ?? 0), 0);
   const languages = [...new Set(details.map((d) => d.repo?.language).filter(Boolean))] as string[];
+  const onlyDocs = details.length > 0 && details.every((d) => d.repo?.kind === "docs");
 
   const finished = job !== null && job.status !== "running";
   const title = names
@@ -240,7 +250,7 @@ export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished,
 
       {loadingPreview && (
         <div className="space-y-3">
-          <p className="flex items-center gap-2 text-sm text-zinc-500 dark:text-zinc-400">
+          <p className="flex items-center gap-2 text-sm text-stone-500 dark:text-stone-400">
             <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
             {names ? "Calculando a prévia…" : "Consultando o GitHub para montar o lote (alguns segundos)…"}
           </p>
@@ -251,27 +261,30 @@ export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished,
       {preview && !job && (
         <div className="space-y-4">
           {selected.length === 0 ? (
-            <p className="text-sm text-zinc-600 dark:text-zinc-300">Nada a indexar: não há repositórios pendentes ou alterados.</p>
+            <p className="text-sm text-stone-600 dark:text-stone-300">Nada a indexar: não há repositórios pendentes ou alterados.</p>
           ) : (
             <>
-              <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <Stat label="Repositórios" value={numberFormat.format(selected.length)} />
-                <Stat label="1ª indexação" value={numberFormat.format(firstTime)} />
-                <Stat label="Tamanho no GitHub" value={formatSize(totalKb)} hint="inclui histórico do git" />
-                <Stat label="Linguagens" value={languages.length ? languages.slice(0, 3).join(", ") : "—"} />
-              </dl>
+              {!onlyDocs && (
+                <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  <Stat label="Repositórios" value={numberFormat.format(selected.length)} />
+                  <Stat label="1ª indexação" value={numberFormat.format(firstTime)} />
+                  <Stat label="Tamanho no GitHub" value={formatSize(totalKb)} hint="inclui histórico do git" />
+                  <Stat label="Linguagens" value={languages.length ? languages.slice(0, 3).join(", ") : "—"} />
+                </dl>
+              )}
 
-              <ul className="max-h-[45dvh] divide-y divide-zinc-100 overflow-y-auto rounded-xl border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
+              <ul className="max-h-[45dvh] divide-y divide-stone-100 overflow-y-auto rounded-xl border border-stone-200 dark:divide-stone-800 dark:border-stone-800">
                 {details.map(({ name, repo }) => {
                   const p = plan(repo);
                   return (
                     <li key={name} className="space-y-1.5 px-3 py-2.5">
                       <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
+                        <KindIcon kind={repo?.kind === "docs" ? "doc" : "repo"} size="sm" className="mt-0.5" />
+                        <div className="min-w-0 flex-1">
                           <p className="truncate text-sm font-medium" title={name}>
                             {repo ? repoShortName(repo.name, repo.org) : name}
                           </p>
-                          <p className="truncate text-xs text-zinc-500 dark:text-zinc-400">
+                          <p className="truncate text-xs text-stone-500 dark:text-stone-400">
                             {repo?.kind === "docs"
                               ? "documentação externa (wiki)"
                               : `${repo?.org ?? "repositório avulso"} · ${repo?.language ?? "linguagem desconhecida"} · ${formatSize(repo?.size_kb)}`}
@@ -279,7 +292,7 @@ export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished,
                         </div>
                         <Badge tone={p.tone}>{p.label}</Badge>
                       </div>
-                      <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                      <p className="text-xs text-stone-500 dark:text-stone-400">
                         {repo && repo.chunks > 0
                           ? `${numberFormat.format(repo.chunks)} trechos hoje · indexado ${timeAgo(repo.indexed_at)}`
                           : "ainda não indexado"}
@@ -302,14 +315,15 @@ export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished,
                 ))}
 
               {preview.remaining > 0 && (
-                <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                <p className="text-sm text-stone-500 dark:text-stone-400">
                   {numberFormat.format(preview.remaining)} {plural(preview.remaining, "repositório fica", "repositórios ficam")} para os próximos lotes.
                 </p>
               )}
-              <p className="flex items-start gap-2 text-xs text-zinc-500 dark:text-zinc-400">
+              <p className="flex items-start gap-2 text-xs text-stone-500 dark:text-stone-400">
                 <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-                Testes, dependências, builds e arquivos gerados são ignorados, e segredos são mascarados antes do
-                envio. Arquivos que não mudaram reaproveitam o cache: só trechos novos geram custo.
+                {onlyDocs
+                  ? "Só páginas novas ou alteradas na fonte são baixadas, e segredos são mascarados antes do envio. Páginas que não mudaram reaproveitam o cache: só trechos novos geram custo."
+                  : "Testes, dependências, builds e arquivos gerados são ignorados, e segredos são mascarados antes do envio. Arquivos que não mudaram reaproveitam o cache: só trechos novos geram custo."}
               </p>
             </>
           )}
@@ -358,8 +372,8 @@ export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished,
 
 function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="rounded-xl border border-zinc-200 px-3 py-2 dark:border-zinc-800">
-      <dt className="text-xs text-zinc-500 dark:text-zinc-400">{label}</dt>
+    <div className="rounded-xl border border-stone-200 px-3 py-2 dark:border-stone-800">
+      <dt className="text-xs text-stone-500 dark:text-stone-400">{label}</dt>
       <dd className="truncate text-sm font-semibold" title={hint ? `${value} (${hint})` : value}>
         {value}
       </dd>

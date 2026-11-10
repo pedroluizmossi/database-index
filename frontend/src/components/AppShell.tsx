@@ -23,10 +23,11 @@ import {
 import { useAuth } from "../auth/AuthProvider";
 import { canWrite, hasScope } from "../lib/capabilities";
 import type { Session } from "../auth/AuthProvider";
-import type { Me } from "../api/types";
+import type { Me, SyncJob } from "../api/types";
 import { applyTheme, readTheme, saveTheme, systemPrefersDark, watchSystemTheme, type Theme } from "../lib/theme";
 import { usePrefs } from "../data/PrefsProvider";
 import { cx } from "../lib/utils";
+import { IndexingIndicator, useActiveJob } from "./IndexingIndicator";
 
 export type Tab = "search" | "repos" | "docs" | "apis" | "xray" | "tokens" | "usage" | "users" | "audit" | "settings";
 
@@ -106,6 +107,8 @@ export function AppShell({
   const width = wide ? "max-w-7xl" : "max-w-6xl";
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const { session } = useAuth();
+  const job = useActiveJob(session !== null && hasScope(session.me, "index:write"));
 
   useEffect(() => {
     document.documentElement.style.setProperty("--sidebar-w", collapsed ? "4rem" : "15rem");
@@ -127,6 +130,7 @@ export function AppShell({
     <div className="min-h-dvh">
       {/* Telas largas: menu fixo à esquerda */}
       <aside
+        data-sidebar={collapsed ? "collapsed" : "open"}
         className={cx(
           "fixed inset-y-0 left-0 z-40 hidden flex-col bg-ink-950 text-white shadow-[1px_0_0_0_rgb(255_255_255/0.06)] transition-[width] duration-200 lg:flex",
           collapsed ? "w-16" : "w-60",
@@ -137,6 +141,7 @@ export function AppShell({
           tab={tab}
           onTab={go}
           collapsed={collapsed}
+          job={job}
           headerAction={
             <button
               type="button"
@@ -152,7 +157,7 @@ export function AppShell({
       </aside>
 
       {/* Telas estreitas: barra no topo + gaveta */}
-      <header className="sticky top-0 z-40 flex h-14 items-center gap-3 bg-ink-950 px-4 text-white shadow-[0_1px_0_0_rgb(255_255_255/0.06)] lg:hidden">
+      <header className="sticky top-0 z-40 flex h-14 items-center gap-3 bg-ink-950/85 px-4 text-white shadow-[0_1px_0_0_rgb(255_255_255/0.06)] backdrop-blur-md lg:hidden">
         <button
           type="button"
           onClick={() => setDrawerOpen(true)}
@@ -171,6 +176,7 @@ export function AppShell({
           tab={tab}
           onTab={go}
           collapsed={false}
+          job={job}
           headerAction={
             <button type="button" onClick={() => setDrawerOpen(false)} aria-label="Fechar menu" className={barIconButton}>
               <X className="size-4" />
@@ -220,12 +226,14 @@ function SidebarContent({
   tab,
   onTab,
   collapsed,
+  job,
   headerAction,
 }: {
   tabs: TabDef[];
   tab: Tab;
   onTab: (tab: Tab) => void;
   collapsed: boolean;
+  job: SyncJob | null;
   headerAction: ReactNode;
 }) {
   return (
@@ -258,6 +266,7 @@ function SidebarContent({
           );
         })}
       </nav>
+      {job && <IndexingIndicator job={job} collapsed={collapsed} onOpen={() => onTab("repos")} />}
       <SidebarFooter collapsed={collapsed} settingsOpen={tab === "settings"} onSettings={() => onTab("settings")} />
     </>
   );
@@ -294,11 +303,11 @@ function NavItem({
         aria-hidden="true"
         className={cx(
           "absolute top-1.5 bottom-1.5 left-0 w-0.5 rounded-r-full transition-colors",
-          active ? "bg-accent-400" : "bg-transparent",
+          active ? "bg-ink-100" : "bg-transparent",
         )}
       />
       <Icon
-        className={cx("size-4 shrink-0 transition-colors", active ? "text-accent-300" : "text-ink-400 group-hover:text-ink-100")}
+        className={cx("size-4 shrink-0 transition-colors", active ? "text-white" : "text-ink-400 group-hover:text-ink-100")}
         aria-hidden="true"
       />
       {!collapsed && <span className="truncate">{item.label}</span>}

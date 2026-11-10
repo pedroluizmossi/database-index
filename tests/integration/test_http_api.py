@@ -130,6 +130,12 @@ def test_scopes(server: Server) -> None:
     assert indexador.post("/api/v1/sync", json={"dry_run": True, "discover": False}).status_code == 202
     assert indexador.get("/api/v1/audit").status_code == 403
     assert admin.get("/api/v1/audit").status_code == 200
+    # Fontes de documentação: todos leem; a lista completa da wiki e a escolha de páginas são de admin.
+    assert leitor.get("/api/v1/docs/sources").json() == []
+    assert indexador.get("/api/v1/docs/wiki/catalog").status_code == 403
+    assert indexador.put("/api/v1/docs/wiki/selection", json={"pages": ["A"]}).status_code == 403
+    assert indexador.post("/api/v1/docs/ignored", json={"doc_repo": "docs__wiki", "doc_path": "pt-br/A.md"}).status_code == 403
+    assert admin.put("/api/v1/docs/wiki/selection", json={"pages": ["A"]}).status_code == 400  # fonte inexistente
 
 
 def test_openapi_scopes_e_previa(server: Server, monkeypatch: pytest.MonkeyPatch) -> None:

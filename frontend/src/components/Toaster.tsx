@@ -30,7 +30,7 @@ const ToastContext = createContext<ToastApi | null>(null);
 const TONE_STYLES: Record<Tone, string> = {
   success: "border-emerald-200 text-emerald-700 dark:border-emerald-900/60 dark:text-emerald-300",
   error: "border-rose-200 text-rose-700 dark:border-rose-900/60 dark:text-rose-300",
-  info: "border-zinc-200 text-zinc-700 dark:border-zinc-700 dark:text-zinc-200",
+  info: "border-stone-200 text-stone-700 dark:border-stone-700 dark:text-stone-200",
 };
 
 const TONE_ICON: Record<Tone, LucideIcon> = {
@@ -83,7 +83,7 @@ function ToastCard({ item, onClose }: { item: ToastItem; onClose: () => void }) 
     <div
       role={item.tone === "error" ? "alert" : "status"}
       className={cx(
-        "pointer-events-auto flex w-full max-w-sm animate-pop items-start gap-3 rounded-lg border bg-white p-3.5 shadow-[0_8px_24px_-8px_rgb(0_0_0/0.2)] dark:bg-zinc-900",
+        "pointer-events-auto flex w-full max-w-sm animate-pop items-start gap-3 rounded-lg border bg-sheet/90 p-3.5 shadow-[0_8px_24px_-8px_rgb(0_0_0/0.2)] backdrop-blur-md dark:bg-stone-900/90",
         TONE_STYLES[item.tone],
       )}
     >
@@ -91,7 +91,7 @@ function ToastCard({ item, onClose }: { item: ToastItem; onClose: () => void }) 
       <div className="min-w-0 flex-1">
         <p className="text-sm font-medium">{item.title}</p>
         {item.description && (
-          <p className="mt-0.5 wrap-break-word text-xs text-zinc-600 dark:text-zinc-400">{item.description}</p>
+          <p className="mt-0.5 wrap-break-word text-xs text-stone-600 dark:text-stone-400">{item.description}</p>
         )}
         {item.action && (
           <button
@@ -110,7 +110,7 @@ function ToastCard({ item, onClose }: { item: ToastItem; onClose: () => void }) 
         type="button"
         onClick={onClose}
         aria-label="Fechar aviso"
-        className="-m-1 rounded-md p-1 text-zinc-400 transition hover:text-zinc-700 dark:hover:text-zinc-200"
+        className="-m-1 rounded-md p-1 text-stone-400 transition hover:text-stone-700 dark:hover:text-stone-200"
       >
         <X className="size-4" />
       </button>

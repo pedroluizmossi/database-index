@@ -76,14 +76,14 @@ export function FileDrawer({ target, onClose }: FileDrawerProps) {
     <dialog
       ref={dialogRef}
       onClose={onClose}
-      className="fixed inset-y-0 right-0 left-auto m-0 h-dvh max-h-none w-full max-w-4xl open:flex flex-col border-0 bg-white p-0 text-zinc-900 shadow-[-16px_0_40px_-12px_rgb(0_0_0/0.25)] backdrop:bg-ink-950/50 open:animate-slide-in sm:rounded-l-xl dark:bg-zinc-900 dark:text-zinc-100 dark:backdrop:bg-black/60"
+      className="fixed inset-y-0 right-0 left-auto m-0 h-dvh max-h-none w-full max-w-4xl open:flex flex-col border-0 bg-sheet p-0 text-stone-900 shadow-[-16px_0_40px_-12px_rgb(0_0_0/0.25)] backdrop:bg-ink-950/50 open:animate-slide-in sm:rounded-l-xl dark:bg-stone-900 dark:text-stone-100 dark:backdrop:bg-black/60"
     >
       {target && (
         <>
-          <header className="flex items-center gap-3 border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
+          <header className="flex items-center gap-3 border-b border-stone-200 px-5 py-4 dark:border-stone-800">
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-semibold">{fileName}</p>
-              <p className="truncate font-mono text-xs text-zinc-500 dark:text-zinc-400">
+              <p className="truncate font-mono text-xs text-stone-500 dark:text-stone-400">
                 {target.repo}/{target.path}
               </p>
             </div>
@@ -97,13 +97,13 @@ export function FileDrawer({ target, onClose }: FileDrawerProps) {
 
           <FileSummaryPanel repo={target.repo} path={target.path} />
 
-          <div ref={bodyRef} className="min-h-0 flex-1 overflow-auto bg-zinc-50/60 py-3 dark:bg-zinc-950/60">
+          <div ref={bodyRef} className="min-h-0 flex-1 overflow-auto bg-stone-50/60 py-3 dark:bg-stone-950/60">
             {error && <EmptyState icon={FileWarning} title="Não consegui abrir o arquivo" text={error} />}
             {!error && !lines && <LoadingLines />}
             {lines && <CodeLines lines={lines} highlight={target.highlight ?? null} />}
           </div>
 
-          <footer className="flex items-center justify-between gap-4 border-t border-zinc-200 px-5 py-2.5 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+          <footer className="flex items-center justify-between gap-4 border-t border-stone-200 px-5 py-2.5 text-xs text-stone-500 dark:border-stone-800 dark:text-stone-400">
             <span>{lines ? `${lines.length} linhas` : "Carregando…"}</span>
             {target.highlight && (
               <span>

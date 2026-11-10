@@ -128,7 +128,7 @@ export function OwnerCombobox({
           id={listId}
           role="listbox"
           aria-label={label ? `Sugestões para ${label}` : "Sugestões"}
-          className="absolute top-full right-0 left-0 z-20 mt-1 max-h-64 overflow-y-auto rounded-lg border border-zinc-200 bg-white py-1 shadow-[0_12px_24px_-8px_rgb(24_24_27/0.2)] dark:border-zinc-700 dark:bg-zinc-800 dark:shadow-[0_12px_24px_-8px_rgb(0_0_0/0.6)]"
+          className="absolute top-full right-0 left-0 z-20 mt-1 max-h-64 overflow-y-auto rounded-lg border border-stone-200 bg-sheet py-1 shadow-[0_12px_24px_-8px_rgb(24_24_27/0.2)] dark:border-stone-700 dark:bg-stone-800 dark:shadow-[0_12px_24px_-8px_rgb(0_0_0/0.6)]"
         >
           {filtered.map((option, index) => {
             const selected = option.value === value;
@@ -145,13 +145,13 @@ export function OwnerCombobox({
                 className={cx(
                   "flex min-w-0 cursor-pointer items-baseline gap-2 px-3 py-1.5 text-sm",
                   index === active
-                    ? "bg-accent-50 text-zinc-900 dark:bg-accent-500/20 dark:text-white"
-                    : "text-zinc-800 dark:text-zinc-200",
+                    ? "bg-accent-50 text-stone-900 dark:bg-accent-500/20 dark:text-white"
+                    : "text-stone-800 dark:text-stone-200",
                   selected && "font-medium",
                 )}
               >
-                <span className="shrink-0 font-mono text-[13px] text-zinc-900 dark:text-zinc-100">{option.value}</span>
-                <span className="min-w-0 truncate text-xs text-zinc-600 dark:text-zinc-400">— {option.label}</span>
+                <span className="shrink-0 font-mono text-[13px] text-stone-900 dark:text-stone-100">{option.value}</span>
+                <span className="min-w-0 truncate text-xs text-stone-600 dark:text-stone-400">— {option.label}</span>
               </div>
             );
           })}

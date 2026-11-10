@@ -89,7 +89,11 @@ function Workspace() {
 
   return (
     <AppShell tab={current} onTab={changeTab} tabs={tabs} wide={current === "repos" || current === "usage" || current === "users"}>
-      {page}
+      {/* A key remonta a página a cada troca de aba: ela entra com `animate-page-in` (só a nova sobe; nada de
+          retrato da página antiga, que distorcia telas longas). */}
+      <div key={current} className="animate-page-in">
+        {page}
+      </div>
     </AppShell>
   );
 }

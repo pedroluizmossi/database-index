@@ -116,3 +116,83 @@ async def test_token_ausente_ou_recusado() -> None:
     c = WikiJsClient("https://w", "x", http=httpx.AsyncClient(transport=httpx.MockTransport(forbidden)))
     with pytest.raises(WikiJsError, match="recusou o token"):
         await c.list_pages("pt-br")
+
+
+# ------------------------------------------------------------------ escolha de páginas → regras
+
+
+def _matches(include: tuple[str, ...], exclude: tuple[str, ...], paths: list[str]) -> set[str]:
+    from code_index.sources.wikijs import PageMeta, selected_pages
+
+    source = DocSource(name="wiki", url="https://wiki.exemplo.com", include=include, exclude=exclude)
+    pages = [PageMeta(id=i, path=p, locale="pt-br", title=p, updated_at="", tags=()) for i, p in enumerate(paths)]
+    return {p.path for p in selected_pages(source, pages)}
+
+
+WIKI_PATHS = [
+    "Plataforma", "Plataforma/Email", "Plataforma/Email/Config", "Plataforma/Legado/A", "Plataforma/Legado/B",
+    "Plataforma/redis", "SRE/post-mortems/2025/x", "SRE/post-mortems/2026/y", "SRE/oncall", "Geral/Glossario",
+    "Estranho/[rascunho]*?",
+]
+
+
+def test_pasta_inteira_inclui_paginas_futuras_e_a_raiz_nunca_fica_vazia() -> None:
+    from code_index.sources.wikijs import selection_rules
+
+    chosen = {p for p in WIKI_PATHS if p.startswith("Plataforma")}
+    include, exclude = selection_rules(WIKI_PATHS, chosen)
+    assert (include, exclude) == (("Plataforma", "Plataforma/**"), ())
+    assert _matches(include, exclude, [*WIKI_PATHS, "Plataforma/Nova"]) == chosen | {"Plataforma/Nova"}
+
+    # Tudo escolhido: cada seção da raiz explícita (seção nova na wiki não entra sozinha).
+    include, exclude = selection_rules(WIKI_PATHS, set(WIKI_PATHS))
+    assert _matches(include, exclude, [*WIKI_PATHS, "Nova/Secao"]) == set(WIKI_PATHS)
+
+
+def test_pasta_quase_toda_vira_include_com_excludes() -> None:
+    from code_index.sources.wikijs import selection_rules
+
+    chosen = {p for p in WIKI_PATHS if p.startswith("Plataforma") and "Legado" not in p} - {"Plataforma"}
+    include, exclude = selection_rules(WIKI_PATHS, chosen)
+    assert include == ("Plataforma/**",) and exclude == ("Plataforma/Legado/**",)
+    assert _matches(include, exclude, WIKI_PATHS) == chosen
+
+
+def test_curingas_no_nome_da_pagina_sao_literais() -> None:
+    from code_index.sources.wikijs import selection_rules
+
+    paths = ["Estranho/[rascunho]*?", "Estranho/rascunho-x", "Estranho/r"]
+    include, exclude = selection_rules(paths, {"Estranho/[rascunho]*?"})
+    assert _matches(include, exclude, paths) == {"Estranho/[rascunho]*?"}
+
+
+def test_selecao_vazia_ou_desconhecida_e_recusada() -> None:
+    from code_index.sources.wikijs import selection_rules
+
+    with pytest.raises(ValueError, match="ao menos uma"):
+        selection_rules(WIKI_PATHS, set())
+    with pytest.raises(ValueError, match="fora da lista"):
+        selection_rules(WIKI_PATHS, {"Nao/Existe"})
+
+
+def test_qualquer_selecao_e_reproduzida_pelas_regras() -> None:
+    import random
+
+    from code_index.sources.wikijs import selection_rules
+
+    rng = random.Random(7)
+    for _ in range(300):
+        chosen = {p for p in WIKI_PATHS if rng.random() < rng.choice((0.2, 0.5, 0.9))}
+        if not chosen:
+            continue
+        include, exclude = selection_rules(WIKI_PATHS, chosen)
+        assert include, chosen
+        assert _matches(include, exclude, WIKI_PATHS) == chosen, (chosen, include, exclude)
+
+
+def test_selecao_inalterada_reproduz_as_regras_escritas_a_mao() -> None:
+    from code_index.sources.wikijs import selection_rules
+
+    include, exclude = ("Plataforma", "Plataforma/**", "SRE/oncall/**"), ("Plataforma/Legado/**",)
+    paths = [*WIKI_PATHS, "Plataforma/Legado", "SRE/oncall/escala"]
+    assert selection_rules(paths, _matches(include, exclude, paths)) == (include, exclude)

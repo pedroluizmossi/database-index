@@ -6,6 +6,9 @@
 @theme {
   --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* Itálica fina da prancha: só em momentos de assinatura (título do Login, estados vazios). Nunca em título de
+     página nem em texto corrido. */
+  --font-serif: "Instrument Serif", ui-serif, Georgia, serif;
 
   /* Acento único (cobalto): ação, seleção, foco e links. Nada decorativo. */
   --color-accent-50: oklch(0.97 0.014 262);
@@ -20,20 +23,50 @@
   --color-accent-900: oklch(0.31 0.1 262);
   --color-accent-950: oklch(0.23 0.07 262);
 
-  /* Tinta: a barra do topo e as superfícies escuras de comando (mesmo matiz do acento). */
-  --color-ink-100: oklch(0.93 0.012 262);
-  --color-ink-300: oklch(0.79 0.025 262);
-  --color-ink-400: oklch(0.68 0.03 262);
-  --color-ink-700: oklch(0.36 0.035 262);
-  --color-ink-800: oklch(0.28 0.035 262);
-  --color-ink-900: oklch(0.23 0.032 262);
-  --color-ink-950: oklch(0.19 0.03 262);
+  /* Tinta: o menu lateral e as superfícies escuras de comando. É a tinta da prancha (quase preta, quente), não
+     um azul: cor de ação só no acento. */
+  --color-ink-100: #ede8e0;
+  --color-ink-300: #c4bcb0;
+  --color-ink-400: #a39b8f;
+  --color-ink-700: #4a463f;
+  --color-ink-800: #2f2c28;
+  --color-ink-900: #24221f;
+  --color-ink-950: #1c1b19;
+
+  /* Neutros quentes, afinados com o papel da prancha (substituem o `stone` do Tailwind). Todo cinza da interface
+     sai daqui: 200 é o fio das bordas no claro, 800 no escuro; 900 é a folha no escuro, 950 o fundo. */
+  --color-stone-50: #f7f4ee;
+  --color-stone-100: #f0ebe2;
+  --color-stone-200: #e3dccf;
+  --color-stone-300: #d0c7b7;
+  --color-stone-400: #a8a091;
+  --color-stone-500: #6b6458;
+  --color-stone-600: #5f584d;
+  --color-stone-700: #4a453d;
+  --color-stone-800: #34312b;
+  --color-stone-900: #24221e;
+  --color-stone-950: #151412;
+
+  /* Papel cru da prancha de fundo (assets/latent-cartography.webp): o fundo claro é o mesmo papel, então a
+     prancha não tem borda visível. */
+  --color-paper: #ede8df;
+  /* Folha: painéis, cartões, tabelas, campos e diálogos no claro. Papel mais claro, nunca branco puro. */
+  --color-sheet: #faf8f3;
+  /* Vermelhão da prancha: só onde algo foi "encontrado" (o centro do mapa do Raio X). Marca, nunca preenche. */
+  --color-signal: #c5422b;
+
+  /* Uma cor por tipo de entidade (components/kind.tsx), igual em todas as telas: repositório/código, documento,
+     API. O acento cobalto fica só para ação e foco. Valores em :root (o escuro troca por tons mais claros). */
+  --color-kind-repo: var(--kind-repo);
+  --color-kind-doc: var(--kind-doc);
+  --color-kind-api: var(--kind-api);
 
   --animate-fade-up: fade-up 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
   --animate-pop: pop 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
   --animate-slide-in: slide-in 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
   --animate-slide-in-left: slide-in-left 0.25s cubic-bezier(0.16, 1, 0.3, 1) both;
   --animate-fade-in: fade-in 0.2s ease-out both;
+  --animate-page-in: page-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) backwards;
   --animate-shimmer: shimmer 1.6s linear infinite;
 
   @keyframes fade-up {
@@ -103,12 +136,125 @@
     /* Reserva o espaço da barra de rolagem: sem isso, o conteúdo centralizado (e o menu)
        pula para o lado ao trocar entre páginas curtas e longas. */
     scrollbar-gutter: stable;
+    --kind-repo: oklch(0.52 0.09 190);
+    --kind-doc: oklch(0.58 0.12 70);
+    --kind-api: oklch(0.52 0.15 300);
   }
   html.dark {
     color-scheme: dark;
+    --kind-repo: oklch(0.74 0.1 190);
+    --kind-doc: oklch(0.8 0.12 78);
+    --kind-api: oklch(0.76 0.12 300);
   }
   body {
-    @apply min-h-dvh bg-zinc-50 text-zinc-900 antialiased dark:bg-zinc-950 dark:text-zinc-100;
+    @apply min-h-dvh bg-paper text-stone-900 antialiased dark:bg-stone-950 dark:text-stone-100;
+  }
+  /* Área de conteúdo: com o menu fixo (telas largas), a prancha centra nela, não na janela. */
+  @media (width >= 64rem) {
+    body:has([data-sidebar="open"]) {
+      --area-left: 15rem;
+    }
+    body:has([data-sidebar="collapsed"]) {
+      --area-left: 4rem;
+    }
+  }
+
+  /* Prancha "Latent Cartography" (components/PlateBackdrop.tsx), atrás de tudo e do tamanho exato da imagem
+     (contain), para que feixe e alfinete caiam no disco. O papel foi tirado da imagem (só a tinta, com alfa): no
+     claro ela assenta sobre o mesmo papel; no escuro a tinta inverte e o vermelhão continua vermelho. */
+  .plate {
+    --plate-area: calc(100vw - var(--area-left, 0px));
+    --plate-h: min(100dvh, var(--plate-area) / 0.75);
+    position: fixed;
+    z-index: -1;
+    pointer-events: none;
+    height: var(--plate-h);
+    aspect-ratio: 3 / 4;
+    top: calc((100dvh - var(--plate-h)) / 2);
+    left: calc(var(--area-left, 0px) + (var(--plate-area) - var(--plate-h) * 0.75) / 2);
+    transition: left 0.2s;
+    animation:
+      plate-in 1.2s ease-out both,
+      plate-drift 80s ease-in-out infinite alternate;
+  }
+  .plate-ink {
+    position: absolute;
+    inset: 0;
+    background: url("./assets/latent-cartography.webp") center / contain no-repeat;
+    opacity: 0.6;
+    /* Disco nítido; a metade de baixo (estratos e concordância, atrás das tabelas) passa para a camada suave. */
+    mask-image: linear-gradient(to bottom, #000 56%, transparent 70%);
+  }
+  .plate-ink--soft {
+    filter: blur(2.5px);
+    mask-image: linear-gradient(to bottom, transparent 56%, #000 70%);
+  }
+  html.dark .plate-ink {
+    filter: invert(1) hue-rotate(180deg);
+    opacity: 0.4;
+  }
+  html.dark .plate-ink--soft {
+    filter: invert(1) hue-rotate(180deg) blur(2.5px);
+  }
+  /* Feixe de varredura dentro do disco (centro em 50% × 33% da prancha, diâmetro 62% da largura), uma volta a
+     cada 40 s: o rastro clareia até a borda de ataque, um fio vermelhão. */
+  .plate-sweep {
+    position: absolute;
+    left: 50%;
+    top: 33%;
+    width: 62%;
+    aspect-ratio: 1;
+    translate: -50% -50%;
+    border-radius: 50%;
+    background: conic-gradient(
+      transparent 0turn 0.7turn,
+      color-mix(in oklab, var(--color-signal) 9%, transparent) 0.994turn,
+      color-mix(in oklab, var(--color-signal) 40%, transparent) 0.998turn,
+      transparent 1turn
+    );
+    mask-image: radial-gradient(closest-side, #000 94%, transparent);
+    animation: plate-sweep 40s linear infinite;
+  }
+  /* O achado da prancha (o aglomerado vermelhão no topo do disco) emite anéis, como um alfinete vivo. */
+  .plate-pin {
+    position: absolute;
+    left: 52.75%;
+    top: 16.9%;
+    width: 1.6%;
+    aspect-ratio: 1;
+    translate: -50% -50%;
+    border: 1px solid var(--color-signal);
+    border-radius: 50%;
+    animation: plate-pin 3.6s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+  }
+  .plate-pin--late {
+    animation-delay: 1.8s;
+  }
+  @keyframes plate-in {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes plate-drift {
+    to {
+      translate: 0 -0.6%;
+      scale: 1.015;
+    }
+  }
+  @keyframes plate-sweep {
+    to {
+      rotate: 1turn;
+    }
+  }
+  @keyframes plate-pin {
+    from {
+      scale: 0.6;
+      opacity: 0.9;
+    }
+    to {
+      scale: 3.4;
+      opacity: 0;
+    }
   }
   ::selection {
     background: color-mix(in oklab, var(--color-accent-500) 28%, transparent);
@@ -118,10 +264,38 @@
     caret-color: var(--color-accent-600);
   }
   * {
-    scrollbar-color: var(--color-zinc-300) transparent;
+    scrollbar-color: var(--color-stone-300) transparent;
   }
   html.dark * {
-    scrollbar-color: var(--color-zinc-700) transparent;
+    scrollbar-color: var(--color-stone-700) transparent;
+  }
+}
+
+/* Entrada escalonada: os filhos diretos sobem um a um (30 ms entre eles, no máximo 300 ms). Só quem entra na
+   lista anima: itens que continuam (mesma key) não repetem. */
+@layer components {
+  .stagger > * {
+    animation: var(--animate-fade-up);
+  }
+  .stagger > :nth-child(2) { animation-delay: 30ms; }
+  .stagger > :nth-child(3) { animation-delay: 60ms; }
+  .stagger > :nth-child(4) { animation-delay: 90ms; }
+  .stagger > :nth-child(5) { animation-delay: 120ms; }
+  .stagger > :nth-child(6) { animation-delay: 150ms; }
+  .stagger > :nth-child(7) { animation-delay: 180ms; }
+  .stagger > :nth-child(8) { animation-delay: 210ms; }
+  .stagger > :nth-child(9) { animation-delay: 240ms; }
+  .stagger > :nth-child(10) { animation-delay: 270ms; }
+  .stagger > :nth-child(n + 11) { animation-delay: 300ms; }
+}
+
+/* Troca de aba (App.tsx): só a página nova entra, com fade e subida curta. Sem View Transitions: o retrato da
+   página antiga era redimensionado e distorcia telas longas. `backwards`: ao terminar, não sobra transform na
+   página (que viraria referência para os elementos `fixed` dela). */
+@keyframes page-in {
+  from {
+    opacity: 0;
+    translate: 0 6px;
   }
 }
 
@@ -132,5 +306,10 @@
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+  /* Fundo parado: sem feixe nem alfinete (congelados, só pareceriam manchas). */
+  .plate-sweep,
+  .plate-pin {
+    display: none;
   }
 }

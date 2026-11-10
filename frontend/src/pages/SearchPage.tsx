@@ -99,7 +99,7 @@ export function SearchPage() {
     <div className="space-y-10">
       <section className="mx-auto max-w-3xl text-center">
         <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Pergunte ao código</h1>
-        <p className="mt-3 text-zinc-500 dark:text-zinc-400">
+        <p className="mt-3 text-stone-500 dark:text-stone-400">
           {indexed.length > 0
             ? `Busca em ${indexed.length} repositório(s) indexado(s).`
             : "Nenhum repositório indexado ainda."}{" "}
@@ -108,9 +108,9 @@ export function SearchPage() {
 
         <form
           onSubmit={runSearch}
-          className="group mx-auto mt-8 flex items-center gap-2 rounded-xl border border-zinc-300 bg-white p-2 shadow-[0_2px_8px_-2px_rgb(24_24_27/0.08)] transition focus-within:border-accent-500 focus-within:ring-4 focus-within:ring-accent-500/15 dark:border-zinc-800 dark:bg-zinc-900"
+          className="group mx-auto mt-8 flex items-center gap-2 rounded-xl border border-stone-300 bg-sheet p-2 shadow-[0_2px_8px_-2px_rgb(24_24_27/0.08)] transition focus-within:border-accent-500 focus-within:ring-4 focus-within:ring-accent-500/15 dark:border-stone-800 dark:bg-stone-900"
         >
-          <Search className="ml-3 size-5 shrink-0 text-zinc-400 transition group-focus-within:text-accent-500" aria-hidden="true" />
+          <Search className="ml-3 size-5 shrink-0 text-stone-400 transition group-focus-within:text-accent-500" aria-hidden="true" />
           <input
             ref={inputRef}
             type="search"
@@ -118,7 +118,7 @@ export function SearchPage() {
             onChange={(e) => setQuery(e.target.value)}
             placeholder="ex.: onde o token expirado é rejeitado"
             aria-label="Texto da busca"
-            className="h-11 min-w-0 flex-1 bg-transparent text-base text-zinc-900 outline-none placeholder:text-zinc-400 dark:text-zinc-100"
+            className="h-11 min-w-0 flex-1 bg-transparent text-base text-stone-900 outline-none placeholder:text-stone-400 dark:text-stone-100"
           />
           <Kbd className="hidden sm:inline-flex">/</Kbd>
           <Button type="submit" loading={loading} disabled={!query.trim()} className="h-11 px-5">
@@ -131,7 +131,7 @@ export function SearchPage() {
         <Panel className="space-y-5 p-5">
           <div className="flex flex-col gap-2">
             <Segmented label="Modo de busca" value={mode} onChange={setMode} options={MODES} />
-            <p className="text-xs text-zinc-500 dark:text-zinc-400">{modeHelp}</p>
+            <p className="text-xs text-stone-500 dark:text-stone-400">{modeHelp}</p>
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
@@ -181,10 +181,10 @@ export function SearchPage() {
             </Field>
           </div>
 
-          <div className="flex items-center justify-between gap-4 border-t border-zinc-200 pt-4 dark:border-zinc-800">
+          <div className="flex items-center justify-between gap-4 border-t border-stone-200 pt-4 dark:border-stone-800">
             <div>
               <p className="text-sm font-medium">Reordenar com rerank</p>
-              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+              <p className="text-xs text-stone-500 dark:text-stone-400">
                 Um modelo da Voyage reavalia os melhores trechos. Mais preciso, um pouco mais lento.
               </p>
             </div>
@@ -198,10 +198,10 @@ export function SearchPage() {
 
         {!loading && results && (
           <>
-            <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2 text-sm text-zinc-500 dark:text-zinc-400">
+            <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2 text-sm text-stone-500 dark:text-stone-400">
               <p>
-                <span className="font-semibold text-zinc-900 dark:text-zinc-100">{results.hits.length}</span>{" "}
-                trecho(s) para <span className="text-zinc-900 dark:text-zinc-100">“{results.query}”</span>
+                <span className="font-semibold text-stone-900 dark:text-stone-100">{results.hits.length}</span>{" "}
+                trecho(s) para <span className="text-stone-900 dark:text-stone-100">“{results.query}”</span>
               </p>
               {results.hits.length > 0 && <p className="text-xs">ordenados por relevância</p>}
             </div>
@@ -225,7 +225,7 @@ export function SearchPage() {
                 />
               </Panel>
             ) : (
-              <div className="grid gap-4">
+              <div className="stagger grid gap-4">
                 {results.hits.map((hit, i) => (
                   <ResultCard
                     key={`${i}-${hit.repo}-${hit.path}-${hit.start_line}`}
@@ -269,7 +269,7 @@ function RepoMatches({ matches, onFilter }: { matches: RepoMatch[]; onFilter: (r
   const [card, setCard] = useState<string | null>(null);
   return (
     <Panel className="mb-4 p-4">
-      <p className="mb-2 text-sm font-semibold text-zinc-700 dark:text-zinc-200">
+      <p className="mb-2 text-sm font-semibold text-stone-700 dark:text-stone-200">
         Repos que tratam do assunto
       </p>
       <ul className="space-y-2.5">
@@ -287,7 +287,7 @@ function RepoMatches({ matches, onFilter }: { matches: RepoMatch[]; onFilter: (r
                 Cartão
               </button>
             </div>
-            {m.summary && <p className="mt-0.5 line-clamp-2 text-xs text-zinc-600 dark:text-zinc-300">{m.summary}</p>}
+            {m.summary && <p className="mt-0.5 line-clamp-2 text-xs text-stone-600 dark:text-stone-300">{m.summary}</p>}
           </li>
         ))}
       </ul>

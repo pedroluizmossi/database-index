@@ -5,9 +5,11 @@ Segurança e custo:
   - sem shell: argumentos em lista; o padrão vai depois de `-e` e os caminhos depois de `--`;
   - só arquivos que o índice consideraria (mesmos include/exclude), respeitando .gitignore,
     sem arquivos ocultos (`.env` etc.) e sem binários;
-  - cada linha devolvida passa por `mask(arquivo, número da linha, linha)`, injetada pelo serviço
-    (a máscara de segredos de indexing/content; infra não depende de indexing). A máscara vê o
-    arquivo inteiro: segredo de várias linhas (chave PEM) não se esconde linha a linha;
+  - a máscara é injetada pelo serviço (a de indexing/content; infra não depende de indexing) e recebe o
+    arquivo inteiro: segredo de várias linhas (chave PEM) não se esconde linha a linha. O casamento é
+    refeito pelo próprio rg sobre o texto mascarado: só volta a linha que ainda casa depois da máscara.
+    Sem isso, o grep viraria um oráculo (`^password: [a-m]` casa ou não casa) que revela o segredo aos poucos;
+    arquivo que a máscara não consegue ler não volta;
   - limites: total de resultados, resultados por arquivo, tamanho de arquivo e tempo.
 O regex do ripgrep (Rust) não tem backtracking exponencial.
 """
@@ -24,18 +26,14 @@ from pathlib import Path
 from ..domain.models import GrepMatch
 from ..domain.path_glob import glob_matcher
 
-# (arquivo absoluto, número da linha a partir de 1, linha) -> linha mascarada
-LineMask = Callable[[Path, int, str], Awaitable[str]]
+# Arquivo absoluto -> linhas do arquivo com segredos mascarados (None se não deu para ler)
+FileMask = Callable[[Path], Awaitable[list[str] | None]]
 
 MAX_PATTERN = 500
 _PER_FILE = 20
 _MAX_LINE = 300
 # Maior evento JSON lido do rg: linha enorme (ou com milhares de ocorrências) passa disso e é pulada.
 _MAX_EVENT = 8 * 1024 * 1024
-
-
-async def _no_mask(_path: Path, _line: int, line: str) -> str:
-    return line
 
 
 @dataclass(frozen=True)
@@ -70,7 +68,7 @@ class Grep:
         path_glob: str | None = None,
         max_results: int = 50,
         timeout: float = 20.0,
-        mask: LineMask = _no_mask,
+        mask: FileMask | None = None,
     ) -> GrepResult:
         if not self._rg:
             raise RuntimeError("ripgrep (rg) não está instalado no servidor")
@@ -108,19 +106,19 @@ class Grep:
         regex: bool,
         case_sensitive: bool,
         keep,  # type: ignore[no-untyped-def]
-        mask: LineMask,
+        mask: FileMask | None,
         out: list[GrepMatch],
         max_results: int,
         timeout: float,
     ) -> bool:
         assert self._rg is not None
+        flags = ["--case-sensitive" if case_sensitive else "--ignore-case"]
+        if not regex:
+            flags.append("--fixed-strings")
         args = [
             self._rg, "--json", "--no-config", "--max-filesize", "512K",
-            "--max-count", str(_PER_FILE), "--max-columns", "2000",
-            "--case-sensitive" if case_sensitive else "--ignore-case",
+            "--max-count", str(_PER_FILE), "--max-columns", "2000", *flags,
         ]
-        if not regex:
-            args.append("--fixed-strings")
         for g in include:
             args += ["-g", g]
         for g in exclude:
@@ -131,6 +129,8 @@ class Grep:
         proc = await asyncio.create_subprocess_exec(
             *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, limit=_MAX_EVENT
         )
+        # arquivo -> (linhas mascaradas, números das linhas que ainda casam), ou None se não deu para mascarar
+        confirmed: dict[str, tuple[list[str], set[int]] | None] = {}
         hit_limit = False
         try:
             async with asyncio.timeout(timeout):
@@ -158,10 +158,18 @@ class Grep:
                     rel = abs_path[len(str(target.root)) + 1:]
                     if not keep(rel):
                         continue
-                    raw_line = (data["lines"].get("text") or "").rstrip("\n")
-                    text = await mask(Path(abs_path), data["line_number"], raw_line)
-                    out.append(GrepMatch(repo=target.repo, path=rel, line=data["line_number"],
-                                         text=text.strip()[:_MAX_LINE]))
+                    line_number = data["line_number"]
+                    if mask is None:
+                        text = (data["lines"].get("text") or "").rstrip("\n")
+                    else:
+                        if abs_path not in confirmed:
+                            confirmed[abs_path] = await self._mask_and_confirm(mask, Path(abs_path), flags, pattern)
+                        entry = confirmed[abs_path]
+                        if entry is None or line_number not in entry[1]:
+                            continue  # o segredo era o que casava: a linha mascarada não casa mais
+                        text = entry[0][line_number - 1]
+                    out.append(GrepMatch(repo=target.repo, path=rel, line=line_number,
+                                         text=text.rstrip("\r").strip()[:_MAX_LINE]))
                     if len(out) >= max_results:
                         hit_limit = True
                         break
@@ -176,3 +184,28 @@ class Grep:
             if "regex parse error" in err or "error parsing" in err:
                 raise ValueError(f"padrão inválido: {err.splitlines()[-1][:200] if err else ''}")
         return hit_limit
+
+    async def _mask_and_confirm(self, mask: FileMask, path: Path, flags: list[str],
+                                pattern: str) -> tuple[list[str], set[int]] | None:
+        """Mascara o arquivo e roda o mesmo padrão (mesmo motor e flags) sobre o texto mascarado."""
+        assert self._rg is not None
+        lines = await mask(path)
+        if lines is None:
+            return None
+        proc = await asyncio.create_subprocess_exec(
+            self._rg, "--no-config", "--line-number", "--no-filename", "--max-columns", "1", *flags,
+            "-e", pattern, "-",
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            stdout, _ = await proc.communicate("\n".join(lines).encode("utf-8", errors="replace"))
+        finally:
+            if proc.returncode is None:
+                proc.kill()
+                await proc.wait()
+        found: set[int] = set()
+        for row in stdout.splitlines():
+            number, sep, _ = row.partition(b":")
+            if sep and number.isdigit():
+                found.add(int(number))
+        return lines, found

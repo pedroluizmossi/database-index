@@ -42,14 +42,26 @@ async def test_case_sensitive_e_regex(repo: GrepTarget) -> None:
     assert [m.path for m in res.matches] == ["src/Pagamento.java"]
 
 
-async def test_mascara_e_limite(repo: GrepTarget) -> None:
-    async def mask(_path: Path, _line: int, line: str) -> str:
-        return line.replace("a8f9d0s9f8d0s9f8", "***")
+async def _mask(path: Path) -> list[str]:
+    return path.read_text().replace("a8f9d0s9f8d0s9f8", "***").split("\n")
 
-    res = await Grep().search([repo], "apiKey", mask=mask)
+
+async def test_mascara_e_limite(repo: GrepTarget) -> None:
+    res = await Grep().search([repo], "apiKey", mask=_mask)
     assert res.matches and all("a8f9d0" not in m.text and "***" in m.text for m in res.matches)
     res = await Grep().search([repo], "saldo", max_results=2)
     assert len(res.matches) == 2 and res.truncated
+
+
+@pytest.mark.parametrize(("pattern", "regex"), [
+    ("apiKey = \"a8", False),           # prefixo do segredo como texto exato
+    (r"apiKey = \"[a-m]", True),       # busca binária caractere a caractere
+    ("a8f9d0s9f8d0s9f8", False),
+])
+async def test_padrao_que_so_casa_no_segredo_nao_volta(repo: GrepTarget, pattern: str, regex: bool) -> None:
+    # Se voltasse, mesmo com o texto mascarado, o "casou / não casou" revelaria o segredo aos poucos.
+    res = await Grep().search([repo], pattern, regex=regex, case_sensitive=True, mask=_mask)
+    assert res.matches == []
 
 
 async def test_linha_gigante_nao_derruba_o_grep(repo: GrepTarget) -> None:

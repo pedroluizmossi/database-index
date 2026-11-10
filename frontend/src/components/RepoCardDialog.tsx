@@ -85,8 +85,8 @@ export function RepoCardDialog({ repo, open, onClose }: { repo: string; open: bo
                   <Badge key={t}>{t}</Badge>
                 ))}
               </div>
-              <p className="text-base leading-relaxed text-zinc-800 dark:text-zinc-100">{card.summary}</p>
-              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+              <p className="text-base leading-relaxed text-stone-800 dark:text-stone-100">{card.summary}</p>
+              <p className="text-xs text-stone-500 dark:text-stone-400">
                 Escrito por {info.card_agent ?? "agent"} em {formatDateTime(info.card_at)}. Gerado a partir do código: confirme
                 antes de afirmar.
               </p>
@@ -115,7 +115,7 @@ export function RepoCardDialog({ repo, open, onClose }: { repo: string; open: bo
                     <Badge tone={r.basis === "codigo" ? "indexed" : "neutral"}>
                       {r.basis === "codigo" ? "visto no código" : "pelo nome"}
                     </Badge>
-                    <span className="text-sm text-zinc-500 dark:text-zinc-400">{r.why}</span>
+                    <span className="text-sm text-stone-500 dark:text-stone-400">{r.why}</span>
                   </li>
                 ))}
               </ul>
@@ -136,7 +136,7 @@ export function RepoCardDialog({ repo, open, onClose }: { repo: string; open: bo
 
           {card?.glossary && card.glossary.length > 0 && (
             <Block title="Glossário">
-              <p className="text-zinc-600 dark:text-zinc-300">{card.glossary.join(" · ")}</p>
+              <p className="text-stone-600 dark:text-stone-300">{card.glossary.join(" · ")}</p>
             </Block>
           )}
 
@@ -145,14 +145,14 @@ export function RepoCardDialog({ repo, open, onClose }: { repo: string; open: bo
           {facts && (facts.sdl.length > 0 || catalogBits.length > 0 || facts.properties.length > 0) && (
             <Block title="Fatos (extraídos sem LLM)">
               <div className="space-y-2">
-                {catalogBits.length > 0 && <p className="text-sm text-zinc-600 dark:text-zinc-300">catalog-info · {catalogBits.join(" · ")}</p>}
+                {catalogBits.length > 0 && <p className="text-sm text-stone-600 dark:text-stone-300">catalog-info · {catalogBits.join(" · ")}</p>}
                 {facts.sdl.map((s) => (
                   <div key={`${s.path}|${s.service}`} className="text-sm">
                     <p className="font-medium">
-                      {s.domain}/{s.service} <span className="font-mono font-normal text-zinc-500">({s.path})</span>
+                      {s.domain}/{s.service} <span className="font-mono font-normal text-stone-500">({s.path})</span>
                     </p>
                     {[...s.queries, ...s.actions].length > 0 && (
-                      <p className="font-mono text-xs leading-relaxed text-zinc-600 dark:text-zinc-300">
+                      <p className="font-mono text-xs leading-relaxed text-stone-600 dark:text-stone-300">
                         {[...s.queries, ...s.actions].map((op, i) => {
                           const impl = implByOp.get(`${s.service}|${op}`);
                           return (
@@ -169,16 +169,16 @@ export function RepoCardDialog({ repo, open, onClose }: { repo: string; open: bo
                         })}
                       </p>
                     )}
-                    {s.events.length > 0 && <p className="text-zinc-500">eventos: {s.events.join(", ")}</p>}
+                    {s.events.length > 0 && <p className="text-stone-500">eventos: {s.events.join(", ")}</p>}
                   </div>
                 ))}
                 {facts.sdl.length > 0 && (
-                  <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                  <p className="text-xs text-stone-500 dark:text-stone-400">
                     Em verde: operação com handler encontrado ({info.impls.length}); passe o mouse para ver o arquivo.
                   </p>
                 )}
                 {facts.properties.map((p) => (
-                  <p key={p.path} className="text-sm text-zinc-600 dark:text-zinc-300">
+                  <p key={p.path} className="text-sm text-stone-600 dark:text-stone-300">
                     {p.properties.length} propriedade(s) configurável(is) em <span className="font-mono">{p.path}</span>
                   </p>
                 ))}
@@ -194,7 +194,7 @@ export function RepoCardDialog({ repo, open, onClose }: { repo: string; open: bo
 function Block({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="space-y-1.5">
-      <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-200">{title}</h3>
+      <h3 className="text-sm font-semibold text-stone-700 dark:text-stone-200">{title}</h3>
       {children}
     </section>
   );

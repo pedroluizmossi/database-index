@@ -264,6 +264,17 @@ class SuggestionReviewIn(BaseModel):
     approve: bool
 
 
+class DocSelectionIn(BaseModel):
+    pages: list[str] = Field(max_length=50_000, description="caminhos de página sem idioma, ex.: Plataforma/Email")
+    dry_run: bool = Field(False, description="só calcula as regras, sem gravar")
+
+
+class DocIgnoreIn(BaseModel):
+    doc_repo: str = Field(min_length=1, max_length=200)
+    doc_path: str = Field(min_length=1, max_length=1000)
+    reason: str = Field("", max_length=500)
+
+
 class TokenIn(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     scopes: list[str] = [SEARCH_READ]
@@ -669,6 +680,44 @@ def create_app(settings: Settings) -> FastAPI:
     async def docs_preview(name: str, request: Request, limit: int = Query(200, ge=1, le=1000),
                            _: Principal = Depends(require(SEARCH_READ))) -> dict[str, Any]:
         return await get_service(request).docs_preview(name, limit=limit)
+
+    @app.get("/api/v1/docs/sources", tags=["docs"],
+             summary="Fontes de documentação: seleção (include/exclude) e documentos no índice")
+    async def doc_sources(request: Request, _: Principal = Depends(require(SEARCH_READ))) -> list[dict[str, Any]]:
+        return await get_service(request).doc_sources()
+
+    @app.get("/api/v1/docs/{name}/catalog", tags=["docs"],
+             summary="Todas as páginas da wiki, marcando as da seleção e as do índice (admin; sem custo)")
+    async def doc_catalog(name: str, request: Request, _: Principal = Depends(require(ADMIN))) -> dict[str, Any]:
+        try:
+            return await get_service(request).wiki_catalog(name)
+        except (ValueError, RuntimeError) as e:
+            raise _http_error(e) from None
+
+    @app.put("/api/v1/docs/{name}/selection", tags=["docs"],
+             summary="Troca as páginas escolhidas da wiki (admin; não indexa, vale no próximo sync)")
+    async def doc_selection(name: str, body: DocSelectionIn, request: Request,
+                            principal: Principal = Depends(require(ADMIN))) -> dict[str, Any]:
+        params = {"name": name, "pages": len(body.pages), "dry_run": body.dry_run}
+        return await audited(request, principal, "docs:selection", params, get_service(request).set_wiki_selection(
+            name, body.pages, dry_run=body.dry_run))
+
+    @app.post("/api/v1/docs/ignored", tags=["docs"], summary="Tira uma página da busca, sem tirar do índice (admin)")
+    async def ignore_doc(body: DocIgnoreIn, request: Request,
+                         principal: Principal = Depends(require(ADMIN))) -> dict[str, Any]:
+        return await audited(request, principal, "docs:ignore", body.model_dump(),
+                             get_service(request).ignore_doc_key(body.doc_repo, body.doc_path, body.reason))
+
+    @app.delete("/api/v1/docs/ignored", tags=["docs"], summary="Devolve uma página à busca (admin)")
+    async def unignore_doc(request: Request, doc_repo: str = Query(..., max_length=200),
+                           doc_path: str = Query(..., max_length=1000),
+                           principal: Principal = Depends(require(ADMIN))) -> dict[str, bool]:
+        params = {"doc_repo": doc_repo, "doc_path": doc_path}
+        removed = await audited(request, principal, "docs:unignore", params,
+                                get_service(request).unignore_doc_key(doc_repo, doc_path))
+        if not removed:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "página não estava fora da busca")
+        return {"ignored": False}
 
     @app.get("/api/v1/relations/origins", tags=["relações"],
              summary="Origens de relação: rótulo, ordem, se é contestável ou gravada por pessoa/agent")

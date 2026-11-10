@@ -19,6 +19,9 @@ import type {
   SearchRequest,
   SyncJob,
   DocPageRow,
+  DocCatalog,
+  DocSelectionResult,
+  DocSourceInfo,
   DocsPreview,
   RepoDocLink,
   SyncResult,
@@ -73,6 +76,15 @@ export const api = {
   // com repos escolhidos pelo nome, a seleção não depende dela.
   docsPreview: (name: string) => getJson<DocsPreview>(`/api/v1/docs/${encodeURIComponent(name)}/preview`),
   docsOverview: (offset = 0) => getJson<DocPageRow[]>("/api/v1/docs/overview", { query: { limit: 2000, offset, docs_only: true } }),
+  docSources: () => getJson<DocSourceInfo[]>("/api/v1/docs/sources"),
+  // escolha das páginas de uma wiki (admin): lista sem custo; gravar só troca as regras (vale no próximo sync)
+  docCatalog: (name: string) => getJson<DocCatalog>(`/api/v1/docs/${seg(name)}/catalog`),
+  setDocSelection: (name: string, pages: string[], dryRun: boolean) =>
+    sendJson<DocSelectionResult>("PUT", `/api/v1/docs/${seg(name)}/selection`, { body: { pages, dry_run: dryRun } }),
+  ignoreDoc: (body: { doc_repo: string; doc_path: string; reason?: string }) =>
+    postJson<{ ignored: boolean }>("/api/v1/docs/ignored", body),
+  unignoreDoc: (q: { doc_repo: string; doc_path: string }) =>
+    sendJson<{ ignored: boolean }>("DELETE", `/api/v1/docs/ignored?${new URLSearchParams(q).toString()}`),
   relationOrigins: () => getJson<RelationOrigin[]>("/api/v1/relations/origins"),
   docSuggestions: () => getJson<DocSuggestion[]>("/api/v1/docs/suggestions"),
   reviewDocSuggestion: (body: { doc_repo: string; doc_path: string; repo: string; approve: boolean }) =>

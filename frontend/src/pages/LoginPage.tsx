@@ -47,8 +47,8 @@ export function LoginPage() {
           <div className="mb-5 flex size-14 items-center justify-center rounded-2xl bg-accent-600 text-white">
             <SearchCode className="size-7" aria-hidden="true" />
           </div>
-          <h1 className="text-2xl font-semibold tracking-tight">Entrar no code-index</h1>
-          <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
+          <h1 className="font-serif text-4xl leading-tight italic">Entrar no code-index</h1>
+          <p className="mt-2 text-sm text-stone-500 dark:text-stone-400">
             Busque no código dos repositórios indexados.
           </p>
         </div>
@@ -69,13 +69,13 @@ export function LoginPage() {
             </Button>
           ))}
           {providers?.length === 0 && (
-            <p className="text-center text-sm text-zinc-500 dark:text-zinc-400">
+            <p className="text-center text-sm text-stone-500 dark:text-stone-400">
               Login no navegador não está configurado neste servidor. Use uma API key.
             </p>
           )}
 
-          <details className="group rounded-xl border border-zinc-200 dark:border-zinc-800">
-            <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm font-medium text-zinc-600 dark:text-zinc-300">
+          <details className="group rounded-xl border border-stone-200 dark:border-stone-800">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm font-medium text-stone-600 dark:text-stone-300">
               <span className="inline-flex items-center gap-2">
                 <KeyRound className="size-4" aria-hidden="true" />
                 Usar API key (agents e scripts)
@@ -83,7 +83,7 @@ export function LoginPage() {
               <ChevronDown className="size-4 transition group-open:rotate-180" aria-hidden="true" />
             </summary>
 
-            <form onSubmit={submit} className="space-y-5 border-t border-zinc-200 p-4 dark:border-zinc-800">
+            <form onSubmit={submit} className="space-y-5 border-t border-stone-200 p-4 dark:border-stone-800">
               <div className="space-y-2">
                 <label htmlFor="api-key" className="text-sm font-medium">
                   API key
@@ -97,23 +97,23 @@ export function LoginPage() {
                     autoComplete="off"
                     spellCheck={false}
                     placeholder="cix_…"
-                    className="h-11 w-full rounded-xl border border-zinc-200 bg-white pr-11 pl-4 font-mono text-sm text-zinc-900 shadow-sm outline-none transition placeholder:text-zinc-400 hover:border-zinc-300 focus:border-accent-500 focus:ring-4 focus:ring-accent-500/15 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:border-zinc-600"
+                    className="h-11 w-full rounded-xl border border-stone-200 bg-sheet pr-11 pl-4 font-mono text-sm text-stone-900 shadow-sm outline-none transition placeholder:text-stone-400 hover:border-stone-300 focus:border-accent-500 focus:ring-4 focus:ring-accent-500/15 dark:border-stone-700 dark:bg-stone-900 dark:text-stone-100 dark:hover:border-stone-600"
                   />
                   <button
                     type="button"
                     onClick={() => setReveal((v) => !v)}
                     aria-label={reveal ? "Ocultar chave" : "Mostrar chave"}
-                    className="absolute top-1/2 right-2 inline-flex size-8 -translate-y-1/2 items-center justify-center rounded-lg text-zinc-400 transition hover:bg-zinc-900/5 hover:text-zinc-700 dark:hover:bg-white/10 dark:hover:text-zinc-200"
+                    className="absolute top-1/2 right-2 inline-flex size-8 -translate-y-1/2 items-center justify-center rounded-lg text-stone-400 transition hover:bg-stone-900/5 hover:text-stone-700 dark:hover:bg-white/10 dark:hover:text-stone-200"
                   >
                     {reveal ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
                   </button>
                 </div>
-                <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                <p className="text-xs text-stone-500 dark:text-stone-400">
                   Gere a sua com <code className="font-mono">code-index token create</code>.
                 </p>
               </div>
 
-              <label className="flex cursor-pointer items-center gap-2.5 text-sm text-zinc-600 dark:text-zinc-300">
+              <label className="flex cursor-pointer items-center gap-2.5 text-sm text-stone-600 dark:text-stone-300">
                 <input
                   type="checkbox"
                   checked={remember}

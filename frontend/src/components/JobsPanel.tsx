@@ -122,14 +122,14 @@ export function RunningJobBanner({ job, onOpen }: { job: SyncJob; onOpen: (job: 
   return (
     <div
       role="status"
-      className="space-y-3 rounded-xl border border-accent-200 bg-accent-50 px-4 py-3 text-sm text-accent-900 dark:border-accent-900/60 dark:bg-accent-950/40 dark:text-accent-100"
+      className="space-y-3 rounded-xl border border-stone-200 bg-sheet py-3 pr-4 pl-5 text-sm text-stone-800 shadow-[inset_3px_0_0_var(--color-accent-500)] dark:border-stone-800 dark:bg-stone-900 dark:text-stone-200"
     >
       <div className="flex flex-wrap items-center gap-3">
-        <LoaderCircle className="size-4 shrink-0 animate-spin" aria-hidden="true" />
+        <LoaderCircle className="size-4 shrink-0 animate-spin text-accent-500" aria-hidden="true" />
         <p className="min-w-0 flex-1">
           <span className="font-medium">Indexação em andamento</span>
           {p ? <> · {progressLine(p)}</> : <> ({scopeLabel(job)})</>}
-          <span className="text-accent-800/80 dark:text-accent-200/80">
+          <span className="text-stone-500 dark:text-stone-400">
             {" "}· {job.requested_by}, {timeAgo(job.started_at)}
           </span>
         </p>
@@ -141,7 +141,7 @@ export function RunningJobBanner({ job, onOpen }: { job: SyncJob; onOpen: (job: 
         <div className="space-y-1.5">
           <ProgressBar value={p.files_done} max={p.files_total} label="Arquivos processados no lote" />
           {current && (
-            <p className="truncate text-xs text-accent-800 dark:text-accent-200">
+            <p className="truncate text-xs text-stone-500 dark:text-stone-400">
               {current.status === "fetching" ? "Baixando" : "Indexando"}{" "}
               <span className="font-mono">{current.name}</span>
               {current.status === "indexing" && <> · {filesLabel(current.files_done, current.files_total)}</>}
@@ -158,10 +158,10 @@ export function JobsPanel({ state, onOpen }: { state: JobsState; onOpen: (job: S
   const { jobs, error, loading, refresh } = state;
   return (
     <Panel className="overflow-hidden">
-      <div className="flex items-center justify-between gap-3 border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
+      <div className="flex items-center justify-between gap-3 border-b border-stone-200 px-4 py-3 dark:border-stone-800">
         <div>
           <h2 className="font-semibold">Jobs de indexação</h2>
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">Últimos 20, guardados no servidor.</p>
+          <p className="text-xs text-stone-500 dark:text-stone-400">Últimos 20, guardados no servidor.</p>
         </div>
         <Button variant="secondary" size="sm" loading={loading} onClick={() => void refresh()}>
           Atualizar
@@ -182,20 +182,20 @@ export function JobsPanel({ state, onOpen }: { state: JobsState; onOpen: (job: S
       {jobs !== null && jobs.length === 0 && <EmptyState icon={History} title="Nenhuma indexação ainda" />}
 
       {jobs !== null && jobs.length > 0 && (
-        <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
+        <ul className="divide-y divide-stone-100 dark:divide-stone-800">
           {jobs.map((job) => (
             <li key={job.id}>
               <button
                 type="button"
                 onClick={() => onOpen(job)}
-                className="flex w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-zinc-50 dark:hover:bg-white/[0.02]"
+                className="flex w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-stone-50 dark:hover:bg-white/[0.02]"
               >
                 <Badge tone={display(job).tone} dot>
                   {display(job).label}
                 </Badge>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium">{scopeLabel(job)}</p>
-                  <p className="truncate text-xs text-zinc-500 dark:text-zinc-400">
+                  <p className="truncate text-xs text-stone-500 dark:text-stone-400">
                     <span title={formatDateTime(job.started_at)}>{timeAgo(job.started_at)}</span> · {duration(job)} ·{" "}
                     {job.requested_by}
                   </p>
@@ -207,13 +207,13 @@ export function JobsPanel({ state, onOpen }: { state: JobsState; onOpen: (job: S
                       ? "text-rose-600 dark:text-rose-400"
                       : display(job).tone === "warning"
                         ? "text-amber-600 dark:text-amber-400"
-                        : "text-zinc-600 dark:text-zinc-300",
+                        : "text-stone-600 dark:text-stone-300",
                   )}
                   title={summary(job)}
                 >
                   {summary(job)}
                 </p>
-                <ChevronRight className="size-4 shrink-0 text-zinc-400" aria-hidden="true" />
+                <ChevronRight className="size-4 shrink-0 text-stone-400" aria-hidden="true" />
               </button>
             </li>
           ))}
@@ -276,13 +276,13 @@ export function JobDialog({ job, onClose }: { job: SyncJob | null; onClose: () =
             <>
               <Section title={`Indexados (${indexed.length})`}>
                 {indexed.length === 0 ? (
-                  <p className="text-zinc-500 dark:text-zinc-400">Nenhum.</p>
+                  <p className="text-stone-500 dark:text-stone-400">Nenhum.</p>
                 ) : (
-                  <ul className="divide-y divide-zinc-100 rounded-xl border border-zinc-200 font-mono text-xs dark:divide-zinc-800 dark:border-zinc-800">
+                  <ul className="divide-y divide-stone-100 rounded-xl border border-stone-200 font-mono text-xs dark:divide-stone-800 dark:border-stone-800">
                     {indexed.map(([name, commit]) => (
                       <li key={name} className="flex justify-between gap-3 px-3 py-2">
                         <span className="truncate">{name}</span>
-                        <span className="text-zinc-500">{commit ? commit.slice(0, 7) : "—"}</span>
+                        <span className="text-stone-500">{commit ? commit.slice(0, 7) : "—"}</span>
                       </li>
                     ))}
                   </ul>
@@ -301,13 +301,13 @@ export function JobDialog({ job, onClose }: { job: SyncJob | null; onClose: () =
                 </Section>
               )}
               {result.remaining > 0 && (
-                <p className="text-zinc-500 dark:text-zinc-400">{result.remaining} {plural(result.remaining, "repositório ficou", "repositórios ficaram")} para os próximos lotes.</p>
+                <p className="text-stone-500 dark:text-stone-400">{result.remaining} {plural(result.remaining, "repositório ficou", "repositórios ficaram")} para os próximos lotes.</p>
               )}
             </>
           )}
 
           {current.status === "running" && (
-            <p className="flex items-center gap-2 text-zinc-500 dark:text-zinc-400">
+            <p className="flex items-center gap-2 text-stone-500 dark:text-stone-400">
               <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> Acompanhando… atualiza a cada {POLL_MS / 1000} s.
             </p>
           )}
@@ -329,7 +329,7 @@ const REPO_STATUS: Record<RepoProgressStatus, { label: string; tone: BadgeTone }
 /** Situação de cada repo do lote: status, barra de arquivos e tempo. */
 function RepoProgressList({ repos, running }: { repos: RepoProgress[]; running: boolean }) {
   return (
-    <ul className="divide-y divide-zinc-100 rounded-lg border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
+    <ul className="divide-y divide-stone-100 rounded-lg border border-stone-200 dark:divide-stone-800 dark:border-stone-800">
       {repos.map((r) => {
         const st = REPO_STATUS[r.status];
         // Job encerrado com repo ainda "indexando" = o retrato final não chegou; não finge andamento.
@@ -340,7 +340,7 @@ function RepoProgressList({ repos, running }: { repos: RepoProgress[]; running: 
               <span className="min-w-0 flex-1 truncate font-mono text-xs" title={r.name}>
                 {r.name}
               </span>
-              <span className="shrink-0 text-xs text-zinc-500 tabular-nums dark:text-zinc-400">
+              <span className="shrink-0 text-xs text-stone-500 tabular-nums dark:text-stone-400">
                 {filesLabel(r.files_done, r.files_total)}
                 {r.files_unchanged > 0 && <> · {count.format(r.files_unchanged)} sem mudança</>}
                 {r.seconds !== null && <> · {formatDuration(r.seconds * 1000)}</>}
@@ -368,7 +368,7 @@ function RepoProgressList({ repos, running }: { repos: RepoProgress[]; running: 
 function Item({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="min-w-0">
-      <dt className="text-xs text-zinc-500 dark:text-zinc-400">{label}</dt>
+      <dt className="text-xs text-stone-500 dark:text-stone-400">{label}</dt>
       <dd className="mt-0.5 truncate">{children}</dd>
     </div>
   );
@@ -377,7 +377,7 @@ function Item({ label, children }: { label: string; children: ReactNode }) {
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="space-y-2">
-      <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-200">{title}</h3>
+      <h3 className="text-sm font-semibold text-stone-700 dark:text-stone-200">{title}</h3>
       {children}
     </section>
   );

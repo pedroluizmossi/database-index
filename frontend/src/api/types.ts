@@ -436,7 +436,69 @@ export interface DocPageRow {
   url: string | null;
   type: DocType;
   attrs: Record<string, string>;
+  /** Fora da busca (continua no índice). */
+  ignored: boolean;
   links: DocLink[];
+}
+
+/** Fonte de documentação cadastrada (GET /api/v1/docs/sources). */
+export interface DocSourceInfo {
+  name: string;
+  /** Nome do repo de documentação ("docs__wiki"): status e indexação vêm de /api/v1/repos. */
+  repo: string;
+  type: string;
+  label: string;
+  url: string;
+  locale: string;
+  /** Globs de caminho de página; vazio = todas. */
+  include: string[];
+  exclude: string[];
+  /** Documentos no índice. */
+  documents: number;
+  /** Páginas fora da busca. */
+  ignored: number;
+  /** A fonte permite escolher páginas na interface (wikis). */
+  page_selection: boolean;
+}
+
+/** Página publicada na wiki (GET /api/v1/docs/{name}/catalog). */
+export interface DocCatalogPage {
+  /** Caminho sem idioma ("Plataforma/Email"). */
+  path: string;
+  title: string;
+  url: string;
+  updated_at: string;
+  /** Entra pela seleção atual da fonte. */
+  selected: boolean;
+  /** Já está no índice. */
+  indexed: boolean;
+  ignored: boolean;
+}
+
+export interface DocCatalog {
+  name: string;
+  repo: string;
+  url: string;
+  locale: string;
+  include: string[];
+  exclude: string[];
+  pages: DocCatalogPage[];
+}
+
+/** PUT /api/v1/docs/{name}/selection */
+export interface DocSelectionResult {
+  name: string;
+  include: string[];
+  exclude: string[];
+  previous: { include: string[]; exclude: string[] };
+  selected: number;
+  /** Páginas que entram (vão para a Voyage no próximo sync). */
+  added: number;
+  /** Páginas que saem do índice no próximo sync. */
+  removed: number;
+  /** As regras mudaram. */
+  changed: boolean;
+  saved: boolean;
 }
 
 export interface XrayData {

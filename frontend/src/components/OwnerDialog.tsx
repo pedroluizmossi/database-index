@@ -164,12 +164,12 @@ export function OwnerDialog({
       <form id="owner-form" onSubmit={(e) => void submit(e)} className="space-y-5">
         {single && whole && <CurrentOwner row={whole} onPick={setValue} />}
         {single && rows !== null && !whole && (
-          <p className="text-sm text-zinc-500 dark:text-zinc-400">
+          <p className="text-sm text-stone-500 dark:text-stone-400">
             Sem domínio hoje: nem SDL, nem repositório irmão, nem chamadas de API ou uso que indiquem o domínio.
           </p>
         )}
         {multiManual && (
-          <p className="text-sm text-zinc-600 dark:text-zinc-300">
+          <p className="text-sm text-stone-600 dark:text-stone-300">
             Há {multiManual.owners.length} {plural(multiManual.owners.length, "domínio manual", "domínios manuais")}; o campo mostra só o primeiro. Confira a lista em &ldquo;Hoje&rdquo; antes
             de salvar.
           </p>
@@ -187,7 +187,7 @@ export function OwnerDialog({
         )}
 
         <div className="flex min-w-0 flex-col gap-1.5">
-          <label htmlFor={domainId} className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+          <label htmlFor={domainId} className="text-xs font-medium text-stone-500 dark:text-stone-400">
             Domínio ou domínio/serviço
           </label>
           <OwnerCombobox
@@ -245,11 +245,11 @@ export function OwnerDialog({
 
         {folders.length > 0 && (
           <section className="space-y-2">
-            <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-200">Pastas com domínio próprio</h3>
-            <ul className="divide-y divide-zinc-100 rounded-lg border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
+            <h3 className="text-sm font-semibold text-stone-700 dark:text-stone-200">Pastas com domínio próprio</h3>
+            <ul className="divide-y divide-stone-100 rounded-lg border border-stone-200 dark:divide-stone-800 dark:border-stone-800">
               {folders.map((f) => (
                 <li key={f.path} className="flex items-center gap-3 px-3 py-2 text-sm">
-                  <FolderTree className="size-4 shrink-0 text-zinc-500 dark:text-zinc-400" aria-hidden="true" />
+                  <FolderTree className="size-4 shrink-0 text-stone-500 dark:text-stone-400" aria-hidden="true" />
                   <span className="min-w-0 flex-1 truncate font-mono text-xs">{f.path}/</span>
                   <span className="truncate">{f.owners.join(", ")}</span>
                   {f.origin && <OriginBadge origin={f.origin} />}
@@ -331,15 +331,15 @@ function SelectedRepos({ repos, manualCount }: { repos: Repo[]; manualCount: num
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-sm">
-        <span className="font-medium text-zinc-700 dark:text-zinc-200">{repos.length} {plural(repos.length, "repositório selecionado", "repositórios selecionados")}</span>
+        <span className="font-medium text-stone-700 dark:text-stone-200">{repos.length} {plural(repos.length, "repositório selecionado", "repositórios selecionados")}</span>
         {manualCount > 0 && (
-          <span className="text-xs text-zinc-500 dark:text-zinc-400">{manualCount} {plural(manualCount, "repositório com domínio manual (será substituído)", "repositórios com domínio manual (serão substituídos)")}</span>
+          <span className="text-xs text-stone-500 dark:text-stone-400">{manualCount} {plural(manualCount, "repositório com domínio manual (será substituído)", "repositórios com domínio manual (serão substituídos)")}</span>
         )}
       </div>
       <ul
         tabIndex={0}
         aria-label="Repositórios selecionados"
-        className="max-h-48 divide-y divide-zinc-100 overflow-y-auto rounded-lg border border-zinc-200 outline-none focus-visible:ring-2 focus-visible:ring-accent-500 dark:divide-zinc-800 dark:border-zinc-800"
+        className="max-h-48 divide-y divide-stone-100 overflow-y-auto rounded-lg border border-stone-200 outline-none focus-visible:ring-2 focus-visible:ring-accent-500 dark:divide-stone-800 dark:border-stone-800"
       >
         {repos.map((r) => (
           <li key={r.name} className="flex items-center gap-3 px-3 py-2 text-sm">
@@ -348,13 +348,13 @@ function SelectedRepos({ repos, manualCount }: { repos: Repo[]; manualCount: num
             </span>
             {r.owners.length > 0 ? (
               <span
-                className="max-w-[45%] truncate font-mono text-xs text-zinc-600 dark:text-zinc-300"
+                className="max-w-[45%] truncate font-mono text-xs text-stone-600 dark:text-stone-300"
                 title={r.owners.join(", ")}
               >
                 {r.owners.join(", ")}
               </span>
             ) : (
-              <span className="text-xs text-zinc-500 dark:text-zinc-400">sem domínio</span>
+              <span className="text-xs text-stone-500 dark:text-stone-400">sem domínio</span>
             )}
             {r.owner_origin && <OriginBadge origin={r.owner_origin} />}
           </li>
@@ -367,27 +367,27 @@ function SelectedRepos({ repos, manualCount }: { repos: Repo[]; manualCount: num
 /** Dono atual do repo inteiro, de onde veio e o que as origens mais fracas sugerem (um clique preenche). */
 function CurrentOwner({ row, onPick }: { row: OwnershipRow; onPick: (value: string) => void }) {
   return (
-    <div className="space-y-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3.5 py-3 text-sm dark:border-zinc-800 dark:bg-zinc-950/40">
+    <div className="space-y-2 rounded-lg border border-stone-200 bg-stone-50 px-3.5 py-3 text-sm dark:border-stone-800 dark:bg-stone-950/40">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-zinc-500 dark:text-zinc-400">Hoje:</span>
+        <span className="text-stone-500 dark:text-stone-400">Hoje:</span>
         <span className="font-medium">{row.owners.join(", ")}</span>
         {row.origin && <OriginBadge origin={row.origin} />}
         {row.confidence && (
-          <span className="text-xs text-zinc-500 dark:text-zinc-400">confiança {CONFIDENCE[row.confidence] ?? row.confidence}</span>
+          <span className="text-xs text-stone-500 dark:text-stone-400">confiança {CONFIDENCE[row.confidence] ?? row.confidence}</span>
         )}
       </div>
       {row.alternatives.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-xs text-zinc-500 dark:text-zinc-400">Outras indicações:</span>
+          <span className="text-xs text-stone-500 dark:text-stone-400">Outras indicações:</span>
           {row.alternatives.map((alt) => (
             <button
               key={`${alt.owner}-${alt.origin}`}
               type="button"
               onClick={() => onPick(alt.owner)}
-              className="rounded-md border border-zinc-200 bg-white px-2 py-0.5 text-xs outline-none transition hover:border-accent-400 hover:text-accent-700 focus-visible:ring-2 focus-visible:ring-accent-500 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:text-accent-300"
+              className="rounded-md border border-stone-200 bg-sheet px-2 py-0.5 text-xs outline-none transition hover:border-accent-400 hover:text-accent-700 focus-visible:ring-2 focus-visible:ring-accent-500 dark:border-stone-700 dark:bg-stone-900 dark:hover:text-accent-300"
               title={`Usar ${alt.owner}`}
             >
-              {alt.owner} <span className="text-zinc-500 dark:text-zinc-400">· {ORIGIN_LABEL[alt.origin]}</span>
+              {alt.owner} <span className="text-stone-500 dark:text-stone-400">· {ORIGIN_LABEL[alt.origin]}</span>
             </button>
           ))}
         </div>

@@ -126,13 +126,13 @@ export function RepoSheet({ repo, knownRepos, onSelectRepo, onOpenFile, docs, do
       <Panel className="overflow-hidden">
         <div id="ficha-o-que-e" className="scroll-mt-32 space-y-5 p-5 sm:p-6">
           <div className="flex items-start gap-3">
-            <GitBranch className="mt-1 size-5 shrink-0 text-zinc-400" aria-hidden="true" />
+            <GitBranch className="mt-1 size-5 shrink-0 text-stone-400" aria-hidden="true" />
             <div className="min-w-0 flex-1">
-              <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+              <p className="text-xs font-medium text-stone-500 dark:text-stone-400">
                 Repositório{card?.kind ? ` · ${card.kind}` : ""}
               </p>
               <h2 className="mt-1 text-xl font-semibold tracking-tight break-words">{repoShortName(repo.name, repo.org)}</h2>
-              <p className="mt-1 text-sm break-all text-zinc-500 dark:text-zinc-400">{repo.org ?? "Repositório local"}</p>
+              <p className="mt-1 text-sm break-all text-stone-500 dark:text-stone-400">{repo.org ?? "Repositório local"}</p>
             </div>
             <Badge tone={repo.status} dot>
               {STATUS_LABEL[repo.status]}
@@ -141,7 +141,7 @@ export function RepoSheet({ repo, knownRepos, onSelectRepo, onOpenFile, docs, do
 
           {infoState === "loading" && <Skeleton className="h-16 w-full" />}
           {card ? (
-            <p className="max-w-3xl text-[15px] leading-relaxed text-zinc-800 dark:text-zinc-100">{card.summary}</p>
+            <p className="max-w-3xl text-[15px] leading-relaxed text-stone-800 dark:text-stone-100">{card.summary}</p>
           ) : (
             infoState !== "loading" && (
               <Alert tone="info">
@@ -153,8 +153,8 @@ export function RepoSheet({ repo, knownRepos, onSelectRepo, onOpenFile, docs, do
 
           {card && card.capabilities.length > 0 && (
             <div>
-              <h3 className="mb-2 text-xs font-medium text-zinc-500 dark:text-zinc-400">O que ele sabe fazer</h3>
-              <ul className="grid gap-x-6 gap-y-1.5 text-sm text-zinc-700 sm:grid-cols-2 dark:text-zinc-200">
+              <h3 className="mb-2 text-xs font-medium text-stone-500 dark:text-stone-400">O que ele sabe fazer</h3>
+              <ul className="grid gap-x-6 gap-y-1.5 text-sm text-stone-700 sm:grid-cols-2 dark:text-stone-200">
                 {card.capabilities.map((c) => (
                   <li key={c} className="flex gap-2">
                     <span className="mt-2 size-1 shrink-0 rounded-full bg-accent-500" aria-hidden="true" />
@@ -168,7 +168,7 @@ export function RepoSheet({ repo, knownRepos, onSelectRepo, onOpenFile, docs, do
           <dl className="grid gap-x-8 gap-y-4 text-sm sm:grid-cols-2">
             <Fact label="Dono (domínio/serviço)">
               {repo.owners.length === 0 ? (
-                <span className="text-zinc-500 dark:text-zinc-400">sem dono definido</span>
+                <span className="text-stone-500 dark:text-stone-400">sem dono definido</span>
               ) : (
                 <span className="flex flex-wrap items-center gap-1.5">
                   {repo.owners.map((o) => (
@@ -177,7 +177,7 @@ export function RepoSheet({ repo, knownRepos, onSelectRepo, onOpenFile, docs, do
                     </Badge>
                   ))}
                   {repo.owner_origin && (
-                    <span className="text-xs text-zinc-500 dark:text-zinc-400" title={ORIGIN_HINT[repo.owner_origin]}>
+                    <span className="text-xs text-stone-500 dark:text-stone-400" title={ORIGIN_HINT[repo.owner_origin]}>
                       {ORIGIN_LABEL[repo.owner_origin]}
                       {repo.owner_confidence ? ` · confiança ${repo.owner_confidence}` : ""}
                     </span>
@@ -202,10 +202,10 @@ export function RepoSheet({ repo, knownRepos, onSelectRepo, onOpenFile, docs, do
 
           {card?.glossary && card.glossary.length > 0 && (
             <details className="group text-sm">
-              <summary className="cursor-pointer text-xs font-medium text-zinc-500 select-none hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200">
+              <summary className="cursor-pointer text-xs font-medium text-stone-500 select-none hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200">
                 Glossário ({card.glossary.length} {plural(card.glossary.length, "termo", "termos")})
               </summary>
-              <ul className="mt-2 grid gap-x-6 gap-y-1 text-zinc-700 sm:grid-cols-2 dark:text-zinc-200">
+              <ul className="mt-2 grid gap-x-6 gap-y-1 text-stone-700 sm:grid-cols-2 dark:text-stone-200">
                 {card.glossary.map((g) => (
                   <li key={g}>{g}</li>
                 ))}
@@ -214,13 +214,13 @@ export function RepoSheet({ repo, knownRepos, onSelectRepo, onOpenFile, docs, do
           )}
         </div>
 
-        <nav aria-label="Seções da ficha" className="flex flex-wrap gap-1.5 border-t border-zinc-200 bg-zinc-50/70 px-4 py-2.5 dark:border-zinc-800 dark:bg-zinc-950/40">
+        <nav aria-label="Seções da ficha" className="flex flex-wrap gap-1.5 border-t border-stone-200 bg-stone-50/70 px-4 py-2.5 dark:border-stone-800 dark:bg-stone-950/40">
           {SECTIONS.slice(1).map(({ id, label, icon: Icon }) => (
             <button
               key={id}
               type="button"
               onClick={() => jump(id)}
-              className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-zinc-600 transition hover:bg-white hover:text-accent-600 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-accent-400"
+              className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-stone-600 transition hover:bg-sheet hover:text-accent-600 dark:text-stone-300 dark:hover:bg-stone-800 dark:hover:text-accent-400"
             >
               <Icon className="size-3.5" aria-hidden="true" />
               {label}
@@ -244,7 +244,7 @@ export function RepoSheet({ repo, knownRepos, onSelectRepo, onOpenFile, docs, do
         {!card?.entrypoints?.length ? (
           <Empty>{card ? "O cartão não indica pontos de entrada." : "Aparece quando o repo tiver cartão."}</Empty>
         ) : (
-          <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
+          <ul className="divide-y divide-stone-100 dark:divide-stone-800">
             {card.entrypoints.map((path) => {
               const kind = entrypointKind(path);
               const Icon = kind === "folder" ? Folder : FileCode2;
@@ -255,10 +255,10 @@ export function RepoSheet({ repo, knownRepos, onSelectRepo, onOpenFile, docs, do
                     disabled={kind === "missing"}
                     onClick={() => openEntrypoint(path)}
                     title={kind === "missing" ? "Este caminho não está no índice" : kind === "folder" ? "Ver os arquivos desta pasta" : "Abrir o arquivo"}
-                    className="flex w-full items-center gap-3 px-5 py-2.5 text-left transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-white/[0.03]"
+                    className="flex w-full items-center gap-3 px-5 py-2.5 text-left transition hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-white/[0.03]"
                   >
-                    <Icon className="size-4 shrink-0 text-zinc-400" aria-hidden="true" />
-                    <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-zinc-700 dark:text-zinc-200">{path}</span>
+                    <Icon className="size-4 shrink-0 text-stone-400" aria-hidden="true" />
+                    <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-stone-700 dark:text-stone-200">{path}</span>
                     <FileSummaryHint file={files?.find((f) => f.path === path.replace(/\/+$/, ""))} />
                   </button>
                 </li>
@@ -318,7 +318,7 @@ export function RepoSheet({ repo, knownRepos, onSelectRepo, onOpenFile, docs, do
         {!info?.related.length ? (
           <Empty>Nenhum repo relacionado conhecido.</Empty>
         ) : (
-          <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
+          <ul className="divide-y divide-stone-100 dark:divide-stone-800">
             {info.related.map((r) => {
               const known = knownRepos.has(r.repo);
               return (
@@ -328,15 +328,15 @@ export function RepoSheet({ repo, knownRepos, onSelectRepo, onOpenFile, docs, do
                     disabled={!known}
                     onClick={() => onSelectRepo(r.repo)}
                     title={known ? "Abrir a ficha deste repo" : "Repo fora do índice"}
-                    className="flex w-full items-center gap-3 px-5 py-3 text-left transition hover:bg-zinc-50 disabled:cursor-default disabled:hover:bg-transparent dark:hover:bg-white/[0.03]"
+                    className="flex w-full items-center gap-3 px-5 py-3 text-left transition hover:bg-stone-50 disabled:cursor-default disabled:hover:bg-transparent dark:hover:bg-white/[0.03]"
                   >
-                    <GitBranch className="size-4 shrink-0 text-zinc-400" aria-hidden="true" />
+                    <GitBranch className="size-4 shrink-0 text-stone-400" aria-hidden="true" />
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">{r.repo.split("__").pop()}</span>
-                      {r.why && <span className="block text-xs text-zinc-500 dark:text-zinc-400">{r.why}</span>}
+                      <span className="block truncate text-sm font-medium text-stone-900 dark:text-stone-100">{r.repo.split("__").pop()}</span>
+                      {r.why && <span className="block text-xs text-stone-500 dark:text-stone-400">{r.why}</span>}
                     </span>
                     {r.basis && <Badge tone={r.basis === "codigo" ? "indexed" : "neutral"}>{r.basis === "codigo" ? "visto no código" : "pelo nome"}</Badge>}
-                    {known && <ChevronRight className="size-4 shrink-0 text-zinc-400" aria-hidden="true" />}
+                    {known && <ChevronRight className="size-4 shrink-0 text-stone-400" aria-hidden="true" />}
                   </button>
                 </li>
               );
@@ -347,7 +347,7 @@ export function RepoSheet({ repo, knownRepos, onSelectRepo, onOpenFile, docs, do
 
       {/* 7. Saúde do enriquecimento */}
       <Section id="saude" icon={Activity} title="Enriquecimento" hint="O que agents já escreveram sobre este repo e o que ainda falta.">
-        <dl className="divide-y divide-zinc-100 dark:divide-zinc-800">
+        <dl className="divide-y divide-stone-100 dark:divide-stone-800">
           <Health
             label="Cartão do repo"
             tone={!card ? "missing" : info?.stale ? "stale" : "ok"}
@@ -402,14 +402,14 @@ function Section({ id, icon: Icon, title, count, hint, children }: { id: Section
   return (
     <Panel className="overflow-hidden">
       <div id={`ficha-${id}`} className="scroll-mt-32">
-        <div className="flex items-start gap-3 border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
+        <div className="flex items-start gap-3 border-b border-stone-200 px-5 py-4 dark:border-stone-800">
           <Icon className="mt-0.5 size-4 shrink-0 text-accent-500" aria-hidden="true" />
           <div className="min-w-0">
             <h3 className="font-semibold">
               {title}
-              {count !== undefined && <span className="ml-2 font-normal text-zinc-400 tabular-nums">{numberFormat.format(count)}</span>}
+              {count !== undefined && <span className="ml-2 font-normal text-stone-400 tabular-nums">{numberFormat.format(count)}</span>}
             </h3>
-            <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">{hint}</p>
+            <p className="mt-0.5 text-xs text-stone-500 dark:text-stone-400">{hint}</p>
           </div>
         </div>
         {children}
@@ -420,23 +420,23 @@ function Section({ id, icon: Icon, title, count, hint, children }: { id: Section
 
 function SectionCount({ value }: { value: number | null }) {
   if (value === null) return null;
-  return <span className="text-zinc-400 tabular-nums">{numberFormat.format(value)}</span>;
+  return <span className="text-stone-400 tabular-nums">{numberFormat.format(value)}</span>;
 }
 
 function Empty({ children }: { children: ReactNode }) {
-  return <p className="px-5 py-6 text-sm text-zinc-500 dark:text-zinc-400">{children}</p>;
+  return <p className="px-5 py-6 text-sm text-stone-500 dark:text-stone-400">{children}</p>;
 }
 
 function Fact({ label, className, children }: { label: string; className?: string; children: ReactNode }) {
   return (
     <div className={className}>
-      <dt className="mb-1 text-xs font-medium text-zinc-500 dark:text-zinc-400">{label}</dt>
-      <dd className="text-zinc-800 dark:text-zinc-100">{children}</dd>
+      <dt className="mb-1 text-xs font-medium text-stone-500 dark:text-stone-400">{label}</dt>
+      <dd className="text-stone-800 dark:text-stone-100">{children}</dd>
     </div>
   );
 }
 
-const HEALTH_DOT = { ok: "bg-emerald-500", stale: "bg-amber-400", missing: "bg-rose-400", none: "bg-zinc-300 dark:bg-zinc-600" };
+const HEALTH_DOT = { ok: "bg-emerald-500", stale: "bg-amber-400", missing: "bg-rose-400", none: "bg-stone-300 dark:bg-stone-600" };
 
 function Health({ label, tone, status, detail, command }: { label: string; tone: keyof typeof HEALTH_DOT; status: string; detail: ReactNode; command?: string }) {
   return (
@@ -446,10 +446,10 @@ function Health({ label, tone, status, detail, command }: { label: string; tone:
         {label}
       </dt>
       <dd className="min-w-0 space-y-1.5 text-sm">
-        <p className="font-medium text-zinc-800 dark:text-zinc-100">{status}</p>
-        <div className="text-xs text-zinc-500 dark:text-zinc-400">{detail}</div>
+        <p className="font-medium text-stone-800 dark:text-stone-100">{status}</p>
+        <div className="text-xs text-stone-500 dark:text-stone-400">{detail}</div>
         {command && (
-          <code className="block overflow-x-auto rounded-md bg-zinc-100 px-2 py-1 font-mono text-[11px] whitespace-nowrap text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
+          <code className="block overflow-x-auto rounded-md bg-stone-100 px-2 py-1 font-mono text-[11px] whitespace-nowrap text-stone-700 dark:bg-stone-800 dark:text-stone-200">
             {command}
           </code>
         )}
@@ -461,7 +461,7 @@ function Health({ label, tone, status, detail, command }: { label: string; tone:
 function FileSummaryHint({ file }: { file: RepoFile | undefined }) {
   if (!file?.summary) return null;
   return (
-    <span className="hidden max-w-[55%] items-center gap-1.5 truncate text-xs text-zinc-500 md:inline-flex dark:text-zinc-400" title={file.summary}>
+    <span className="hidden max-w-[55%] items-center gap-1.5 truncate text-xs text-stone-500 md:inline-flex dark:text-stone-400" title={file.summary}>
       <Sparkles className="size-3 shrink-0 text-violet-500" aria-hidden="true" />
       <span className="truncate">{file.summary}</span>
     </span>
@@ -489,21 +489,21 @@ function SdlServiceBlock({ service, impls, onOpen }: { service: SdlService; impl
   }, [impls, service]);
   const total = opCount(service);
   return (
-    <div className="space-y-4 border-b border-zinc-100 px-5 py-4 last:border-b-0 dark:border-zinc-800">
+    <div className="space-y-4 border-b border-stone-100 px-5 py-4 last:border-b-0 dark:border-stone-800">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <Badge tone="accent">
           {service.domain}/{service.service}
         </Badge>
-        <button type="button" onClick={() => onOpen(service.path)} className="font-mono text-xs text-zinc-500 underline-offset-2 hover:text-accent-600 hover:underline dark:text-zinc-400">
+        <button type="button" onClick={() => onOpen(service.path)} className="font-mono text-xs text-stone-500 underline-offset-2 hover:text-accent-600 hover:underline dark:text-stone-400">
           {service.path}
         </button>
-        <span className="ml-auto text-xs text-zinc-500 dark:text-zinc-400">
+        <span className="ml-auto text-xs text-stone-500 dark:text-stone-400">
           {byOp.size} de {total} com handler localizado
         </span>
       </div>
       {OP_GROUPS.filter((g) => service[g.key].length > 0).map((g) => (
         <div key={g.key}>
-          <p className="mb-1.5 text-xs font-medium text-zinc-500 dark:text-zinc-400">
+          <p className="mb-1.5 text-xs font-medium text-stone-500 dark:text-stone-400">
             {g.label} <span className="font-normal tabular-nums">{service[g.key].length}</span>
           </p>
           <ul className="flex flex-wrap gap-1.5">
@@ -522,7 +522,7 @@ function SdlServiceBlock({ service, impls, onOpen }: { service: SdlService; impl
                       <span className="font-sans text-[11px] text-emerald-700/80 dark:text-emerald-400/80">→ {impl.symbol}</span>
                     </button>
                   ) : (
-                    <span className="inline-flex rounded-md bg-zinc-500/10 px-2 py-1 font-mono text-xs text-zinc-700 ring-1 ring-zinc-500/15 ring-inset dark:text-zinc-300">{op}</span>
+                    <span className="inline-flex rounded-md bg-stone-500/10 px-2 py-1 font-mono text-xs text-stone-700 ring-1 ring-stone-500/15 ring-inset dark:text-stone-300">{op}</span>
                   )}
                 </li>
               );
@@ -605,7 +605,7 @@ function FileExplorer({ files, filter, onFilter, onOpen }: { files: RepoFile[]; 
 
   return (
     <div>
-      <div className="flex flex-wrap items-center gap-3 border-b border-zinc-100 px-5 py-3 dark:border-zinc-800">
+      <div className="flex flex-wrap items-center gap-3 border-b border-stone-100 px-5 py-3 dark:border-stone-800">
         <input
           type="search"
           value={filter}
@@ -614,11 +614,11 @@ function FileExplorer({ files, filter, onFilter, onOpen }: { files: RepoFile[]; 
           aria-label="Filtrar arquivos"
           className={cx(inputClass, "h-9 max-w-md flex-1")}
         />
-        <label className="inline-flex cursor-pointer items-center gap-2 text-xs font-medium text-zinc-600 select-none dark:text-zinc-300">
+        <label className="inline-flex cursor-pointer items-center gap-2 text-xs font-medium text-stone-600 select-none dark:text-stone-300">
           <input type="checkbox" checked={onlySummarized} onChange={(e) => setOnlySummarized(e.target.checked)} className="size-3.5 accent-violet-600" />
           <Sparkles className="size-3.5 text-violet-500" aria-hidden="true" />
           Só com resumo
-          <span className="font-normal text-zinc-400 tabular-nums">{numberFormat.format(withSummary)}</span>
+          <span className="font-normal text-stone-400 tabular-nums">{numberFormat.format(withSummary)}</span>
         </label>
       </div>
 
@@ -627,13 +627,13 @@ function FileExplorer({ files, filter, onFilter, onOpen }: { files: RepoFile[]; 
           <EmptyState icon={FileSearch} title="Nenhum arquivo encontrado" text="Nenhum caminho, resumo ou palavra-chave combina com o filtro." />
         ) : (
           <>
-            <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
+            <ul className="divide-y divide-stone-100 dark:divide-stone-800">
               {matches.slice(0, FLAT_LIMIT).map((f) => (
                 <FileRow key={f.path} file={f} label={f.path} depth={0} onOpen={onOpen} expandedSummary />
               ))}
             </ul>
             {matches.length > FLAT_LIMIT && (
-              <p className="px-5 py-3 text-xs text-zinc-500 dark:text-zinc-400">
+              <p className="px-5 py-3 text-xs text-stone-500 dark:text-stone-400">
                 Mostrando {FLAT_LIMIT} de {numberFormat.format(matches.length)}. Refine o filtro para ver os demais.
               </p>
             )}
@@ -663,12 +663,12 @@ function DirContents({ dir, depth, expanded, onToggle, onOpen }: { dir: Dir; dep
               aria-expanded={isOpen}
               onClick={() => onToggle(d.path)}
               style={{ paddingLeft: `${1.25 + depth * 1.1}rem` }}
-              className="flex w-full items-center gap-2 py-1.5 pr-5 text-left transition hover:bg-zinc-50 dark:hover:bg-white/[0.03]"
+              className="flex w-full items-center gap-2 py-1.5 pr-5 text-left transition hover:bg-stone-50 dark:hover:bg-white/[0.03]"
             >
-              <ChevronRight className={cx("size-3.5 shrink-0 text-zinc-400 transition-transform", isOpen && "rotate-90")} aria-hidden="true" />
-              <FolderIcon className="size-4 shrink-0 text-zinc-400" aria-hidden="true" />
-              <span className="min-w-0 truncate font-mono text-[13px] font-medium text-zinc-800 dark:text-zinc-100">{d.name}</span>
-              <span className="ml-auto flex shrink-0 items-center gap-3 text-[11px] text-zinc-400 tabular-nums">
+              <ChevronRight className={cx("size-3.5 shrink-0 text-stone-400 transition-transform", isOpen && "rotate-90")} aria-hidden="true" />
+              <FolderIcon className="size-4 shrink-0 text-stone-400" aria-hidden="true" />
+              <span className="min-w-0 truncate font-mono text-[13px] font-medium text-stone-800 dark:text-stone-100">{d.name}</span>
+              <span className="ml-auto flex shrink-0 items-center gap-3 text-[11px] text-stone-400 tabular-nums">
                 {d.summarized > 0 && (
                   <span className="inline-flex items-center gap-1 text-violet-600 dark:text-violet-300" title={`${d.summarized} com resumo`}>
                     <Sparkles className="size-3" aria-hidden="true" />
@@ -701,12 +701,12 @@ function FileRow({ file, label, depth, onOpen, expandedSummary = false }: { file
         onClick={() => onOpen(file.path)}
         title={file.path}
         style={{ paddingLeft: `${1.25 + depth * 1.1 + 1.375}rem` }}
-        className="group flex w-full items-start gap-2 py-1.5 pr-5 text-left transition hover:bg-zinc-50 dark:hover:bg-white/[0.03]"
+        className="group flex w-full items-start gap-2 py-1.5 pr-5 text-left transition hover:bg-stone-50 dark:hover:bg-white/[0.03]"
       >
-        <FileCode2 className={cx("mt-0.5 size-4 shrink-0", file.summary ? "text-violet-500" : "text-zinc-300 dark:text-zinc-600")} aria-hidden="true" />
+        <FileCode2 className={cx("mt-0.5 size-4 shrink-0", file.summary ? "text-violet-500" : "text-stone-300 dark:text-stone-600")} aria-hidden="true" />
         <span className="min-w-0 flex-1">
           <span className="flex items-baseline gap-2">
-            <span className="min-w-0 truncate font-mono text-[13px] text-zinc-800 group-hover:text-accent-600 dark:text-zinc-100 dark:group-hover:text-accent-400">{label}</span>
+            <span className="min-w-0 truncate font-mono text-[13px] text-stone-800 group-hover:text-accent-600 dark:text-stone-100 dark:group-hover:text-accent-400">{label}</span>
             {file.stale && (
               <span className="shrink-0 text-[11px] font-medium text-amber-700 dark:text-amber-300" title="O arquivo mudou depois que o resumo foi escrito">
                 resumo desatualizado
@@ -714,7 +714,7 @@ function FileRow({ file, label, depth, onOpen, expandedSummary = false }: { file
             )}
           </span>
           {file.summary && (
-            <span className={cx("mt-0.5 block text-xs leading-relaxed text-zinc-600 dark:text-zinc-300", !expandedSummary && "line-clamp-2")}>{file.summary}</span>
+            <span className={cx("mt-0.5 block text-xs leading-relaxed text-stone-600 dark:text-stone-300", !expandedSummary && "line-clamp-2")}>{file.summary}</span>
           )}
           {expandedSummary && file.keywords.length > 0 && (
             <span className="mt-1.5 flex flex-wrap gap-1.5">
@@ -726,7 +726,7 @@ function FileRow({ file, label, depth, onOpen, expandedSummary = false }: { file
             </span>
           )}
         </span>
-        <span className="mt-0.5 shrink-0 text-[11px] text-zinc-400 tabular-nums">{numberFormat.format(file.lines)} linhas</span>
+        <span className="mt-0.5 shrink-0 text-[11px] text-stone-400 tabular-nums">{numberFormat.format(file.lines)} linhas</span>
       </button>
     </li>
   );

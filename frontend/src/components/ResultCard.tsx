@@ -4,6 +4,7 @@ import type { Hit } from "../api/types";
 import { Badge, Button, IconButton } from "./ui";
 import { CodeLines, type CodeLine } from "./CodeLines";
 import { HitSummary } from "./summaries";
+import { KindIcon } from "./kind";
 
 interface ResultCardProps {
   hit: Hit;
@@ -33,8 +34,9 @@ export function ResultCard({ hit, maxScore, onOpen, onOpenImpl }: ResultCardProp
   }
 
   return (
-    <article className="animate-fade-up overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-[0_1px_2px_0_rgb(24_24_27/0.04)] transition-colors hover:border-zinc-300 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-zinc-700">
+    <article className="overflow-hidden rounded-xl border border-stone-200 bg-sheet transition-colors hover:border-stone-300 dark:border-stone-800 dark:bg-stone-900 dark:hover:border-stone-700">
       <header className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 pt-4 pb-3">
+        <KindIcon kind={hit.kind === "doc" ? "doc" : "repo"} size="sm" label={hit.kind === "doc" ? "Documentação" : "Código"} />
         <Badge tone="accent" className="max-w-full">
           <span className="truncate">{hit.repo}</span>
         </Badge>
@@ -42,11 +44,11 @@ export function ResultCard({ hit, maxScore, onOpen, onOpenImpl }: ResultCardProp
           type="button"
           onClick={onOpen}
           title={hit.path}
-          className="min-w-0 truncate font-mono text-[13px] text-zinc-700 underline-offset-4 hover:text-accent-600 hover:underline dark:text-zinc-300 dark:hover:text-accent-400"
+          className="min-w-0 truncate font-mono text-[13px] text-stone-700 underline-offset-4 hover:text-accent-600 hover:underline dark:text-stone-300 dark:hover:text-accent-400"
         >
           {hit.path}
         </button>
-        <span className="font-mono text-xs text-zinc-400 tabular-nums">
+        <span className="font-mono text-xs text-stone-400 tabular-nums">
           L{hit.start_line}–{hit.end_line}
         </span>
         <div className="ml-auto flex items-center gap-4">
@@ -63,7 +65,7 @@ export function ResultCard({ hit, maxScore, onOpen, onOpenImpl }: ResultCardProp
       </header>
 
       {(hit.url || hit.linked_repos.length > 0 || (hit.implemented_in?.length ?? 0) > 0) && (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 pb-3 text-xs text-zinc-500 dark:text-zinc-400">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 pb-3 text-xs text-stone-500 dark:text-stone-400">
           {hit.url && (
             <a
               href={hit.url}
@@ -102,7 +104,7 @@ export function ResultCard({ hit, maxScore, onOpen, onOpenImpl }: ResultCardProp
 
       {hit.summary && <HitSummary summary={hit.summary} keywords={hit.summary_keywords ?? []} />}
 
-      <div className="overflow-x-auto border-y border-zinc-100 bg-zinc-50 py-2 dark:border-zinc-800 dark:bg-zinc-950/50">
+      <div className="overflow-x-auto border-y border-stone-100 bg-stone-50 py-2 dark:border-stone-800 dark:bg-stone-950/50">
         <CodeLines lines={lines} collapsedAfter={8} />
       </div>
 
@@ -122,13 +124,13 @@ export function ResultCard({ hit, maxScore, onOpen, onOpenImpl }: ResultCardProp
 function ScoreMeter({ percent, score }: { percent: number; score: number }) {
   return (
     <span className="flex items-center gap-2" title="Relevância: quanto maior, mais próximo da busca">
-      <span className="h-1.5 w-16 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
+      <span className="h-1.5 w-16 overflow-hidden rounded-full bg-stone-200 dark:bg-stone-800">
         <span
           className="block h-full rounded-full bg-accent-600"
           style={{ width: `${percent}%` }}
         />
       </span>
-      <span className="font-mono text-[11px] text-zinc-500 tabular-nums">{score.toFixed(2)}</span>
+      <span className="font-mono text-[11px] text-stone-500 tabular-nums">{score.toFixed(2)}</span>
     </span>
   );
 }

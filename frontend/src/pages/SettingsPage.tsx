@@ -45,13 +45,13 @@ export function SettingsPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Configurações</h1>
-        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+        <p className="mt-1 text-sm text-stone-500 dark:text-stone-400">
           {info.display_name ? `${info.display_name} · ` : ""}
           {info.email} · último login {formatDateTime(info.last_login_at)}
         </p>
       </div>
 
-      <Panel className="divide-y divide-zinc-100 dark:divide-zinc-800">
+      <Panel className="divide-y divide-stone-100 dark:divide-stone-800">
         {info.schema.map((pref) => {
           const changed = info.changed.includes(pref.key);
           return (
@@ -61,7 +61,7 @@ export function SettingsPage() {
                   {pref.label}
                   {!changed && <Badge tone="neutral">padrão</Badge>}
                 </p>
-                <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">{hint(pref)}</p>
+                <p className="mt-0.5 text-xs text-stone-500 dark:text-stone-400">{hint(pref)}</p>
               </div>
               <div className="flex items-center gap-2">
                 <PrefControl

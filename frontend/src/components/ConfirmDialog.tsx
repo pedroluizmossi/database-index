@@ -47,7 +47,7 @@ export function ConfirmDialog({ open, onClose, title, children, confirmLabel, da
         </>
       }
     >
-      <div className="space-y-3 text-sm text-zinc-600 dark:text-zinc-300">
+      <div className="space-y-3 text-sm text-stone-600 dark:text-stone-300">
         {children}
         {error && <Alert>{error}</Alert>}
       </div>

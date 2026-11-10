@@ -3,7 +3,7 @@ import { ScrollText, Search } from "lucide-react";
 import { api } from "../api/endpoints";
 import { describeError } from "../api/client";
 import type { AuditEntry } from "../api/types";
-import { Alert, Badge, Button, EmptyState, Field, Panel, Skeleton, inputClass } from "../components/ui";
+import { Alert, Badge, Button, EmptyState, Field, Panel, Skeleton, inputClass, tableHeadClass } from "../components/ui";
 import { formatDateTime, timeAgo } from "../lib/utils";
 
 const LIMITS = [50, 200, 500] as const;
@@ -37,7 +37,7 @@ export function AuditPage() {
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Auditoria</h1>
-          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">Ações recentes na API e no MCP.</p>
+          <p className="mt-1 text-sm text-stone-500 dark:text-stone-400">Ações recentes na API e no MCP.</p>
         </div>
         <form
           className="flex flex-wrap items-end gap-3"
@@ -68,7 +68,7 @@ export function AuditPage() {
       <Panel className="overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full min-w-[860px] text-sm">
-            <thead className="border-b border-zinc-200 bg-zinc-50 text-left text-xs text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-400">
+            <thead className={tableHeadClass}>
               <tr>
                 <th className="px-4 py-3 font-medium">Quando</th>
                 <th className="px-4 py-3 font-medium">Quem</th>
@@ -78,7 +78,7 @@ export function AuditPage() {
                 <th className="px-4 py-3 font-medium">IP</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+            <tbody className="divide-y divide-stone-100 dark:divide-stone-800">
               {entries === null && !error && (
                 <tr>
                   <td className="px-4 py-4" colSpan={6}>
@@ -94,21 +94,21 @@ export function AuditPage() {
                 </tr>
               )}
               {entries?.map((e) => (
-                <tr key={e.id} className="align-top transition-colors hover:bg-zinc-50 dark:hover:bg-white/[0.02]">
+                <tr key={e.id} className="align-top transition-colors hover:bg-stone-50 dark:hover:bg-white/[0.02]">
                   <td className="px-4 py-3 whitespace-nowrap" title={formatDateTime(e.at)}>
                     {timeAgo(e.at)}
                   </td>
-                  <td className="px-4 py-3 text-zinc-700 dark:text-zinc-300">{e.actor}</td>
+                  <td className="px-4 py-3 text-stone-700 dark:text-stone-300">{e.actor}</td>
                   <td className="px-4 py-3 font-mono text-xs">{e.action}</td>
                   <td className="px-4 py-3">
                     <Badge tone={e.status !== null && e.status >= 400 ? "error" : "indexed"}>{e.status ?? "—"}</Badge>
                   </td>
                   <td className="max-w-md px-4 py-3">
-                    <code className="block truncate font-mono text-xs text-zinc-500" title={JSON.stringify(e.params)}>
+                    <code className="block truncate font-mono text-xs text-stone-500" title={JSON.stringify(e.params)}>
                       {e.params ? JSON.stringify(e.params) : "—"}
                     </code>
                   </td>
-                  <td className="px-4 py-3 font-mono text-xs text-zinc-500">{e.client_ip ?? "—"}</td>
+                  <td className="px-4 py-3 font-mono text-xs text-stone-500">{e.client_ip ?? "—"}</td>
                 </tr>
               ))}
             </tbody>

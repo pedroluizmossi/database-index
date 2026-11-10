@@ -223,6 +223,14 @@ uv run code-index docs ignore wiki Rascunhos/Velho --reason "obsoleta"      # so
 uv run code-index docs unignore wiki Rascunhos/Velho
 ```
 
+**Escolher as páginas pela interface.** Em Documentação → Fontes, o admin abre **Escolher páginas**: a árvore
+da wiki (só a lista, nada é baixado) mostra o que está na seleção, o que já está no índice, o que entra e o que sai.
+Ao salvar, o servidor converte a escolha em `include`/`exclude` no `repos.toml` (`PUT /api/v1/docs/{nome}/selection`;
+a prévia das regras sai com `dry_run`) e confere que as regras reproduzem exatamente a escolha. Pasta marcada
+inteira vira `Pasta` + `Pasta/**`, então páginas criadas nela depois também entram; seções novas na raiz da wiki
+nunca entram sozinhas. Salvar não indexa: o custo só vem no próximo sync da fonte (botão **Indexar…**, com prévia).
+Na aba Páginas, o admin também tira uma página da busca (e a devolve) sem tirá-la do índice.
+
 - **Incremental:** a cada sync, só a lista de páginas é consultada. O conteúdo só é baixado para páginas
   novas, com caminho alterado ou com `updatedAt` diferente, e as páginas removidas (ou que saíram dos filtros) são apagadas.
   Cada página vira `.repos/docs__<nome>/<locale>/<caminho>.md`, com front-matter (título, URL, tags). Como

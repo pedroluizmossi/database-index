@@ -15,7 +15,9 @@ import fnmatch
 import hashlib
 import json
 import logging
-from dataclasses import dataclass
+import re
+from collections.abc import Collection, Iterable
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -129,6 +131,103 @@ def selected_pages(source: DocSource, pages: list[PageMeta]) -> list[PageMeta]:
     """Páginas que passam nos filtros include/exclude da fonte (glob sobre o caminho da página)."""
     return [p for p in pages if (not source.include or page_matches(p.path, source.include))
             and not page_matches(p.path, source.exclude)]
+
+
+_GLOB_CHARS = re.compile(r"([*?\[])")
+
+
+def _literal(path: str) -> str:
+    """Caminho como glob que só casa ele mesmo (`*`, `?` e `[` do nome não viram curinga)."""
+    return _GLOB_CHARS.sub(r"[\1]", path)
+
+
+@dataclass
+class _Node:
+    path: str
+    page: bool = False       # o caminho do nó é uma página (pasta também pode ser página)
+    chosen: bool = False
+    children: dict[str, _Node] = field(default_factory=dict)
+    total: int = 0           # páginas na subárvore (inclusive o próprio nó)
+    selected: int = 0
+
+
+def _tree(paths: Iterable[str], chosen: Collection[str]) -> _Node:
+    root = _Node("")
+    for path in paths:
+        node = root
+        for part in path.split("/"):
+            node = node.children.setdefault(part, _Node(f"{node.path}/{part}" if node.path else part))
+        node.page, node.chosen = True, path in chosen
+
+    def count(node: _Node) -> None:
+        for child in node.children.values():
+            count(child)
+        node.total = int(node.page) + sum(c.total for c in node.children.values())
+        node.selected = int(node.page and node.chosen) + sum(c.selected for c in node.children.values())
+
+    count(root)
+    return root
+
+
+def _whole(node: _Node) -> list[str]:
+    """Globs do nó inteiro: a página dele (se existe) e tudo abaixo, inclusive páginas futuras."""
+    return ([_literal(node.path)] if node.page else []) + ([_literal(node.path) + "/**"] if node.children else [])
+
+
+def _excludes(node: _Node) -> list[str]:
+    """Nó já coberto por um include: exclui o que não foi escolhido (subpasta sem nada escolhido vira `Pasta/**`,
+    que mantém de fora também as páginas futuras dela)."""
+    if node.selected == 0:
+        return _whole(node)
+    out = [_literal(node.path)] if node.page and not node.chosen else []
+    if node.children and node.selected == int(node.page and node.chosen):
+        return out + [_literal(node.path) + "/**"]
+    for child in node.children.values():
+        out += _excludes(child)
+    return out
+
+
+def _rules(node: _Node) -> tuple[list[str], list[str]]:
+    """Nó fora de qualquer include: a forma com menos regras entre incluir página a página (descendo) e incluir
+    a pasta inteira excluindo o que sobra."""
+    if node.selected == 0:
+        return [], []
+    if node.selected == node.total:
+        return _whole(node), []
+    own = [_literal(node.path)] if node.page and node.chosen else []
+    inc, exc = list(own), []
+    for child in node.children.values():
+        ci, ce = _rules(child)
+        inc += ci
+        exc += ce
+    # "Pasta/**" não casa a própria "Pasta": a página da pasta, se não foi escolhida, já fica de fora.
+    folder_exc = [e for child in node.children.values() for e in _excludes(child)]
+    folder = (own + [_literal(node.path) + "/**"], folder_exc)
+    folder_n, pages_n = len(folder[0]) + len(folder[1]), len(inc) + len(exc)
+    # Empate sem excludes: tudo abaixo da pasta foi escolhido, e a pasta inteira leva também as páginas futuras.
+    return folder if folder_n < pages_n or (folder_n == pages_n and not folder_exc) else (inc, exc)
+
+
+def selection_rules(paths: Iterable[str], chosen: Collection[str]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Regras include/exclude (globs de `selected_pages`) que escolhem exatamente `chosen` entre `paths`.
+
+    Pasta escolhida inteira vira `Pasta` + `Pasta/**`: páginas novas dentro dela entram no próximo sync. Seções
+    novas na raiz da wiki nunca entram sozinhas (o include nunca fica vazio, que significaria a wiki toda).
+    """
+    known = set(paths)
+    unknown = set(chosen) - known
+    if unknown:
+        raise ValueError(f"páginas fora da lista: {', '.join(sorted(unknown)[:5])}")
+    root = _tree(sorted(known), chosen)
+    if root.selected == 0:
+        raise ValueError("escolha ao menos uma página")
+    include: list[str] = []
+    exclude: list[str] = []
+    for child in root.children.values():
+        ci, ce = _rules(child)
+        include += ci
+        exclude += ce
+    return tuple(include), tuple(exclude)
 
 
 def _safe_relpath(locale: str, path: str) -> str | None:

@@ -18,6 +18,7 @@ from ..domain.relations import STORED, sort_origins
 from ..sources.base import is_docs_folder
 from ..sources.registry import doc_plugin
 from .base import ServiceBase
+from .wiki import WIKI_TYPE
 
 log = logging.getLogger(__name__)
 
@@ -25,6 +26,18 @@ log = logging.getLogger(__name__)
 class DocsMixin(ServiceBase):
     def list_docs(self) -> list[DocSource]:
         return self._config.load_docs()
+
+    async def doc_sources(self) -> list[dict[str, Any]]:
+        """Fontes cadastradas com a seleção (include/exclude) e quantos documentos estão no índice e fora da busca."""
+        counts = await self._documents.source_counts()
+        out = []
+        for d in self._config.load_docs():
+            c = counts.get(d.repo_name, {})
+            out.append({"name": d.name, "repo": d.repo_name, "type": d.type, "label": doc_plugin(d.type).label,
+                        "url": d.url, "locale": d.locale, "include": list(d.include), "exclude": list(d.exclude),
+                        "documents": c.get("documents", 0), "ignored": c.get("ignored", 0),
+                        "page_selection": d.type == WIKI_TYPE})
+        return out
 
     async def docs_preview(self, name: str, *, limit: int = 200) -> dict:
         """Prévia sem custo: o que entraria na indexação (o plugin da fonte lista a origem; nada é baixado)."""
@@ -67,9 +80,7 @@ class DocsMixin(ServiceBase):
     async def link_doc_key(self, doc_repo: str, doc_path: str, repo: str, *, reason: str = "",
                            origin: str = "manual") -> dict:
         """Grava vínculo pela chave da página (doc_repo + doc_path, como aparece em docs_overview)."""
-        doc = self._doc_source(doc_repo)
-        if not doc_path.startswith(f"{doc.locale}/") or not doc_path.endswith(".md") or ".." in doc_path.split("/"):
-            raise ValueError(f"caminho de página inválido: {doc_path!r}")
+        doc = self._doc_key(doc_repo, doc_path)
         resolved, reason = await self._check_link(origin, reason, repo)
         await self._relations.set_stored_link(doc.repo_name, doc_path, resolved, origin=origin, reason=reason)
         return {
@@ -109,6 +120,22 @@ class DocsMixin(ServiceBase):
         doc = self._doc_source(source)
         return await self._documents.remove_ignore(doc.repo_name, self._page_key(doc, page))
 
+    def _doc_key(self, doc_repo: str, doc_path: str) -> DocSource:
+        doc = self._doc_source(doc_repo)
+        if not doc_path.startswith(f"{doc.locale}/") or not doc_path.endswith(".md") or ".." in doc_path.split("/"):
+            raise ValueError(f"caminho de página inválido: {doc_path!r}")
+        return doc
+
+    async def ignore_doc_key(self, doc_repo: str, doc_path: str, reason: str = "") -> dict:
+        """Ignora pela chave da página (doc_repo + doc_path, como aparece em docs_overview)."""
+        doc = self._doc_key(doc_repo, doc_path)
+        await self._documents.set_ignore(doc.repo_name, doc_path, reason.strip())
+        return {"doc_repo": doc.repo_name, "doc_path": doc_path, "ignored": True}
+
+    async def unignore_doc_key(self, doc_repo: str, doc_path: str) -> bool:
+        doc = self._doc_key(doc_repo, doc_path)
+        return await self._documents.remove_ignore(doc.repo_name, doc_path)
+
     # ------------------------------------------------------------ leitura: visão geral, X-Ray, repo
 
     async def docs_overview(self, *, limit: int = 500, offset: int = 0, docs_only: bool = False) -> list[dict]:
@@ -128,7 +155,7 @@ class DocsMixin(ServiceBase):
                                 "reason": reasons.get((r["doc_repo"], r["path"], repo)) if stored else None})
             out.append({"doc_repo": r["doc_repo"], "doc_path": r["path"], "page": page,
                         "root": page.split("/", 1)[0], "title": r["title"] or None, "url": r["url"] or None,
-                        "type": r["type"], "attrs": r["attrs"], "links": entries})
+                        "type": r["type"], "attrs": r["attrs"], "ignored": r["ignored"], "links": entries})
         return out
 
     async def xray(self) -> dict[str, Any]:

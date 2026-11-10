@@ -48,7 +48,7 @@ export function RepoDocsDialog({ repo, open, onClose }: { repo: string; open: bo
         />
       )}
       {items && items.length > 0 && (
-        <ul className="max-h-[50dvh] divide-y divide-zinc-100 overflow-y-auto dark:divide-zinc-800">
+        <ul className="max-h-[50dvh] divide-y divide-stone-100 overflow-y-auto dark:divide-stone-800">
           {items.map((d) => (
             <li key={`${d.doc_repo}|${d.path}`} className="space-y-1 py-2.5">
               {d.url ? (
@@ -63,7 +63,7 @@ export function RepoDocsDialog({ repo, open, onClose }: { repo: string; open: bo
               ) : (
                 <p className="text-sm font-medium">{d.title ?? d.path}</p>
               )}
-              <p className="truncate font-mono text-xs text-zinc-500 dark:text-zinc-400">{d.path}</p>
+              <p className="truncate font-mono text-xs text-stone-500 dark:text-stone-400">{d.path}</p>
               <div className="flex flex-wrap gap-1.5">
                 <OriginBadges origins={d.origins} />
               </div>

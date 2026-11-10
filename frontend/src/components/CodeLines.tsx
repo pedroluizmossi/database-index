@@ -33,10 +33,10 @@ export function CodeLines({ lines, highlight = null, collapsedAfter }: CodeLines
               hot ? "border-accent-500 bg-accent-500/10 dark:bg-accent-400/10" : "border-transparent",
             )}
           >
-            <span className="w-14 shrink-0 pr-4 text-right tabular-nums text-zinc-400 select-none dark:text-zinc-600">
+            <span className="w-14 shrink-0 pr-4 text-right tabular-nums text-stone-400 select-none dark:text-stone-600">
               {line.n}
             </span>
-            <span className="whitespace-pre text-zinc-800 dark:text-zinc-200">{line.text}</span>
+            <span className="whitespace-pre text-stone-800 dark:text-stone-200">{line.text}</span>
           </div>
         );
       })}

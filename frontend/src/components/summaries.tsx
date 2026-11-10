@@ -45,7 +45,7 @@ export function KeywordChips({ keywords, max }: { keywords: string[]; max?: numb
         </li>
       ))}
       {hidden > 0 && (
-        <li className="px-1 py-0.5 text-[11px] text-zinc-500 dark:text-zinc-400" title={keywords.slice(shown.length).join(", ")}>
+        <li className="px-1 py-0.5 text-[11px] text-stone-500 dark:text-stone-400" title={keywords.slice(shown.length).join(", ")}>
           +{hidden}
         </li>
       )}
@@ -57,7 +57,7 @@ export function KeywordChips({ keywords, max }: { keywords: string[]; max?: numb
 export function HitSummary({ summary, keywords }: { summary: string; keywords: string[] }) {
   return (
     <div className={cx("mx-4 mb-3 space-y-2 rounded-lg border px-3 py-2.5", TINT)}>
-      <p className="text-sm leading-relaxed text-zinc-700 dark:text-zinc-200">
+      <p className="text-sm leading-relaxed text-stone-700 dark:text-stone-200">
         <SummaryMark className="mr-2 align-[-2px]" />
         {summary}
       </p>
@@ -96,16 +96,16 @@ export function FileSummaryPanel({ repo, path }: { repo: string; path: string })
             arquivo mudou desde o resumo
           </span>
         )}
-        <span className="ml-auto text-[11px] text-zinc-500 dark:text-zinc-400">
+        <span className="ml-auto text-[11px] text-stone-500 dark:text-stone-400">
           {data.agent ? `${data.agent} · ` : ""}
           {formatDateTime(data.created_at)}
         </span>
       </div>
-      <p className="max-w-3xl text-sm leading-relaxed text-zinc-800 dark:text-zinc-100">{data.summary}</p>
+      <p className="max-w-3xl text-sm leading-relaxed text-stone-800 dark:text-stone-100">{data.summary}</p>
       {data.questions.length > 0 && (
         <div>
-          <p className="mb-1 text-xs font-medium text-zinc-500 dark:text-zinc-400">Perguntas que este arquivo responde</p>
-          <ul className="space-y-0.5 text-sm text-zinc-700 dark:text-zinc-200">
+          <p className="mb-1 text-xs font-medium text-stone-500 dark:text-stone-400">Perguntas que este arquivo responde</p>
+          <ul className="space-y-0.5 text-sm text-stone-700 dark:text-stone-200">
             {data.questions.map((q) => (
               <li key={q} className="flex gap-2">
                 <span className={cx("select-none", INK)} aria-hidden="true">
@@ -185,17 +185,17 @@ export function CoverageMeter({ coverage }: { coverage: SummaryCoverageRepo }) {
   return (
     <div className="space-y-1.5">
       <div
-        className="flex h-1.5 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800"
+        className="flex h-1.5 overflow-hidden rounded-full bg-stone-200 dark:bg-stone-800"
         role="img"
         aria-label={`${done} de ${coverage.files} arquivos de código com resumo`}
       >
         <span className="h-full bg-violet-500" style={{ width: width(coverage.fresh) }} />
         <span className="h-full bg-amber-400" style={{ width: width(coverage.stale) }} />
       </div>
-      <p className="text-xs text-zinc-500 dark:text-zinc-400">
+      <p className="text-xs text-stone-500 dark:text-stone-400">
         <Legend dot="bg-violet-500">{numberFormat.format(coverage.fresh)} em dia</Legend>
         {coverage.stale > 0 && <Legend dot="bg-amber-400">{numberFormat.format(coverage.stale)} desatualizados</Legend>}
-        <Legend dot="bg-zinc-300 dark:bg-zinc-700">
+        <Legend dot="bg-stone-300 dark:bg-stone-700">
           {numberFormat.format(coverage.files - done)} sem resumo
         </Legend>
       </p>
@@ -268,7 +268,7 @@ export function RepoSummariesDialog({
     >
       <div className="space-y-4">
         <CoverageMeter coverage={coverage} />
-        <p className="text-xs text-zinc-500 dark:text-zinc-400">{ORIGIN_HINT}</p>
+        <p className="text-xs text-stone-500 dark:text-stone-400">{ORIGIN_HINT}</p>
         {error && <Alert>{error}</Alert>}
         {!items && !error && <Skeleton className="h-40 w-full" />}
         {items && (
@@ -290,13 +290,13 @@ export function RepoSummariesDialog({
           />
         )}
         {shown && shown.length > 0 && (
-          <ul className="max-h-[55dvh] divide-y divide-zinc-100 overflow-y-auto dark:divide-zinc-800">
+          <ul className="max-h-[55dvh] divide-y divide-stone-100 overflow-y-auto dark:divide-stone-800">
             {shown.map((s) => (
               <li key={s.path} className="space-y-1.5 py-3">
-                <p className="truncate font-mono text-xs text-zinc-500 dark:text-zinc-400" title={s.path}>
+                <p className="truncate font-mono text-xs text-stone-500 dark:text-stone-400" title={s.path}>
                   {s.path}
                 </p>
-                <p className="text-sm leading-relaxed text-zinc-800 dark:text-zinc-100">{s.summary}</p>
+                <p className="text-sm leading-relaxed text-stone-800 dark:text-stone-100">{s.summary}</p>
                 <KeywordChips keywords={s.keywords} />
               </li>
             ))}

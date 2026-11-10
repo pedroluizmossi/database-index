@@ -413,3 +413,49 @@ async def test_fila_de_vinculos_sugeridos_por_llm(int_settings: Settings, tmp_pa
         assert await svc.linked_docs("snr-email-backend") == []
         await svc.link_doc_key("docs__wiki", processo, "snr-email-backend", reason="é sim")
         assert [d["origins"] for d in await svc.linked_docs("snr-email-backend")] == [["manual"]]
+
+
+async def test_escolha_de_paginas_grava_regras_e_vale_no_sync(int_settings: Settings, fake_llm: Any,
+                                                              wiki: FakeWiki) -> None:
+    settings = int_settings.model_copy(update={"wikijs_token": SecretStr("tok-wiki")})
+    use_settings(settings)
+    from code_index.services import open_service
+
+    async with open_service(settings) as svc:
+        await svc.add_docs("wiki", url=WIKI, locale="pt-br", include=("Plataforma/**",))
+        await svc.index_doc_pages("docs__wiki", ["Plataforma/Email"])
+        await svc.ignore_doc_key("docs__wiki", "pt-br/Plataforma/Email.md", "teste")
+
+        catalog = await svc.wiki_catalog("wiki")
+        assert [(p["path"], p["selected"], p["indexed"], p["ignored"]) for p in catalog["pages"]] == [
+            ("Geral/Glossario", False, False, False),
+            ("Plataforma/Email", True, True, True),
+            ("Plataforma/Front", True, False, False),
+        ]
+
+        # Prévia não grava; a escolha vira regras e só vale no próximo sync.
+        prev = await svc.set_wiki_selection("wiki", ["Plataforma/Email", "Geral/Glossario"], dry_run=True)
+        assert (prev["added"], prev["removed"], prev["saved"]) == (1, 1, False)
+        assert svc.list_docs()[0].include == ("Plataforma/**",)
+
+        res = await svc.set_wiki_selection("wiki", ["Plataforma/Email", "Geral/Glossario"])
+        # Geral inteira (páginas futuras dela também); de Plataforma, só a página escolhida.
+        assert res["saved"] and res["include"] == ["Geral/**", "Plataforma/Email"]
+        assert {p["path"] for p in (await svc.wiki_catalog("wiki"))["pages"] if p["selected"]} == {
+            "Plataforma/Email", "Geral/Glossario"}
+
+        with pytest.raises(ValueError, match="não existem"):
+            await svc.set_wiki_selection("wiki", ["Plataforma/Sumiu"])
+        with pytest.raises(ValueError, match="ao menos uma"):
+            await svc.set_wiki_selection("wiki", [])
+
+        # Fora da busca pela chave da página (como a tela envia), e de volta.
+        assert (await svc.docs_overview())[0]["ignored"] is True
+        assert await svc.unignore_doc_key("docs__wiki", "pt-br/Plataforma/Email.md") is True
+        assert (await svc.docs_overview())[0]["ignored"] is False
+        with pytest.raises(ValueError, match="caminho de página inválido"):
+            await svc.ignore_doc_key("docs__wiki", "../x.md")
+
+        sources = await svc.doc_sources()
+        assert [(s["repo"], s["page_selection"], s["documents"], s["ignored"]) for s in sources] == [
+            ("docs__wiki", True, 1, 0)]

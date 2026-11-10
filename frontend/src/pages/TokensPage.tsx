@@ -7,7 +7,7 @@ import { useAuth } from "../auth/AuthProvider";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Dialog } from "../components/Dialog";
 import { useToast } from "../components/Toaster";
-import { Alert, Badge, Button, EmptyState, Field, Panel, Skeleton, inputClass } from "../components/ui";
+import { Alert, Badge, Button, EmptyState, Field, Panel, Skeleton, inputClass, tableHeadClass } from "../components/ui";
 import { canWrite } from "../lib/capabilities";
 import { formatDateTime, timeAgo } from "../lib/utils";
 
@@ -57,7 +57,7 @@ export function TokensPage() {
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Tokens</h1>
-          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+          <p className="mt-1 text-sm text-stone-500 dark:text-stone-400">
             Credenciais para agents e MCP. O valor aparece uma única vez, na criação.
           </p>
         </div>
@@ -72,7 +72,7 @@ export function TokensPage() {
       <Panel className="overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full min-w-[760px] text-sm">
-            <thead className="border-b border-zinc-200 bg-zinc-50 text-left text-xs text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-400">
+            <thead className={tableHeadClass}>
               <tr>
                 <th className="px-4 py-3 font-medium">Nome</th>
                 <th className="px-4 py-3 font-medium">Scopes</th>
@@ -82,7 +82,7 @@ export function TokensPage() {
                 <th className="px-4 py-3 text-right font-medium">Ações</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+            <tbody className="divide-y divide-stone-100 dark:divide-stone-800">
               {tokens === null && !error && (
                 <tr>
                   <td className="px-4 py-4" colSpan={6}>
@@ -98,13 +98,13 @@ export function TokensPage() {
                 </tr>
               )}
               {tokens?.map((t) => (
-                <tr key={t.id} className="transition-colors hover:bg-zinc-50 dark:hover:bg-white/[0.02]">
+                <tr key={t.id} className="transition-colors hover:bg-stone-50 dark:hover:bg-white/[0.02]">
                   <td className="px-4 py-3">
                     <p className="font-medium">
                       {t.name}
-                      {t.kind === "oauth" && <span className="ml-2 text-xs font-normal text-zinc-500">conectado via OAuth</span>}
+                      {t.kind === "oauth" && <span className="ml-2 text-xs font-normal text-stone-500">conectado via OAuth</span>}
                     </p>
-                    <p className="font-mono text-xs text-zinc-500">{t.prefix}…</p>
+                    <p className="font-mono text-xs text-stone-500">{t.prefix}…</p>
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex flex-wrap gap-1">
@@ -113,11 +113,11 @@ export function TokensPage() {
                       ))}
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-zinc-600 dark:text-zinc-300">{t.owner_email}</td>
+                  <td className="px-4 py-3 text-stone-600 dark:text-stone-300">{t.owner_email}</td>
                   <td className="px-4 py-3" title={formatDateTime(t.expires_at)}>
                     {t.expires_at ? timeAgo(t.expires_at) : "sem prazo"}
                   </td>
-                  <td className="px-4 py-3 text-zinc-600 dark:text-zinc-300">{timeAgo(t.last_used_at)}</td>
+                  <td className="px-4 py-3 text-stone-600 dark:text-stone-300">{timeAgo(t.last_used_at)}</td>
                   <td className="px-4 py-3 text-right">
                     {t.active ? (
                       <Button variant="ghost" size="sm" onClick={() => setRevokeTarget(t)} aria-label={`Revogar ${t.name}`}>
@@ -230,11 +230,11 @@ function CreateTokenDialog({
         </Field>
 
         <fieldset className="space-y-2">
-          <legend className="mb-2 text-xs font-medium text-zinc-500 dark:text-zinc-400">Scopes</legend>
+          <legend className="mb-2 text-xs font-medium text-stone-500 dark:text-stone-400">Scopes</legend>
           {SCOPES.map((s) => {
             const allowed = mine.includes(s.value);
             return (
-              <label key={s.value} className={`flex items-start gap-3 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800 ${allowed ? "cursor-pointer" : "opacity-50"}`}>
+              <label key={s.value} className={`flex items-start gap-3 rounded-xl border border-stone-200 p-3 dark:border-stone-800 ${allowed ? "cursor-pointer" : "opacity-50"}`}>
                 <input
                   type="checkbox"
                   className="mt-0.5 size-4 accent-accent-600"
@@ -244,7 +244,7 @@ function CreateTokenDialog({
                 />
                 <span className="text-sm">
                   <span className="font-mono font-medium">{s.label}</span>
-                  <span className="block text-xs text-zinc-500 dark:text-zinc-400">
+                  <span className="block text-xs text-stone-500 dark:text-stone-400">
                     {allowed ? s.hint : "você não tem este scope"}
                   </span>
                 </span>
@@ -298,7 +298,7 @@ function ShowOnceDialog({ token, onClose }: { token: NewToken | null; onClose: (
             <span>Copie agora. Este valor não será mostrado de novo.</span>
           </div>
           <div className="flex items-center gap-2">
-            <code className="min-w-0 flex-1 overflow-x-auto rounded-xl bg-zinc-100 px-3 py-2.5 font-mono text-xs dark:bg-zinc-800">
+            <code className="min-w-0 flex-1 overflow-x-auto rounded-xl bg-stone-100 px-3 py-2.5 font-mono text-xs dark:bg-stone-800">
               {token.token}
             </code>
             <Button variant="secondary" size="sm" onClick={() => void copy()} aria-label="Copiar token">
@@ -306,7 +306,7 @@ function ShowOnceDialog({ token, onClose }: { token: NewToken | null; onClose: (
               {copied ? "Copiado" : "Copiar"}
             </Button>
           </div>
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+          <p className="text-xs text-stone-500 dark:text-stone-400">
             Scopes: {token.scopes.join(", ")} · expira em {formatDateTime(token.expires_at)}
           </p>
         </div>

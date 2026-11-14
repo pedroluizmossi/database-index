@@ -36,13 +36,31 @@ class GitHubClient:
             h["Authorization"] = f"Bearer {self._token}"
         return h
 
+    def _token_login(self, client: httpx.Client) -> str | None:
+        """Login do dono do token (`GET /user`); None sem token ou se o token não identifica um usuário."""
+        if not self._token:
+            return None
+        r = client.get(f"{API}/user")
+        if r.status_code != 200:
+            return None
+        login = r.json().get("login")
+        return login if isinstance(login, str) else None
+
+    def _user_repos_url(self, client: httpx.Client, name: str) -> str:
+        """Repos de uma conta de usuário. `/users/{nome}/repos` só lista os públicos; se a conta for a
+        do dono do token, `/user/repos` traz também os privados (só os que ela possui)."""
+        login = self._token_login(client)
+        if login and login.lower() == name.lower():
+            return f"{API}/user/repos?per_page=100&affiliation=owner&visibility=all"
+        return f"{API}/users/{name}/repos?per_page=100&type=owner"
+
     def list_org_repos(self, org: Org) -> list[DiscoveredRepo]:
         """Lista os repositórios visíveis para o token, já aplicando os filtros da org."""
         with httpx.Client(headers=self._headers(), timeout=60) as client:
             try:
                 raw = _paginate(client, f"{API}/orgs/{org.name}/repos?per_page=100&type=all")
             except LookupError:  # não é org: tenta como usuário
-                raw = _paginate(client, f"{API}/users/{org.name}/repos?per_page=100&type=owner")
+                raw = _paginate(client, self._user_repos_url(client, org.name))
 
         out: list[DiscoveredRepo] = []
         for r in raw:

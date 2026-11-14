@@ -7,6 +7,8 @@ import type {
   Me,
   NewToken,
   OrgDiscovery,
+  OrgInput,
+  OrgPatch,
   OwnershipCatalog,
   OwnershipRow,
   OrgSummary,
@@ -110,6 +112,12 @@ export const api = {
       query: { keep_clone: keepClone },
     }),
   unignoreRepo: (name: string) => postJson<{ name: string }>(`/api/v1/repos/${seg(name)}/unignore`, undefined),
+  addOrg: (body: OrgInput) => postJson<OrgDiscovery>("/api/v1/orgs", body),
+  setOrg: (name: string, body: OrgPatch) => sendJson<OrgDiscovery>("PATCH", `/api/v1/orgs/${seg(name)}`, { body }),
+  removeOrg: (name: string, keepClones = false) =>
+    sendJson<{ name: string; removed_repos: number }>("DELETE", `/api/v1/orgs/${seg(name)}`, {
+      query: { keep_clones: keepClones },
+    }),
   refreshOrg: (name: string) =>
     sendJson<Record<string, OrgDiscovery>>("POST", "/api/v1/orgs/refresh", { query: { name } }),
 

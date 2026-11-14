@@ -215,6 +215,9 @@ class ReposMixin(OwnershipMixin):
                     ("match", list(org.match)),
                     ("skip", list(org.skip)),
                     ("max_size_mb", org.max_size_mb),
+                    ("include_forks", org.include_forks),
+                    ("include_archived", org.include_archived),
+                    ("extra_exclude", list(org.extra_exclude)),
                 )
                 if v
             }

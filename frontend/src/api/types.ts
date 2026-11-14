@@ -201,7 +201,7 @@ export interface OrgSummary {
   total: number;
   status: Record<RepoStatusValue, number>;
   outdated: number;
-  filters: Record<string, unknown>;
+  filters: OrgFilters;
   languages: Record<string, number>;
 }
 
@@ -366,6 +366,36 @@ export interface SyncStart {
   job_id: string;
   status: string;
   url: string;
+}
+
+export interface OrgInput {
+  name: string;
+  match?: string[];
+  skip?: string[];
+  languages?: string[];
+  include_archived?: boolean;
+  include_forks?: boolean;
+  max_size_mb?: number | null;
+  extra_exclude?: string[];
+}
+
+/** PATCH de uma org: lista vazia limpa o filtro; `max_size_mb = 0` remove o limite. */
+export interface OrgPatch {
+  languages?: string[];
+  match?: string[];
+  skip?: string[];
+  max_size_mb?: number | null;
+}
+
+/** Filtros ativos de uma org (só os diferentes do padrão aparecem). */
+export interface OrgFilters {
+  languages?: string[];
+  match?: string[];
+  skip?: string[];
+  max_size_mb?: number;
+  include_forks?: boolean;
+  include_archived?: boolean;
+  extra_exclude?: string[];
 }
 
 export interface RepoInput {

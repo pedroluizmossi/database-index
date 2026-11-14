@@ -14,6 +14,7 @@ import { DocsPage } from "./pages/DocsPage";
 import { ApisPage } from "./pages/ApisPage";
 import { ReposPage } from "./pages/ReposPage";
 import { IndexingPage } from "./pages/IndexingPage";
+import { SourcesPage } from "./pages/SourcesPage";
 import { SearchPage } from "./pages/SearchPage";
 import { TokensPage } from "./pages/TokensPage";
 import { UsersPage } from "./pages/UsersPage";
@@ -41,7 +42,7 @@ export default function App() {
   );
 }
 
-const TAB_IDS: Tab[] = ["search", "repos", "docs", "apis", "xray", "indexing", "tokens", "usage", "users", "audit", "settings"];
+const TAB_IDS: Tab[] = ["search", "repos", "docs", "apis", "xray", "indexing", "sources", "tokens", "usage", "users", "audit", "settings"];
 
 function Workspace() {
   const { session } = useAuth();
@@ -87,6 +88,7 @@ function Workspace() {
     apis: <ApisPage onXray={openXray} />,
     xray: <XrayPage initial={xrayTarget} />,
     indexing: <IndexingPage />,
+    sources: <SourcesPage />,
     tokens: <TokensPage />,
     usage: <UsagePage email={usageEmail} onEmail={filterUsage} />,
     users: <UsersPage onOpenUsage={filterUsage} />,

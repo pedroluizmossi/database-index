@@ -12,6 +12,7 @@ import {
   Network,
   PanelLeftClose,
   PanelLeftOpen,
+  Plug,
   ScrollText,
   Search,
   SearchCode,
@@ -30,7 +31,7 @@ import { usePrefs } from "../data/PrefsProvider";
 import { cx } from "../lib/utils";
 import { IndexingIndicator, useActiveJob } from "./IndexingIndicator";
 
-export type Tab = "search" | "repos" | "docs" | "apis" | "xray" | "indexing" | "tokens" | "usage" | "users" | "audit" | "settings";
+export type Tab = "search" | "repos" | "docs" | "apis" | "xray" | "indexing" | "sources" | "tokens" | "usage" | "users" | "audit" | "settings";
 
 type Group = "explore" | "curate" | "account" | "admin";
 
@@ -62,6 +63,7 @@ export function tabsFor(session: Session | null): TabDef[] {
   if (session && canWrite(session)) tabs.push({ id: "tokens", label: "Tokens", icon: KeyRound, group: "account" });
   if (session && hasScope(session.me, "admin")) {
     tabs.push(
+      { id: "sources", label: "Fontes", icon: Plug, group: "curate" },
       { id: "usage", label: "Uso", icon: BarChart3, group: "admin" },
       { id: "users", label: "Usuários", icon: Users, group: "admin" },
       { id: "audit", label: "Auditoria", icon: ScrollText, group: "admin" },

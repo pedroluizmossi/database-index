@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ChangeEvent } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -25,7 +25,7 @@ import { api } from "../api/endpoints";
 import { describeError } from "../api/client";
 import { canWrite, hasScope } from "../lib/capabilities";
 import { useToast } from "../components/Toaster";
-import { Dialog } from "../components/Dialog";
+import { AddRepoDialog } from "../components/SourceDialogs";
 import { RepoDocsDialog } from "../components/RepoDocsDialog";
 import { RepoCardDialog } from "../components/RepoCardDialog";
 import { RepoSummariesLink } from "../components/summaries";
@@ -51,7 +51,7 @@ import { ActiveJobNotice, useJobs } from "../components/JobsPanel";
 import { OwnershipStrip } from "../components/OwnershipStrip";
 import { useRepoCounts } from "../components/IndexCoverage";
 import { cx, formatDateTime, plural, repoShortName, timeAgo } from "../lib/utils";
-import { Alert, Badge, Button, EmptyState, Field, IconButton, Panel, Segmented, Select, Skeleton, inputClass, tableHeadClass, type BadgeTone } from "../components/ui";
+import { Badge, Button, EmptyState, IconButton, Panel, Segmented, Select, Skeleton, inputClass, tableHeadClass, type BadgeTone } from "../components/ui";
 import type { XrayTarget } from "../lib/xray";
 
 type SortKey = "name" | "status" | "owner" | "language" | "files" | "chunks" | "indexed_at";
@@ -625,70 +625,6 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
         )}
       </ConfirmDialog>
     </div>
-  );
-}
-
-function AddRepoDialog({ open, onClose, onDone }: { open: boolean; onClose: () => void; onDone: () => void }) {
-  const { push } = useToast();
-  const [source, setSource] = useState("");
-  const [name, setName] = useState("");
-  const [branch, setBranch] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function submit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      const created = await api.addRepo({
-        source: source.trim(),
-        name: name.trim() || null,
-        branch: branch.trim() || null,
-      });
-      push({ tone: "success", title: "Repositório adicionado", description: `${created.name}: indexe quando quiser.` });
-      setSource("");
-      setName("");
-      setBranch("");
-      onDone();
-      onClose();
-    } catch (err) {
-      setError(describeError(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <Dialog
-      open={open}
-      onClose={onClose}
-      title="Adicionar repositório"
-      description="URL git, org/repo do GitHub ou caminho de um diretório do servidor. Só o cadastro: a indexação é separada."
-      footer={
-        <>
-          <Button variant="ghost" onClick={onClose} disabled={busy}>
-            Cancelar
-          </Button>
-          <Button type="submit" form="add-repo-form" loading={busy} disabled={!source.trim()}>
-            Adicionar
-          </Button>
-        </>
-      }
-    >
-      <form id="add-repo-form" onSubmit={(e) => void submit(e)} className="space-y-4">
-        <Field label="Origem">
-          <input value={source} onChange={(e) => setSource(e.target.value)} className={inputClass} placeholder="org/repo ou https://…" />
-        </Field>
-        <Field label="Nome (opcional)">
-          <input value={name} onChange={(e) => setName(e.target.value)} className={inputClass} placeholder="gerado a partir da origem" />
-        </Field>
-        <Field label="Branch (opcional)">
-          <input value={branch} onChange={(e) => setBranch(e.target.value)} className={inputClass} placeholder="padrão do remoto" />
-        </Field>
-        {error && <Alert>{error}</Alert>}
-      </form>
-    </Dialog>
   );
 }
 

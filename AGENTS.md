@@ -51,7 +51,8 @@ Interface web (`frontend/`, React + Tailwind): siga o `DESIGN.md` (paleta quente
 Nada de `zinc`/`gray`/branco puro em superfície; o que o produto é está em `PRODUCT.md`.
 Páginas separadas por tipo de trabalho: Repositórios é catálogo (sem cobertura, fila nem histórico de jobs); a
 operação da indexação (job ativo, cobertura, "Indexar lote", histórico de todas as fontes) fica em
-`pages/IndexingPage.tsx` (aba `indexing`, só com `index:write`). Atalho entre abas: `useNavigation()`
+`pages/IndexingPage.tsx` (aba `indexing`, só com `index:write`). O cadastro das fontes (orgs/contas, repos avulsos,
+fontes de docs: adicionar, filtros, remover) fica em `pages/SourcesPage.tsx` (aba `sources`, só admin). Atalho entre abas: `useNavigation()`
 (`lib/navigation.ts`); filtros de Repositórios no hash: `lib/repoFilters.ts` (`reposHash`).
 
 ## Regras de arquitetura

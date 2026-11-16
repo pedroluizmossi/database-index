@@ -171,8 +171,10 @@ Podem rodar sem medo; só precisam do Postgres no ar (sem ele, são pulados).
   Mudou a tokenização (`code_terms`)? Os termos gravados em `file_summaries` ficam com a antiga até um novo resumo.
 - **Não troque a imagem do Postgres pela `paradedb/paradedb`:** ela traz `vector` 0.8.6, e o banco usa a
   0.8.7, o que seria um downgrade de extensão. Use `docker/postgres` (pgvector oficial + `pg_search`).
-- **SDK MCP:** tools que devolvem `list` vêm em `structured_content["result"]`; as que devolvem `dict`
-  vêm como texto JSON em `content[0].text`.
+- **SDK MCP:** tool que devolve `list` vira `structured_content["result"]` (invólucro do SDK), e clientes como o
+  code mode do Claude Code a recebem como texto JSON, não como objeto. Por isso toda tool devolve `dict` com
+  chave nomeada (`{"results": [...]}`, `{"matches": [...]}`): vem como texto JSON em `content[0].text` (sem
+  `structured_content`) e o code mode o entrega ao script já como objeto.
 
 - **CocoIndex 1.x** tem API diferente da 0.x (`coco.App`, `@coco.fn`, `mount_each`, `ContextKey`,
   `@coco.lifespan`). Na dúvida, leia o pacote instalado em `.venv/lib/python3.12/site-packages/cocoindex/`

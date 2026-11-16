@@ -389,7 +389,7 @@ async def _mcp(server: Server, token: str) -> tuple[list[str], Any, Any]:
             symbol = await s.call_tool("find_symbol", {"name": "Qualquer"})
             grep = await s.call_tool("grep_code", {"pattern": "ola"})
             find = await s.call_tool("find_repos", {"query": "envio de e-mail"})
-            assert not find.is_error and (find.structured_content or {}).get("result") == []
+            assert not find.is_error and json.loads(find.content[0].text) == {"results": []}
             card = await s.call_tool("repo_card", {"repo": "nao-existe"})
             assert card.is_error
             return tools, search, symbol, grep
@@ -409,6 +409,10 @@ def test_mcp_so_expoe_leitura(server: Server) -> None:
                      "related", "repo_card", "find_symbol", "grep_code"]
     assert not search.is_error and not symbol.is_error and not grep.is_error
     assert json.loads(grep.content[0].text) == {"matches": [], "truncated": False}
+    # tools de lista devolvem dict com chave nomeada, não list (que o SDK embrulha em {"result": ...} e o code
+    # mode do Claude Code entrega ao script como texto JSON em vez de objeto)
+    for res in (search, symbol):
+        assert isinstance(json.loads(res.content[0].text)["results"], list)
 
 
 async def _mcp_guide(server: Server, token: str) -> tuple[str, list[str], str, str, str]:

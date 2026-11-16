@@ -201,7 +201,7 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
         domain: str | None = None,
         service: str | None = None,
         ctx: Context | None = None,
-    ) -> list[dict]:
+    ) -> dict:
         """Busca trechos de código e de documentação (README, docs/ e páginas de wiki).
 
         Args:
@@ -224,7 +224,7 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
             domain: só o código deste domínio do DDD (nome técnico de list_domains, ex.: "platform").
             service: com domain, só este serviço (ex.: "authentication"). Inclui pastas de monorepos.
 
-        Cada resultado traz `owners` (domínio/serviço dono do arquivo), quando conhecido.
+        Devolve {"results": [...]}. Cada resultado traz `owners` (domínio/serviço dono do arquivo), quando conhecido.
         Resultados de documentação externa trazem `url` (página original), `title` e `linked_repos`.
         Trechos vizinhos do mesmo arquivo vêm fundidos (no máximo 2 por arquivo); trechos muito
         longos vêm cortados (leia o resto com read_file_lines). Trecho idêntico em vários repos
@@ -232,13 +232,13 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
         """
         top_k = max(1, min(top_k, 50))
 
-        async def fn(svc: CodeIndexService) -> list[dict]:
+        async def fn(svc: CodeIndexService) -> dict:
             hits = await svc.search(query, top_k=top_k, repos=repos, language=language,
                                     path_glob=path_glob, mode=mode, rerank=rerank, kind=kind,
                                     include_linked_docs=include_linked_docs, exclude_repos=exclude_repos,
                                     exclude_path_glob=exclude_path_glob, max_docs=max_docs,
                                     domain=domain, service=service)
-            return [_compact_hit(h.to_dict()) for h in hits]
+            return {"results": [_compact_hit(h.to_dict()) for h in hits]}
 
         return await run_tool(ctx, "search_code", {"query": query, "top_k": top_k, "repos": repos, "language": language,
                                               "path_glob": path_glob, "mode": mode, "kind": kind,
@@ -316,11 +316,11 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
         return await run_tool(ctx, "list_domains", {}, "read", None, fn)
 
     @server.tool()
-    async def find_repos(query: str, limit: int = 10, ctx: Context | None = None) -> list[dict]:
+    async def find_repos(query: str, limit: int = 10, ctx: Context | None = None) -> dict:
         """Descobre QUAL repo cuida de um assunto, pelo cartão do repo (resumo, capacidades, tags, operações SDL).
 
         Use antes de search_code quando não souber o repo: "quem envia e-mail", "serviço de tenants".
-        Devolve repo, score, summary, kind e tags; filtre search_code por esses repos em seguida.
+        Devolve {"results": [...]}, cada um com repo, score, summary, kind e tags; filtre search_code por esses repos em seguida.
         Os cartões são escritos por agents a partir do código: confirme no código antes de afirmar.
 
         Args:
@@ -328,22 +328,28 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
             limit: máximo de repos (até 50).
         """
         limit = max(1, min(limit, 50))
-        return await run_tool(ctx, "find_repos", {"query": query, "limit": limit}, "read", None,
-                              lambda svc: svc.find_repos(query, limit=limit))
+
+        async def fn(svc: CodeIndexService) -> dict:
+            return {"results": await svc.find_repos(query, limit=limit)}
+
+        return await run_tool(ctx, "find_repos", {"query": query, "limit": limit}, "read", None, fn)
 
     @server.tool()
-    async def find_api_impl(operation: str, service: str | None = None, ctx: Context | None = None) -> list[dict]:
+    async def find_api_impl(operation: str, service: str | None = None, ctx: Context | None = None) -> dict:
         """Onde uma operação da API da plataforma é implementada: repo, classe handler, arquivo e linha.
 
         Use com resultados de documentação de API (título 'POST /servico/queries/operacao') ou quando
         souber o nome da operação. Casamento pela convenção do SDK (`<operacao>Handler`), sem LLM.
+        Devolve {"results": [...]}.
 
         Args:
             operation: 'listBlacklistedEmails', 'email.listBlacklistedEmails' ou 'POST /email/queries/listBlacklistedEmails'.
             service: filtra pelo serviço (ex.: 'email').
         """
-        return await run_tool(ctx, "find_api_impl", {"operation": operation, "service": service}, "read", None,
-                              lambda svc: svc.find_api_impl(operation, service=service))
+        async def fn(svc: CodeIndexService) -> dict:
+            return {"results": await svc.find_api_impl(operation, service=service)}
+
+        return await run_tool(ctx, "find_api_impl", {"operation": operation, "service": service}, "read", None, fn)
 
     @server.tool()
     async def related(entity: str, type: str | None = None, ctx: Context | None = None) -> dict:
@@ -386,10 +392,11 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
         language: str | None = None,
         limit: int = 20,
         ctx: Context | None = None,
-    ) -> list[dict]:
+    ) -> dict:
         """Onde uma classe, interface, função, método ou recurso é DECLARADO (arquivo e linha).
 
         Use quando já sabe o nome (ou parte dele). Mais preciso que search_code para "onde está X".
+        Devolve {"results": [...]}.
 
         Args:
             name: nome ou parte dele ("HmacService"), qualificado ("WebhookService.retry"; se a classe
@@ -401,9 +408,9 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
             limit: máximo de resultados (até 200).
         """
 
-        async def fn(svc: CodeIndexService) -> list[dict]:
+        async def fn(svc: CodeIndexService) -> dict:
             hits = await svc.find_symbol(name, kind=kind, repos=repos, language=language, limit=limit)
-            return [h.to_dict() for h in hits]
+            return {"results": [h.to_dict() for h in hits]}
 
         return await run_tool(ctx, "find_symbol", {"name": name, "kind": kind, "repos": repos, "language": language},
                               "read", None, fn)

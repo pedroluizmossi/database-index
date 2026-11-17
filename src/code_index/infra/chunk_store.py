@@ -27,9 +27,11 @@ from code_index.domain.models import Hit
 from code_index.domain.ownership import Scope
 from code_index.domain.path_glob import glob_regex
 from code_index.domain.search_text import RRF_K, STOPWORDS
+from code_index.domain.search_vectors import FILE_KINDS
 from code_index.infra.document_store import DocumentStore
 from code_index.infra.relation_store import RelationStore
 from code_index.infra.skip_store import SkipStore
+from code_index.infra.vector_store import index_expr, index_predicate, sql_literal
 from code_index.settings import Settings
 
 log = logging.getLogger(__name__)
@@ -203,6 +205,29 @@ def _scope_sql(p: _Params, scope: Scope, linked_docs_sql: str | None) -> str:
     return "(" + " OR ".join(parts) + ")"
 
 
+# Fontes da fusão, na ordem em que aparecem em Hit.matched_by.
+_SOURCE_ORDER = ("vetor", "termos", "descrição", "cartão")
+
+
+@dataclass(frozen=True)
+class ExtraVectors:
+    """Vetores extras na busca (search_vectors): pesos, modelo dos vetores e similaridade mínima (cosseno).
+
+    `file_weight`: fonte "descrição do arquivo" (resumo e perguntas; vale a mais parecida de cada arquivo).
+    `file_kinds`: quais vetores de arquivo contam (avaliação: só perguntas, só resumo, os dois).
+    `stale_factor`: multiplica o voto quando o resumo está desatualizado (0 = não vota);
+    `max_stale_days`: desatualizado há mais que isso não vota (0 = sem prazo)."""
+
+    model: str
+    file_weight: float = 0.0
+    card_weight: float = 0.0
+    card_top: int = 3
+    min_similarity: float = 0.5
+    file_kinds: tuple[str, ...] = FILE_KINDS
+    stale_factor: float = 0.5
+    max_stale_days: int = 0
+
+
 @dataclass(frozen=True)
 class SearchCapabilities:
     table: bool            # a tabela de chunks existe (já houve um sync)
@@ -224,6 +249,9 @@ class ChunkStore:
         self._pool = pool
         self._settings = settings
         self._table = settings.chunks_table_qualified
+        self._vectors_table = f'"{settings.pg_schema}".search_vectors'
+        self._summaries_table = f'"{settings.pg_schema}".file_summaries'
+        self._vector_dims: dict[str, tuple[float, int | None]] = {}
         self._caps: SearchCapabilities | None = None
         self._caps_at = 0.0
         self._documents = documents or DocumentStore(pool, settings)
@@ -289,8 +317,16 @@ class ChunkStore:
         exclude_repos: Sequence[str] | None = None,
         exclude_path_glob: Sequence[str] | None = None,
         scope: Scope | None = None,
+        extras: ExtraVectors | None = None,
     ) -> list[Hit]:
         """Fusão RRF ponderada: score = Σ peso_fonte / (RRF_K + posição na fonte).
+
+        `extras`: fontes dos vetores extras (search_vectors), com o mesmo vetor da consulta. A descrição do
+        arquivo (resumo e perguntas) é mais uma fonte da fusão: cada arquivo, na posição do seu vetor mais
+        parecido, entra pelo trecho mais parecido com a consulta; resumo desatualizado vota com `stale_factor`.
+        Os cartões somam peso / (RRF_K + posição do repo) aos candidatos dos repos mais parecidos (não trazem
+        candidatos novos). Abaixo da similaridade mínima, nada conta. Cada resultado diz em `matched_by` por
+        quais fontes veio (vetor, termos, descrição, cartão).
 
         `terms` já vêm tokenizados (domain.search_text.query_terms); `exact_terms` (search_text.exact_terms)
         são identificadores compostos da consulta, que pesam mais quando casam inteiros. `per_source` é quantos
@@ -328,7 +364,8 @@ class ChunkStore:
         if use_vec:
             v = p(query_vec)
             parts.append(f"""
-            SELECT repo, path, id, row_number() OVER (ORDER BY embedding <=> {v}) AS rnk, {float(vec_weight)}::float8 AS w
+            SELECT repo, path, id, row_number() OVER (ORDER BY embedding <=> {v}) AS rnk, {float(vec_weight)}::float8 AS w,
+                   'vetor' AS src
             FROM (SELECT repo, path, id, embedding FROM {t} WHERE {where}
                   ORDER BY {"(embedding <=> " + v + ") + 0" if exact else "embedding <=> " + v} LIMIT {k}) v""")
             weights.append(vec_weight)
@@ -337,18 +374,69 @@ class ChunkStore:
             kw_sql = self._keyword_sql(engine, p, terms, where, k, exact_terms)
             if kw_sql:
                 parts.append(f"""
-            SELECT repo, path, id, row_number() OVER (ORDER BY rank DESC) AS rnk, {float(kw_weight)}::float8 AS w
+            SELECT repo, path, id, row_number() OVER (ORDER BY rank DESC) AS rnk, {float(kw_weight)}::float8 AS w,
+                   'termos' AS src
             FROM ({kw_sql}) kw""")
                 weights.append(kw_weight)
+
+        card_cte, card_join, card_score, card_src = "", "", "", ""
+        if use_vec and extras is not None:
+            vt, max_dist = self._vectors_table, p(1.0 - extras.min_similarity)
+            model = sql_literal(extras.model)   # literal: o índice parcial só vale se o planner vê o mesmo valor
+            kinds = [k for k in extras.file_kinds if k in FILE_KINDS]
+            if extras.file_weight > 0 and kinds and kind != "doc":  # descrições só existem para arquivos de código
+                dims = await self._extra_dims(extras.model) if set(kinds) == set(FILE_KINDS) else None
+                kinds_sql = ", ".join(sql_literal(k) for k in kinds)
+                if dims and not exact:
+                    # HNSW parcial (VectorStore.ensure_index): mesma expressão e mesmos literais do índice; traz
+                    # mais vizinhos que o necessário porque o filtro (repos, linguagem) vem depois
+                    e, qv = index_expr("s.embedding", dims), f"{v}::vector({int(dims)})"
+                    cand = (f"(SELECT s.repo, s.path, {e} <=> {qv} AS d FROM {vt} s "
+                            f"WHERE {index_predicate(extras.model)} ORDER BY {e} <=> {qv} LIMIT ({k}) * 4)")
+                else:
+                    cand = (f"(SELECT s.repo, s.path, s.embedding <=> {v} AS d FROM {vt} s "
+                            f"WHERE s.model = {model} AND s.kind IN ({kinds_sql}))")
+                factor = float(extras.stale_factor)
+                stale = (f"CASE WHEN fs.stale AND fs.stale_since < now() - interval '{int(extras.max_stale_days)} days' "
+                         f"THEN 0 WHEN fs.stale THEN {factor} ELSE 1 END" if extras.max_stale_days
+                         else f"CASE WHEN fs.stale THEN {factor} ELSE 1 END")
+                # `where` sem prefixo: dentro do EXISTS, repo/path/language são do trecho ({t}), não do vetor
+                parts.append(f"""
+            SELECT repo, path, id, rnk, w, 'descrição' AS src FROM (
+              SELECT DISTINCT ON (c.repo, c.path) c.repo, c.path, c.id, q.rnk, q.w
+              FROM (SELECT repo, path, w, row_number() OVER (ORDER BY d) AS rnk FROM (
+                      SELECT a.repo, a.path, min(a.d) AS d, {float(extras.file_weight)}::float8 * ({stale}) AS w
+                      FROM {cand} a
+                      LEFT JOIN {self._summaries_table} fs ON fs.repo = a.repo AND fs.path = a.path
+                      WHERE a.d <= {max_dist}
+                        AND EXISTS (SELECT 1 FROM {t} WHERE repo = a.repo AND path = a.path AND {where})
+                      GROUP BY a.repo, a.path, fs.stale, fs.stale_since
+                      HAVING ({stale}) > 0
+                      ORDER BY d LIMIT {k}) qf) q
+              JOIN {t} c ON c.repo = q.repo AND c.path = q.path
+              ORDER BY c.repo, c.path, c.embedding <=> {v}) qc""")
+                weights.append(extras.file_weight)
+            if extras.card_weight > 0:
+                card_cte = f""",
+        cards AS (SELECT repo, row_number() OVER (ORDER BY d) AS rnk FROM (
+                    SELECT repo, embedding <=> {v} AS d FROM {vt}
+                    WHERE kind = 'repo_card' AND model = {model} AND (embedding <=> {v}) <= {max_dist}
+                    ORDER BY d LIMIT {int(extras.card_top)}) cd)"""
+                card_join = " LEFT JOIN cards cr ON cr.repo = f.repo"
+                card_score = f" + coalesce({float(extras.card_weight)}::float8 / ({RRF_K} + cr.rnk), 0)"
+                card_src = " || CASE WHEN cr.rnk IS NULL THEN '{}'::text[] ELSE ARRAY['cartão'] END"
+                weights.append(extras.card_weight)
 
         if not parts:
             return []
         sql = f"""
         WITH ranked AS ({" UNION ALL ".join(parts)}),
-        fused AS (SELECT repo, path, id, SUM(w / ({RRF_K} + rnk)) AS score
-                  FROM ranked GROUP BY repo, path, id)
-        SELECT t.repo, t.path, t.language, t.start_line, t.end_line, t.code, f.score
-        FROM fused f JOIN {t} t USING (repo, path, id)
+        fused AS (SELECT repo, path, id, SUM(w / ({RRF_K} + rnk)) AS score, array_agg(DISTINCT src) AS srcs
+                  FROM ranked GROUP BY repo, path, id){card_cte},
+        scored AS (SELECT f.repo, f.path, f.id, f.score{card_score} AS score, f.srcs{card_src} AS srcs
+                   FROM fused f{card_join})
+        SELECT t.repo, t.path, t.language, t.start_line, t.end_line, t.code, f.score, f.srcs
+        FROM scored f JOIN {t} t USING (repo, path, id)
         ORDER BY f.score DESC LIMIT {int(limit)}"""
 
         try:
@@ -373,11 +461,26 @@ class ChunkStore:
                 start_line=r["start_line"], end_line=r["end_line"],
                 score=round(float(r["score"]) / max_score, 4), code=r["code"],
                 kind=hit_kind(r["language"], r["path"]),
+                matched_by=[x for x in _SOURCE_ORDER if x in (r["srcs"] or ())],
             )
             for r in rows
         ]
         await self._annotate_docs(hits)
         return hits
+
+    async def _extra_dims(self, model: str) -> int | None:
+        """Dimensão dos vetores extras do modelo (para usar o índice parcial), guardada por um minuto."""
+        now = time.monotonic()
+        cached = self._vector_dims.get(model)
+        if cached is not None and now - cached[0] < 60:
+            return cached[1]
+        try:
+            dims = await self._pool.fetchval(
+                f"SELECT vector_dims(embedding) FROM {self._vectors_table} WHERE model = $1 LIMIT 1", model)
+        except asyncpg.UndefinedTableError:
+            dims = None
+        self._vector_dims[model] = (now, dims)
+        return dims
 
     async def _small_subset(self, repos: Sequence[str] | None, scope: Scope | None) -> bool:
         """O filtro restringe a busca a poucos trechos (vale a busca vetorial exata, `(dist) + 0` impede o

@@ -12,7 +12,7 @@ Aqui só a montagem do app (middlewares, lifespan, rotas por área de routes/, i
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import asyncio
 import logging
@@ -146,7 +146,7 @@ def create_app(settings: Settings) -> FastAPI:
         async def ui_redirect() -> RedirectResponse:
             return RedirectResponse("/ui/", status_code=307)
 
-        app.mount("/ui", StaticFiles(directory=UI_DIR, html=True), name="ui")
+        app.mount("/ui", UIStaticFiles(directory=UI_DIR, html=True), name="ui")
     else:
         log.warning("interface web não montada: %s não existe (rode `pnpm build` em frontend/)", UI_DIR)
 
@@ -157,6 +157,20 @@ def create_app(settings: Settings) -> FastAPI:
 
 if TYPE_CHECKING:
     import uvicorn
+
+class UIStaticFiles(StaticFiles):
+    """Build do front com cache certo: o HTML é revalidado a cada carga (aponta para os assets do build atual) e os
+    assets com hash no nome (`assets/index-<hash>.js`) ficam em cache por um ano. Sem isso, o navegador reaproveitava
+    o index.html antigo por heurística e continuava com o JS anterior depois de um novo `pnpm build`."""
+
+    async def get_response(self, path: str, scope: Any) -> Any:
+        response = await super().get_response(path, scope)
+        if path.startswith("assets/") and response.status_code == 200:
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        else:
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
 
 SHUTDOWN_TIMEOUT_S = 5  # desligamento gracioso: conexões abertas além disto são encerradas
 

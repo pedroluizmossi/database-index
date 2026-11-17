@@ -5,7 +5,7 @@ import { describeError } from "../api/client";
 import type { FileSummary, SummaryCoverage, SummaryCoverageRepo } from "../api/types";
 import { cx, formatDateTime, plural } from "../lib/utils";
 import { Dialog } from "./Dialog";
-import { Alert, Button, EmptyState, Skeleton, inputClass } from "./ui";
+import { Alert, Badge, Button, EmptyState, Skeleton, inputClass } from "./ui";
 
 /**
  * Resumos de arquivos escritos por agent (`enrich next --kind file_summaries`).
@@ -53,15 +53,46 @@ export function KeywordChips({ keywords, max }: { keywords: string[]; max?: numb
   );
 }
 
-/** Faixa do resumo num resultado de busca: o que o arquivo faz, antes do trecho de código. */
-export function HitSummary({ summary, keywords }: { summary: string; keywords: string[] }) {
+/** Selo de resumo desatualizado: o código mudou depois do resumo. */
+export function StaleMark() {
+  return (
+    <span title="O código mudou depois deste resumo: ele pode descrever o que não existe mais. Confirme no código.">
+      <Badge tone="warning">desatualizado</Badge>
+    </span>
+  );
+}
+
+/** Faixa do resumo num resultado de busca: o que o arquivo faz, antes do trecho de código.
+ * `stale`: o código mudou depois do resumo. `byDescription`: o resultado veio (também) pela descrição do arquivo. */
+export function HitSummary({
+  summary,
+  keywords,
+  stale = false,
+  byDescription = false,
+}: {
+  summary: string;
+  keywords: string[];
+  stale?: boolean;
+  byDescription?: boolean;
+}) {
   return (
     <div className={cx("mx-4 mb-3 space-y-2 rounded-lg border px-3 py-2.5", TINT)}>
       <p className="text-sm leading-relaxed text-stone-700 dark:text-stone-200">
         <SummaryMark className="mr-2 align-[-2px]" />
         {summary}
       </p>
-      <KeywordChips keywords={keywords} max={6} />
+      <div className="flex flex-wrap items-center gap-2">
+        <KeywordChips keywords={keywords} max={6} />
+        {stale && <StaleMark />}
+        {byDescription && (
+          <span
+            className={cx("text-[11px] font-medium", INK)}
+            title="O resumo deste arquivo se parece com a consulta: foi um dos motivos de ele aparecer."
+          >
+            achado pela descrição
+          </span>
+        )}
+      </div>
     </div>
   );
 }
@@ -179,8 +210,11 @@ export function RepoSummariesLink({ repo, className }: { repo: string; className
   );
 }
 
+/** Barra de quatro estados (exclusivos): em dia, aguardando embedding, desatualizado e sem resumo. */
 export function CoverageMeter({ coverage }: { coverage: SummaryCoverageRepo }) {
   const done = coverage.fresh + coverage.stale;
+  const waiting = Math.min(coverage.unembedded ?? 0, coverage.fresh);
+  const ready = coverage.fresh - waiting;
   const width = (n: number) => `${coverage.files ? (n / coverage.files) * 100 : 0}%`;
   return (
     <div className="space-y-1.5">
@@ -189,11 +223,17 @@ export function CoverageMeter({ coverage }: { coverage: SummaryCoverageRepo }) {
         role="img"
         aria-label={`${done} de ${coverage.files} arquivos de código com resumo`}
       >
-        <span className="h-full bg-violet-500" style={{ width: width(coverage.fresh) }} />
+        <span className="h-full bg-violet-500" style={{ width: width(ready) }} />
+        <span className="h-full bg-violet-300 dark:bg-violet-400/50" style={{ width: width(waiting) }} />
         <span className="h-full bg-amber-400" style={{ width: width(coverage.stale) }} />
       </div>
       <p className="text-xs text-stone-500 dark:text-stone-400">
-        <Legend dot="bg-violet-500">{numberFormat.format(coverage.fresh)} em dia</Legend>
+        <Legend dot="bg-violet-500">{numberFormat.format(ready)} em dia</Legend>
+        {waiting > 0 && (
+          <Legend dot="bg-violet-300 dark:bg-violet-400/50">
+            {numberFormat.format(waiting)} aguardando embedding
+          </Legend>
+        )}
         {coverage.stale > 0 && <Legend dot="bg-amber-400">{numberFormat.format(coverage.stale)} desatualizados</Legend>}
         <Legend dot="bg-stone-300 dark:bg-stone-700">
           {numberFormat.format(coverage.files - done)} sem resumo
@@ -293,9 +333,17 @@ export function RepoSummariesDialog({
           <ul className="max-h-[55dvh] divide-y divide-stone-100 overflow-y-auto dark:divide-stone-800">
             {shown.map((s) => (
               <li key={s.path} className="space-y-1.5 py-3">
-                <p className="truncate font-mono text-xs text-stone-500 dark:text-stone-400" title={s.path}>
-                  {s.path}
-                </p>
+                <div className="flex min-w-0 items-center gap-2">
+                  <p className="min-w-0 truncate font-mono text-xs text-stone-500 dark:text-stone-400" title={s.path}>
+                    {s.path}
+                  </p>
+                  {s.stale && <StaleMark />}
+                  {s.vector_pending && !s.stale && (
+                    <span title="Ainda não tem vetor: entra na busca por termos, mas não na semântica até gerar (Indexação).">
+                      <Badge tone="pending">aguardando embedding</Badge>
+                    </span>
+                  )}
+                </div>
                 <p className="text-sm leading-relaxed text-stone-800 dark:text-stone-100">{s.summary}</p>
                 <KeywordChips keywords={s.keywords} />
               </li>

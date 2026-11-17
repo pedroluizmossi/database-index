@@ -40,7 +40,7 @@ async def _cmd_symbol(a: argparse.Namespace, settings: Settings) -> None:
 async def _cmd_grep(a: argparse.Namespace, settings: Settings) -> None:
     async with open_service(settings) as svc:
         res = await svc.grep(" ".join(a.pattern), repos=a.repo, path_glob=a.path, regex=a.regex,
-                             case_sensitive=a.case_sensitive, max_results=a.max)
+                             case_sensitive=a.case_sensitive, max_results=a.max, include_tests=a.tests)
     if a.json:
         print_json({"matches": [m.to_dict() for m in res.matches], "truncated": res.truncated})
         return
@@ -88,6 +88,7 @@ def register(sub: Subparsers, settings: Settings) -> None:
     g.add_argument("-E", "--regex", action="store_true", help="trata o padrão como regex")
     g.add_argument("-s", "--case-sensitive", action="store_true")
     g.add_argument("-n", "--max", type=int, default=50, help="máximo de linhas (padrão 50)")
+    g.add_argument("-t", "--tests", action="store_true", help="procura também nos arquivos de teste")
     g.add_argument("--json", action="store_true")
     g.set_defaults(fn=_cmd_grep)
 

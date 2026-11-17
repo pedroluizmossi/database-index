@@ -7,8 +7,10 @@ fusão dependem do tipo da consulta: frases favorecem o vetor; identificadores, 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from collections import OrderedDict
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -18,7 +20,8 @@ from ..indexing.context import Decl, chunk_header
 from ..infra.symbol_store import SymbolStore
 from ..infra import llm
 from ..domain.search_text import exact_terms, fusion_weights, query_kind, query_terms
-from ..infra.chunk_store import KINDS, ChunkStore, kind_filter_conflict
+from ..domain.search_vectors import FILE_KINDS
+from ..infra.chunk_store import KINDS, ChunkStore, ExtraVectors, kind_filter_conflict
 from ..settings import Settings
 
 log = logging.getLogger(__name__)
@@ -150,6 +153,9 @@ class Searcher:
         max_docs: int | None = None,
         rerank_options: RerankOptions | None = None,
         scope: Scope | None = None,
+        on_candidates: Callable[[list[Hit]], None] | None = None,
+        extra_weights: tuple[float, float] | None = None,
+        extra_options: dict[str, Any] | None = None,
     ) -> list[Hit]:
         """Busca trechos de código e documentação.
 
@@ -158,10 +164,15 @@ class Searcher:
         documentação externa ligadas a eles.
         rerank: reordena `candidates` resultados com `rerank_model` e devolve os `top_k` melhores.
         weights: (vetor, termos) da fusão no lugar dos padrões por tipo de consulta (avaliação).
+        extra_weights: (descrição do arquivo, cartões dos repos) no lugar de SEARCH_FILE_TEXT_WEIGHT e
+        SEARCH_CARD_WEIGHT (avaliação; (0, 0) desliga os vetores extras). Só valem quando há busca semântica.
+        extra_options: avaliação: `file_kinds` (("question",), ("summary",)...) e `stale_factor`.
         rerank_options: variações do rerank (padrão: as do Settings, RERANK_INSTRUCTION etc.).
         scope: só o código de um domínio/serviço do DDD (repos e pastas; domain/ownership.scope_for).
         max_docs: páginas de documentação no resultado quando `kind` é vazio (padrão:
         default_max_docs(top_k)); com kind='doc' não há limite.
+        on_candidates: recebe os candidatos da fusão, antes do rerank e da diversificação (avaliação:
+        diz se um erro é da recuperação ou da ordenação). Leia na hora: os trechos mudam depois.
         """
         if not query or not query.strip():
             raise ValueError("consulta vazia")
@@ -207,7 +218,10 @@ class Searcher:
             exclude_repos=exclude_repos,
             exclude_path_glob=exclude_path_glob,
             scope=scope,
+            extras=self._extras(extra_weights, extra_options) if use_vec else None,
         )
+        if on_candidates is not None:
+            on_candidates(hits)
         if use_rerank and len(hits) > 1:
             try:
                 # reordena todos (o custo é pelo texto enviado, não pelo top_n) para sobrar
@@ -220,6 +234,19 @@ class Searcher:
         if kind is None and max_docs is None:
             max_docs = default_max_docs(top_k)
         return diversify(hits, top_k, max_docs=None if kind == "doc" else max_docs)
+
+    def _extras(self, weights: tuple[float, float] | None,
+                options: dict[str, Any] | None = None) -> ExtraVectors | None:
+        s = self._settings
+        file_w, card = weights if weights is not None else (s.search_file_text_weight, s.search_card_weight)
+        if file_w <= 0 and card <= 0:
+            return None
+        opts = options or {}
+        return ExtraVectors(model=s.embed_model, file_weight=file_w, card_weight=card,
+                            card_top=s.search_card_top_repos, min_similarity=s.search_vector_min_similarity,
+                            file_kinds=tuple(opts.get("file_kinds", FILE_KINDS)),
+                            stale_factor=float(opts.get("stale_factor", s.search_stale_summary_factor)),
+                            max_stale_days=s.summary_max_stale_days)
 
     def default_rerank_options(self) -> RerankOptions:
         s = self._settings

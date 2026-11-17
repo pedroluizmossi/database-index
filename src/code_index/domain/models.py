@@ -227,6 +227,9 @@ class Hit:
     owners: list[str] = field(default_factory=list)          # domínio/serviço do DDD dono do arquivo
     summary: str | None = None              # resumo do arquivo escrito por agent (fila file_summaries), se houver
     summary_keywords: list[str] = field(default_factory=list)  # palavras-chave desse resumo
+    summary_stale: bool | None = None       # True: o arquivo mudou depois do resumo (confirme no código)
+    matched_by: list[str] = field(default_factory=list)  # fontes da fusão: vetor, termos, descrição, cartão
+    tests: int | None = None                # casos de teste que cobrem o arquivo (find_tests lista), se houver
 
     def to_dict(self) -> dict:
         return asdict(self)

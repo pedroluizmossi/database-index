@@ -13,13 +13,15 @@ import { useToast } from "../components/Toaster";
 import { ActiveJobPanel, JobDialog, JobsPanel, useJobs } from "../components/JobsPanel";
 import { IndexCoverage, useRepoCounts, type RepoCounts } from "../components/IndexCoverage";
 import { SyncDialog } from "../components/SyncDialog";
+import { VectorsPanel } from "../components/VectorsPanel";
 import { Button, Panel, Skeleton } from "../components/ui";
 
 const numberFormat = new Intl.NumberFormat("pt-BR");
 
 /**
  * Operação da indexação, para curadores (index:write): o job ativo (fila ou rodando, tentativa, andamento por
- * repo), o que pede atenção, a cobertura do índice e o histórico de jobs de todas as fontes. "Indexar lote" e
+ * repo), o que pede atenção, a cobertura do índice, os vetores de resumos e cartões (pendentes e geração) e o
+ * histórico de jobs de todas as fontes. "Indexar lote" e
  * "Atualizar descoberta" (admin) ficam aqui; o catálogo dos repositórios fica em Repositórios.
  */
 export function IndexingPage() {
@@ -116,6 +118,8 @@ export function IndexingPage() {
         onOutdated={openRepos ? () => openRepos({ outdated: true }) : undefined}
         onRefresh={isAdmin && writable ? (org) => void refreshOrg(org) : undefined}
       />
+
+      {canSeeJobs && <VectorsPanel canRun={canIndex} />}
 
       <JobsPanel state={jobs} onOpen={setJobDetail} />
 

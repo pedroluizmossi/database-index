@@ -230,7 +230,7 @@ def test_fila_de_enriquecimento_pela_api(server: Server, tmp_path: Any) -> None:
     assert run.returncode == 0, run.stderr
     assert "ok   meu-repo" in run.stdout and "fila vazia. 1 entregue(s), 0 devolvida(s)." in run.stdout
     st = bot.get("/api/v1/enrich/status").json()
-    assert st["summaries"] == {"files": 1, "fresh": 1, "stale": 0, "missing": 0}
+    assert st["summaries"] == {"files": 1, "fresh": 1, "stale": 0, "missing": 0, "skipped": 0}
     summary = client(server, "leitor").get("/api/v1/summaries/file/meu-repo/app.py").json()
     assert summary["summary"].startswith("Devolve uma saudação") and "enriquecedor" in summary["agent"]
     files = client(server, "leitor").get("/api/v1/repos/meu-repo/files").json()
@@ -370,6 +370,13 @@ def test_host_desconhecido_recusado(server: Server) -> None:
     assert r.status_code == 400
 
 
+def test_grafo_de_chamadas_na_api(server: Server) -> None:
+    r = client(server, "leitor").get("/api/v1/calls", params={"target": "ola", "direction": "callees"})
+    assert r.status_code == 200 and r.json()["direction"] == "callees" and r.json()["edges"] == []
+    assert client(server, "leitor").get("/api/v1/calls", params={"target": "ola", "direction": "x"}).status_code == 422
+    assert client(server).get("/api/v1/calls", params={"target": "ola"}).status_code == 401
+
+
 def test_auditoria(server: Server) -> None:
     client(server, "leitor").post("/api/v1/sync", json={"dry_run": True})
     client(server, "admin-bot").post("/api/v1/repos", json={"source": "lixo sem formato"})
@@ -392,6 +399,10 @@ async def _mcp(server: Server, token: str) -> tuple[list[str], Any, Any]:
             assert not find.is_error and json.loads(find.content[0].text) == {"results": []}
             card = await s.call_tool("repo_card", {"repo": "nao-existe"})
             assert card.is_error
+            for tool in ("find_callers", "find_callees"):   # sem aresta: não é erro, e explica o porquê
+                calls = await s.call_tool(tool, {"target": "ola"})
+                body = json.loads(calls.content[0].text)
+                assert not calls.is_error and body["edges"] == [] and "grep_code" in body["note"]
             return tools, search, symbol, grep
 
 
@@ -406,7 +417,8 @@ def test_mcp_exige_token(server: Server) -> None:
 def test_mcp_so_expoe_leitura(server: Server) -> None:
     tools, search, symbol, grep = asyncio.run(_mcp(server, "leitor"))
     assert tools == ["search_code", "read_file_lines", "list_repos", "list_domains", "find_repos", "find_api_impl",
-                     "related", "repo_card", "find_symbol", "grep_code"]
+                     "related", "repo_card", "find_symbol", "grep_code", "find_tests", "find_callers",
+                     "find_callees"]
     assert not search.is_error and not symbol.is_error and not grep.is_error
     assert json.loads(grep.content[0].text) == {"matches": [], "truncated": False}
     # tools de lista devolvem dict com chave nomeada, não list (que o SDK embrulha em {"result": ...} e o code
@@ -434,7 +446,7 @@ def test_mcp_serve_guia_de_uso(server: Server) -> None:
     assert prompts == ["guia_de_uso", "investigar"]
     assert guia.startswith("# Guia de uso do code-index") and guia == recurso
     for tool in ("search_code", "find_symbol", "grep_code", "read_file_lines", "list_repos", "find_repos", "repo_card",
-                 "find_api_impl", "related"):
+                 "find_api_impl", "related", "find_tests", "find_callers", "find_callees"):
         assert tool in guia
     assert investigar.endswith("Pergunta: onde validamos o captcha?")
 

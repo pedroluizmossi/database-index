@@ -50,7 +50,7 @@ async def test_fila_de_resumos_e_busca(int_settings: Settings, tmp_path: Path, f
         async def symbols(path: str) -> str:
             return await pool.fetchval(f"SELECT search_symbols FROM {table} WHERE path = $1 LIMIT 1", path)
 
-        assert (await svc.enrich_status())["summaries"] == {"files": 2, "fresh": 0, "stale": 0, "missing": 2}
+        assert (await svc.enrich_status())["summaries"] == {"files": 2, "fresh": 0, "stale": 0, "missing": 2, "skipped": 0}
         base = await symbols("src/browser_version.py")
         assert not await svc.search("navegador", mode="keyword", rerank=False)   # português não casa com o código
 
@@ -83,13 +83,13 @@ async def test_fila_de_resumos_e_busca(int_settings: Settings, tmp_path: Path, f
         assert files["src/shade.py"]["lines"] >= 2 and files["src/shade.py"]["language"] == "python"
         cov = await svc.summary_coverage()
         assert (cov["files"], cov["fresh"], cov["missing"]) == (2, 2, 0)
-        assert cov["repos"] == [{"repo": "portal", "files": 2, "fresh": 2, "stale": 0}]
+        assert cov["repos"] == [{"repo": "portal", "files": 2, "fresh": 2, "stale": 0, "unembedded": 2}]
         assert (await svc.enrich_status())["summaries"]["fresh"] == 2
         with pytest.raises(ValueError, match="já entregue"):
             await svc.enrich_submit(task["id"], _delivery(task["files"]))
 
         # reaplicar não acumula; e o sync (que regrava os trechos) devolve os resumos às colunas
-        assert await svc.apply_file_summaries() == {"pruned": 0, "chunks": 0}
+        assert await svc.apply_file_summaries() == {"pruned": 0, "chunks": 0, "stale": 0}
         await pool.execute(f"UPDATE {table} SET search_symbols = $1 WHERE path = 'src/browser_version.py'", base)
         assert (await svc.apply_file_summaries())["chunks"] >= 1
         assert await symbols("src/browser_version.py") == after

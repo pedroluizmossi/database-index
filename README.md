@@ -192,6 +192,22 @@ opcional), a maioria sem filtro de repo. Cada pergunta pode levar os filtros da 
 pesos da fusão sem rerank. Rode depois de mexer na busca ou no chunking. Cada pergunta custa um embedding
 de consulta e, nos modos com rerank, uma chamada ao reranker (centavos).
 
+A coluna `cand` diz em quantas perguntas a resposta estava entre os candidatos da fusão, antes do rerank e da
+diversificação: é o teto do que a ordenação consegue entregar. Cada erro tem etapa: de **recuperação** (a resposta
+nem chegou aos candidatos; mexer no rerank não resolve) ou de **ordenação** (chegou e ficou fora do top). Com `-v`,
+cada erro mostra a etapa e a posição entre os candidatos.
+
+```bash
+uv run code-index eval --save 2026-11-16-inicial      # grava a rodada em evals/baselines/<nome>.json
+uv run code-index eval --compare 2026-11-16-inicial   # diferença das métricas e perguntas que desceram
+uv run code-index eval --split dev --grid             # calibra em ~70% das perguntas...
+uv run code-index eval --split test                   # ...e confirma nos ~30% reservados
+```
+
+A separação `dev`/`test` vem do hash do texto da pergunta: cada uma cai sempre no mesmo conjunto, e incluir casos
+não muda o das outras. Calibre pesos e opções em `dev`; `test` só confirma. A comparação usa as configurações de
+mesmo nome e as perguntas em comum, e avisa quando a rodada difere do baseline (modelo, `top_k`, `split`).
+
 **Símbolos.** A tabela `code_symbols` é preenchida na indexação, sem custo de API, com as declarações de
 cada arquivo: nome, tipo, classe envolvente, linha e assinatura.
 
@@ -417,8 +433,106 @@ lista dos resumos do repo com filtro). Na API: o campo `summary` dos resultados 
 Medido num piloto de 16 repos (961 arquivos), nas 28 perguntas do `eval` com resposta neles: MRR com rerank de
 0,83 para 0,98 e, só por termos, de 0,42 para 0,71; nas outras perguntas, nada mudou com rerank.
 
+### Vetores de resumos e cartões
+
+Além dos termos, o **texto do resumo** de cada arquivo (um vetor por arquivo: caminho, resumo e palavras-chave), as
+**perguntas dos resumos** (um vetor por pergunta) e os **cartões dos repos** (um vetor por repo) entram na busca
+semântica, com o mesmo vetor da consulta (sem custo extra por busca):
+
+- **Descrição do arquivo** (resumo e perguntas): uma fonte só da fusão. Cada arquivo entra na posição do seu vetor
+  mais parecido com a consulta (resumo ou pergunta, sem voto duplo), pelo trecho do arquivo mais parecido com ela.
+  Ajuda pergunta descritiva, sem as palavras do código. Peso: `SEARCH_FILE_TEXT_WEIGHT` (0,5; o nome antigo
+  `SEARCH_QUESTION_WEIGHT` ainda vale).
+- **Cartões:** reforçam os trechos já candidatos dos `SEARCH_CARD_TOP_REPOS` repos (padrão 3) cujo cartão mais
+  se parece com a consulta. Não trazem candidatos novos. Peso: `SEARCH_CARD_WEIGHT` (0,3).
+- Só conta vetor com similaridade de pelo menos `SEARCH_VECTOR_MIN_SIMILARITY` (padrão 0,5). Com poucos resumos e
+  cartões, a fusão por posição premiaria sempre os mesmos arquivos e repos. Com peso 0, a fonte sai.
+- Cada resultado diz em `matched_by` por quais fontes veio (`vetor`, `termos`, `descrição`, `cartão`).
+
+**Nada é embedado na hora.** Resumo ou cartão novo ou alterado fica **aguardando embedding**, e vetor cujo resumo
+ou cartão saiu fica **obsoleto** (apagado no fim do próximo sync, sem custo). Cada vetor guarda o hash do texto e
+o modelo: trocar `EMBED_MODEL` deixa todos pendentes, e a busca ignora os de outro modelo. A geração é sob pedido e
+idempotente: se parar no meio, o que faltou continua pendente. Com `VECTORS_AUTO_EMBED_MAX_CHARS` > 0, o fim do
+sync gera os pendentes até esse total de caracteres (padrão 0: nunca). Cada modelo ganha um índice HNSW parcial
+na primeira geração.
+
+**Resumo desatualizado** (o arquivo mudou depois dele, marcado no fim de cada sync): os vetores dele continuam, mas
+votam com `SEARCH_STALE_SUMMARY_FACTOR` (padrão 0,5; 0 tira da busca), e com `SUMMARY_MAX_STALE_DAYS` > 0 deixam
+de votar depois desse prazo. O resultado da busca traz `summary_stale: true`, e o arquivo volta ao topo da fila de
+resumos. Os termos do resumo no BM25 ficam.
+
+**Fila de resumos:** primeiro os desatualizados, depois os arquivos mais chamados no grafo de chamadas. Arquivos
+gerados (`src-gen/`, `*.pb.go`, `*_pb2.py`, `*.d.ts`...) e com menos de `SUMMARY_MIN_LINES` linhas (padrão 15)
+ficam de fora.
+
+```bash
+uv run code-index vectors status                    # por tipo, custo estimado, cobertura e desatualizados (sem custo)
+uv run code-index vectors embed --dry-run           # quantos textos e quanto custaria (sem custo)
+uv run code-index vectors embed [--kind summary]    # gera os pendentes (custo na Voyage); --limit N
+uv run code-index eval --extras                     # com/sem extras, só perguntas, só resumo, resumo velho
+```
+
+O `eval --extras` mostra também as métricas só das perguntas cuja resposta está num arquivo com resumo: é onde
+esses vetores podem agir (na métrica geral, com poucos resumos, o efeito some).
+
+Na interface, o estado fica em **Indexação → Vetores de resumos e cartões**, com o custo estimado, a cobertura dos
+resumos e o botão "Gerar N pendentes" (ou "gerar só estes", por tipo; `index:write`; roda em segundo plano no
+servidor). A lista de resumos de um repo marca *desatualizado* e *aguardando embedding*, e o resultado da busca,
+*desatualizado* e *achado pela descrição*. Na API: `GET /api/v1/vectors/status` e `POST /api/v1/vectors/embed`
+(corpo opcional `{"kinds": [...], "limit": N}`). Uma geração por vez, entre processos (trava no banco).
+
 - Interface: resumo e botão **Cartão** na aba Repositórios (o filtro também procura no resumo e nas tags);
   na Busca, o quadro "Repos que tratam do assunto" sugere o filtro de repo.
+
+### Testes: fora da busca, mas acessíveis
+
+Os testes não entram no índice de trechos nem nos embeddings: custariam tokens e disputariam lugar com o código de
+produção. Mesmo assim, dizem o comportamento esperado do código. Por isso, no fim de cada sync, os arquivos de
+teste dos repos que mudaram são lidos dos clones (sem custo de API) e cada caso de teste vai para `test_cases`,
+com o nome (e o `describe`/classe que o envolve), a linha e o código de produção que ele testa. A ligação é feita
+pelo nome do arquivo (`AuthServiceTest.java` → `AuthService`, `auth.spec.ts` → `auth.ts`) ou, sem isso, pela classe
+citada em mais casos. Cada caso guarda também os métodos do arquivo testado que ele chama.
+
+Extratores: JUnit/Kotest/Spock, xUnit/NUnit/MSTest, Jest/Mocha/Vitest/Jasmine, RSpec, pytest/unittest, testing do
+Go e PHPUnit. Nos clones atuais: ~41 mil casos em ~5 mil arquivos, 90% ligados ao código testado.
+
+```bash
+uv run code-index tests find AuthService.lockAccount   # também: AuthService, src/auth/token.ts, "bloqueia conta"
+uv run code-index tests scan [repo...] [--force]      # o sync já faz; relê os testes (sem custo)
+uv run code-index tests status
+uv run code-index grep -t "montaMockDeUsuario"          # grep também nos arquivos de teste
+```
+
+- MCP: tool `find_tests` (nome e linha dos casos; o corpo se lê com `read_file_lines`), `grep_code` com
+  `include_tests=true` e o campo `tests` (quantos casos cobrem o arquivo) nos resultados de `search_code`.
+- API: `GET /api/v1/tests?target=...`, `include_tests` em `POST /api/v1/grep` e `tests` nos resultados da busca.
+- Interface: "N casos de teste" no cartão do resultado da busca.
+
+### Grafo de chamadas: quem chama quem
+
+No fim de cada sync, os repos de código que mudaram são lidos dos clones com tree-sitter (sem custo de API) e
+cada chamada vira, quando dá para saber, uma aresta de uma função ou método para outro, dentro do repo
+(`code_edges`). Linguagens: Java, TypeScript/TSX, JavaScript, Python e Go. A resolução segue o que está escrito:
+mesmo arquivo, mesmo pacote Java ou pasta Go, import (inclusive `paths`/`baseUrl` do `tsconfig.json`, `go.mod` e
+imports relativos do Python), tipo declarado de quem recebe a chamada (variável, parâmetro, campo, `inject()` do
+Angular, `constructor(private x: Tipo)`) e herança. Chamada para biblioteca de fora, tipo desconhecido ou nome
+ambíguo fica sem aresta. Cada aresta diz como foi achada (`via`); só `nome` (chamada solta `foo()` com uma única
+função desse nome no repo, fora de Java) é inferida.
+
+Nos clones atuais: ~69 mil arestas em ~17 mil arquivos (265 repos, ~17 s); 22% das chamadas ligadas (o resto é,
+na maior parte, chamada a bibliotecas) e 0,6% delas inferidas.
+
+```bash
+uv run code-index graph callers Sender.send            # também: send, src/main/java/x/Sender.java, caminho:linha
+uv run code-index graph callees Billing.charge
+uv run code-index graph scan [repo...] [--force]       # o sync já faz; relê (sem custo)
+uv run code-index graph status
+```
+
+- MCP: tools `find_callers` (quem chama; impacto de uma mudança) e `find_callees` (o que um método chama). Aceitam
+  `Classe.metodo`, `metodo`, um arquivo ou `caminho:linha` da definição; cada aresta traz `via` e `inferred`. Sem
+  resultado, vem um `note` lembrando que o grafo não cobre chamadas entre repos, reflexão nem eventos.
+- API: `GET /api/v1/calls?target=...&direction=callers|callees` (`search:read`).
 
 ## Servidor HTTP: API REST + MCP
 

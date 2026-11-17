@@ -90,6 +90,32 @@ async def embed_query(settings: Settings, text: str) -> np.ndarray:
     return np.asarray(resp.data[0]["embedding"], dtype=np.float32)
 
 
+def input_price(model: str) -> float | None:
+    """US$ por token de entrada do modelo, pela tabela do LiteLLM (None se o modelo não está nela)."""
+    try:
+        price = litellm.model_cost.get(model, {}).get("input_cost_per_token")
+    except Exception:  # noqa: BLE001 - tabela de preços é informativa
+        return None
+    return float(price) if isinstance(price, (int, float)) else None
+
+
+async def embed_documents(settings: Settings, texts: list[str], *, batch_size: int = 128) -> list[np.ndarray]:
+    """Embeddings de textos para guardar (input_type=document), em lotes. Fora do CocoIndex: perguntas dos
+    resumos e cartões dos repos (domain/search_vectors)."""
+    out: list[np.ndarray] = []
+    for start in range(0, len(texts), batch_size):
+        batch = texts[start:start + batch_size]
+        resp = await litellm.aembedding(
+            model=settings.embed_model, input=batch, input_type="document", **settings.embed_kwargs
+        )
+        _track_embedding(resp)
+        data = sorted(resp.data, key=lambda d: d["index"]) if all("index" in d for d in resp.data) else resp.data
+        if len(data) != len(batch):
+            raise RuntimeError(f"o provedor devolveu {len(data)} embeddings para {len(batch)} textos")
+        out.extend(np.asarray(d["embedding"], dtype=np.float32) for d in data)
+    return out
+
+
 async def rerank(settings: Settings, query: str, documents: list[str], top_n: int) -> list[tuple[int, float]]:
     """Reordena os documentos. Devolve (índice original, score de relevância), do melhor para o pior."""
     resp = await litellm.arerank(model=settings.rerank_model, query=query, documents=documents, top_n=top_n)

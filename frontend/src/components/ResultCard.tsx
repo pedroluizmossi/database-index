@@ -1,10 +1,11 @@
 import { useMemo, useState } from "react";
-import { BookOpen, Check, Copy, ExternalLink, FileText } from "lucide-react";
+import { BookOpen, Check, Copy, ExternalLink, FileText, FlaskConical } from "lucide-react";
 import type { Hit } from "../api/types";
 import { Badge, Button, IconButton } from "./ui";
 import { CodeLines, type CodeLine } from "./CodeLines";
 import { HitSummary } from "./summaries";
 import { KindIcon } from "./kind";
+import { TestCasesDialog } from "./TestCasesDialog";
 
 interface ResultCardProps {
   hit: Hit;
@@ -13,14 +14,17 @@ interface ResultCardProps {
   onOpen: () => void;
   /** Abre o handler de uma operação da API (repo, caminho, linha). */
   onOpenImpl?: (repo: string, path: string, line: number) => void;
+  /** Abre um arquivo de teste na linha do caso (lista de "N casos de teste"). */
+  onOpenTest?: (repo: string, path: string, line: number) => void;
 }
 
-export function ResultCard({ hit, maxScore, onOpen, onOpenImpl }: ResultCardProps) {
+export function ResultCard({ hit, maxScore, onOpen, onOpenImpl, onOpenTest }: ResultCardProps) {
   const lines = useMemo<CodeLine[]>(
     () => hit.code.split("\n").map((text, i) => ({ n: hit.start_line + i, text })),
     [hit],
   );
   const [copied, setCopied] = useState(false);
+  const [testsOpen, setTestsOpen] = useState(false);
   const percent = maxScore > 0 ? Math.round((hit.score / maxScore) * 100) : 0;
 
   async function copyCode() {
@@ -64,7 +68,7 @@ export function ResultCard({ hit, maxScore, onOpen, onOpenImpl }: ResultCardProp
         </div>
       </header>
 
-      {(hit.url || hit.linked_repos.length > 0 || (hit.implemented_in?.length ?? 0) > 0) && (
+      {(hit.url || hit.linked_repos.length > 0 || (hit.implemented_in?.length ?? 0) > 0 || (hit.tests ?? 0) > 0) && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 pb-3 text-xs text-stone-500 dark:text-stone-400">
           {hit.url && (
             <a
@@ -99,10 +103,28 @@ export function ResultCard({ hit, maxScore, onOpen, onOpenImpl }: ResultCardProp
               </button>
             );
           })}
+          {(hit.tests ?? 0) > 0 && (
+            <button
+              type="button"
+              onClick={() => setTestsOpen(true)}
+              className="inline-flex items-center gap-1 font-medium hover:text-accent-600 hover:underline dark:hover:text-accent-400"
+              title="Ver os casos de teste que cobrem este arquivo (os testes não entram na busca)"
+            >
+              <FlaskConical className="size-3" aria-hidden="true" />
+              {hit.tests} {hit.tests === 1 ? "caso de teste" : "casos de teste"}
+            </button>
+          )}
         </div>
       )}
 
-      {hit.summary && <HitSummary summary={hit.summary} keywords={hit.summary_keywords ?? []} />}
+      {hit.summary && (
+        <HitSummary
+          summary={hit.summary}
+          keywords={hit.summary_keywords ?? []}
+          stale={hit.summary_stale === true}
+          byDescription={hit.matched_by?.includes("descrição") ?? false}
+        />
+      )}
 
       <div className="overflow-x-auto border-y border-stone-100 bg-stone-50 py-2 dark:border-stone-800 dark:bg-stone-950/50">
         <CodeLines lines={lines} collapsedAfter={8} />
@@ -117,6 +139,22 @@ export function ResultCard({ hit, maxScore, onOpen, onOpenImpl }: ResultCardProp
           Abrir arquivo
         </Button>
       </footer>
+      {testsOpen && (
+        <TestCasesDialog
+          repo={hit.repo}
+          path={hit.path}
+          open
+          onClose={() => setTestsOpen(false)}
+          onOpenCase={
+            onOpenTest
+              ? (repo, path, line) => {
+                  setTestsOpen(false);
+                  onOpenTest(repo, path, line);
+                }
+              : undefined
+          }
+        />
+      )}
     </article>
   );
 }

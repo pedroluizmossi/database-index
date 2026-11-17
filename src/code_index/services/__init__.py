@@ -46,12 +46,13 @@ from .search import SearchMixin
 from .sync import SyncMixin
 from .usage import UsageMixin
 from .users import UsersMixin
+from .vectors import VectorsMixin
 from .wiki import WikiMixin
 
 log = logging.getLogger(__name__)
 
 
-class CodeIndexService(SyncMixin, ReposMixin, DocsMixin, WikiMixin, SearchMixin, ApisMixin, EnrichMixin, AuthMixin,
+class CodeIndexService(SyncMixin, VectorsMixin, ReposMixin, DocsMixin, WikiMixin, SearchMixin, ApisMixin, EnrichMixin, AuthMixin,
                        OAuthMixin, OwnershipMixin, UsersMixin, UsageMixin, ServiceBase):
     """Casos de uso do índice. Construído por `open_service()`, que cuida do ciclo de vida.
     Cada área fica num módulo deste pacote; as interfaces só conhecem esta classe."""

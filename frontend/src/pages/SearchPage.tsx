@@ -234,6 +234,9 @@ export function SearchPage() {
                     onOpenImpl={(implRepo, path, line) =>
                       setTarget({ repo: implRepo, path, highlight: { start: line, end: line } })
                     }
+                    onOpenTest={(testRepo, path, line) =>
+                      setTarget({ repo: testRepo, path, highlight: { start: line, end: line } })
+                    }
                     onOpen={() =>
                       setTarget({
                         repo: hit.repo,

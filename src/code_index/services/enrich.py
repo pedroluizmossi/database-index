@@ -17,6 +17,7 @@ from ..domain.repo_card import material_hash, parse_payload, related_candidates,
 from ..indexing import enrich as enrich_collect
 from ..indexing.orchestrator import configured_repos, repo_for_row
 from ..infra.summary_store import SummaryStore
+from ..infra.vector_store import VectorStore
 from ..retrieval.redaction import mask_output
 
 from .base import ServiceBase, _facts_key, _iso_local
@@ -223,6 +224,7 @@ class EnrichMixin(ServiceBase):
             async with conn.transaction():
                 await store.complete(conn, task, results, agent or task.agent)
                 applied = await store.apply(conn, repo=task.repo, paths=paths)
+        await store.refresh_stale(task.repo)   # o arquivo pode ter mudado entre a reserva e a entrega
         return {"kind": "file_summaries", "repo": task.repo, "files": len(results), "chunks": applied,
                 "remaining": len(await store.pending())}
 
@@ -232,9 +234,11 @@ class EnrichMixin(ServiceBase):
         return await self._summaries.get(repo, path)
 
     async def repo_summaries(self, repo: str) -> list[dict[str, Any]]:
-        """Resumos dos arquivos de um repo, por caminho."""
+        """Resumos dos arquivos de um repo, por caminho. `stale`: o código mudou depois do resumo;
+        `vector_pending`: o resumo ainda não tem vetor em dia (não entra na busca semântica até gerar)."""
         repo = (await self._resolve_repos([repo]) or [repo])[0]
-        return await self._summaries.list_repo(repo)
+        pending = await VectorStore(self._chunks.pool, self.settings).pending_files(self.settings.embed_model, repo)
+        return [{**s, "vector_pending": (repo, s["path"]) in pending} for s in await self._summaries.list_repo(repo)]
 
     async def repo_files(self, repo: str) -> list[dict[str, Any]]:
         """Arquivos indexados de um repo, com linguagem, tamanho e o resumo de cada um (se houver)."""
@@ -242,9 +246,17 @@ class EnrichMixin(ServiceBase):
         return await self._summaries.repo_files(repo)
 
     async def summary_coverage(self) -> dict[str, Any]:
-        """Cobertura dos resumos: total e por repo (arquivos de código, em dia, desatualizados)."""
+        """Cobertura dos resumos: total e por repo (arquivos de código, em dia, desatualizados). `unembedded`:
+        resumos em dia cujo vetor ainda não foi gerado (estados exclusivos: em dia = fresh - unembedded)."""
         repos = await self._summaries.coverage()
-        total = {k: sum(r[k] for r in repos) for k in ("files", "fresh", "stale")}
+        pending = await VectorStore(self._chunks.pool, self.settings).pending_files(self.settings.embed_model)
+        waiting: dict[str, int] = {}
+        for repo, path, stale in await self._summaries.summarized():
+            if not stale and (repo, path) in pending:
+                waiting[repo] = waiting.get(repo, 0) + 1
+        for r in repos:
+            r["unembedded"] = min(waiting.get(r["repo"], 0), r["fresh"])
+        total = {k: sum(r[k] for r in repos) for k in ("files", "fresh", "stale", "unembedded")}
         return {**total, "missing": total["files"] - total["fresh"] - total["stale"], "repos": repos}
 
     async def apply_file_summaries(self) -> dict[str, int]:
@@ -252,10 +264,10 @@ class EnrichMixin(ServiceBase):
         apaga os de arquivos que saíram do índice. Sem LLM e sem Voyage."""
         store = self._summaries
         try:
-            return {"pruned": await store.prune(), "chunks": await store.apply()}
+            return {"pruned": await store.prune(), "chunks": await store.apply(), "stale": await store.refresh_stale()}
         except Exception as e:  # noqa: BLE001 - a busca segue funcionando sem os resumos
             log.warning("não foi possível aplicar os resumos de arquivos: %s", e)
-            return {"pruned": 0, "chunks": 0}
+            return {"pruned": 0, "chunks": 0, "stale": 0}
 
     async def enrich_submit(self, task_id: str, payload: str, *, agent: str = "") -> dict[str, Any]:
         """Valida e grava o cartão entregue. Entrega inválida → ValueError com os erros (a tarefa continua)."""

@@ -79,6 +79,7 @@ def int_settings(tmp_path, monkeypatch, pg_url, clean_env) -> Iterator[Settings]
         repos_dir=base / "repos",
         cocoindex_db=base / "cocoindex-db",
         lock_file=base / "code-index.lock",
+        summary_min_lines=0,   # os projetos de teste têm arquivos de poucas linhas (o filtro tem teste próprio)
     )
     monkeypatch.setattr(settings_module, "_current", None)
     monkeypatch.setenv("COCOINDEX_DB", str(settings.cocoindex_db))  # bootstrap sobrescreve; monkeypatch restaura

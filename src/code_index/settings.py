@@ -61,6 +61,26 @@ class Settings(BaseSettings):
     rerank_code_only: bool = Field(False, validation_alias="RERANK_CODE_ONLY")      # docs ficam na ordem híbrida
     # Nome exato (HmacServiceImpl, get_user) já é resolvido pelos termos; o reranker só atrapalhava
     rerank_skip_identifiers: bool = Field(True, validation_alias="RERANK_SKIP_IDENTIFIERS")
+    # Vetores extras (domain/search_vectors; gerados sob pedido com `code-index vectors embed`). Perguntas dos
+    # resumos entram na fusão como mais uma fonte (leva ao trecho do arquivo mais parecido com a consulta);
+    # cartões dos repos reforçam os trechos dos `SEARCH_CARD_TOP_REPOS` repos mais parecidos. Só conta o que
+    # tiver similaridade (cosseno) de pelo menos SEARCH_VECTOR_MIN_SIMILARITY: com poucos resumos/cartões, a
+    # fusão por posição premiaria sempre os mesmos arquivos e repos, mesmo sem relação com a consulta.
+    # Resumo e perguntas do arquivo são uma fonte só ("descrição do arquivo"); SEARCH_QUESTION_WEIGHT é o nome antigo.
+    search_file_text_weight: float = Field(
+        0.5, ge=0, validation_alias=AliasChoices("SEARCH_FILE_TEXT_WEIGHT", "SEARCH_QUESTION_WEIGHT"))
+    search_card_weight: float = Field(0.3, ge=0, validation_alias="SEARCH_CARD_WEIGHT")
+    search_card_top_repos: int = Field(3, ge=1, le=20, validation_alias="SEARCH_CARD_TOP_REPOS")
+    search_vector_min_similarity: float = Field(0.5, ge=0, le=1, validation_alias="SEARCH_VECTOR_MIN_SIMILARITY")
+    # Resumo desatualizado (o arquivo mudou depois dele): o voto da descrição do arquivo vale este fator (0 tira
+    # da busca). Qualquer edição muda o hash, então quase sempre o resumo ainda está em boa parte certo.
+    search_stale_summary_factor: float = Field(0.5, ge=0, le=1, validation_alias="SEARCH_STALE_SUMMARY_FACTOR")
+    # Desatualizado há mais de N dias: deixa de votar (0 = sem prazo).
+    summary_max_stale_days: int = Field(0, ge=0, validation_alias="SUMMARY_MAX_STALE_DAYS")
+    # Arquivo de código com menos linhas que isso fica fora da fila de resumos (o código já se explica).
+    summary_min_lines: int = Field(15, ge=0, validation_alias="SUMMARY_MIN_LINES")
+    # Gera no fim do sync os vetores pendentes, até este total de caracteres (0 = nunca: só sob pedido).
+    vectors_auto_embed_max_chars: int = Field(0, ge=0, validation_alias="VECTORS_AUTO_EMBED_MAX_CHARS")
 
     # GitHub
     github_token: str | None = Field(None, validation_alias=AliasChoices("GITHUB_TOKEN", "GH_TOKEN"))

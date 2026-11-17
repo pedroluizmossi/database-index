@@ -14,7 +14,7 @@ from typing import Any
 
 import asyncpg
 
-from ..domain.file_summary import MARK, SUMMARY_LANGUAGES, symbol_terms, text_terms
+from ..domain.file_summary import GENERATED_PATH_RE, MARK, SUMMARY_LANGUAGES, symbol_terms, text_terms
 from ..settings import Settings
 from .enrich_store import EnrichTask, _task
 
@@ -35,10 +35,12 @@ class SummaryStore:
         self._summaries = f'"{schema}".file_summaries'
         self._tasks = f'"{schema}".enrich_tasks'
         self._repos = f'"{schema}".repos'
+        self._edges = f'"{schema}".code_edges'
+        self._min_lines = settings.summary_min_lines
 
     def _files_sql(self) -> str:
         """Arquivos de código indexados, com o hash do conteúdo ($1 = linguagens, $2 = repo ou NULL)."""
-        return f"""SELECT c.repo, c.path, min(c.language) AS language,
+        return f"""SELECT c.repo, c.path, min(c.language) AS language, max(c.end_line) AS lines,
                           md5(string_agg(md5(c.code), '' ORDER BY c.start_line)) AS hash
                    FROM {self._chunks} c
                    WHERE c.language = ANY($1::text[]) AND ($2::text IS NULL OR c.repo = $2)
@@ -46,21 +48,32 @@ class SummaryStore:
                    GROUP BY c.repo, c.path"""
 
     async def pending(self, repo: str | None = None) -> list[dict[str, Any]]:
-        """Arquivos sem resumo em dia e sem reserva ativa: [{repo, path, language, hash}], por repo e caminho."""
+        """Arquivos sem resumo em dia e sem reserva ativa: [{repo, path, language, hash}], do mais importante para
+        o menos: primeiro os desatualizados (resumo errado atrapalha mais do que resumo nenhum), depois os mais
+        chamados no grafo de chamadas (centrais). Arquivos gerados e muito curtos ficam de fora."""
         try:
             rows = await self._pool.fetch(
-                f"""SELECT f.* FROM ({self._files_sql()}) f
+                f"""SELECT f.repo, f.path, f.language, f.hash FROM ({self._files_sql()}) f
                     LEFT JOIN {self._summaries} s ON s.repo = f.repo AND s.path = f.path
+                    LEFT JOIN (SELECT repo, dst_path, count(DISTINCT (src_path, src_line)) AS callers
+                               FROM {self._edges} WHERE src_path <> dst_path GROUP BY repo, dst_path) e
+                           ON e.repo = f.repo AND e.dst_path = f.path
                     WHERE (s.path IS NULL OR s.content_hash <> f.hash)
+                      AND {self._eligible("f")}
                       AND NOT EXISTS (SELECT 1 FROM {self._tasks} t WHERE t.kind = '{KIND}' AND t.status = 'leased'
                                       AND t.repo = f.repo
                                       AND t.payload->'files' @> jsonb_build_array(jsonb_build_object('path', f.path)))
-                    ORDER BY f.repo, f.path""",
-                list(SUMMARY_LANGUAGES), repo,
+                    ORDER BY (s.path IS NOT NULL) DESC, coalesce(e.callers, 0) DESC, f.repo, f.path""",
+                list(SUMMARY_LANGUAGES), repo, self._min_lines, GENERATED_PATH_RE,
             )
         except asyncpg.UndefinedTableError:  # nada indexado ainda
             return []
         return [dict(r) for r in rows]
+
+    @staticmethod
+    def _eligible(alias: str) -> str:
+        """Arquivo entra na fila de resumos ($3 = mínimo de linhas, $4 = regex dos gerados)?"""
+        return f"({alias}.lines >= $3::int AND {alias}.path !~ $4::text)"
 
     async def file_code(self, repo: str, paths: list[str]) -> dict[str, str]:
         """Conteúdo indexado de cada arquivo (trechos em ordem)."""
@@ -101,7 +114,7 @@ class SummaryStore:
                     ON CONFLICT (repo, path) DO UPDATE SET content_hash = EXCLUDED.content_hash,
                         summary = EXCLUDED.summary, questions = EXCLUDED.questions, keywords = EXCLUDED.keywords,
                         symbol_terms = EXCLUDED.symbol_terms, text_terms = EXCLUDED.text_terms,
-                        agent = EXCLUDED.agent, created_at = now()""",
+                        agent = EXCLUDED.agent, created_at = now(), stale = false, stale_since = NULL""",
                 task.repo, r["path"], hashes.get(r["path"], ""), r["summary"],
                 json.dumps(r["questions"], ensure_ascii=False), json.dumps(r["keywords"], ensure_ascii=False),
                 symbol_terms(r["summary"], r["keywords"]), text_terms(r["summary"], r["questions"], r["keywords"]),
@@ -131,6 +144,23 @@ class SummaryStore:
             return 0
         return int(res.split()[-1])
 
+    async def refresh_stale(self, repo: str | None = None) -> int:
+        """Recalcula `stale` (o arquivo mudou no índice depois do resumo) e `stale_since`. Roda no fim do sync e
+        depois de cada entrega, para a busca não recalcular o hash dos arquivos. Devolve quantos mudaram."""
+        try:
+            res = await self._pool.execute(
+                f"""UPDATE {self._summaries} s
+                    SET stale = x.stale, stale_since = CASE WHEN x.stale THEN now() ELSE NULL END
+                    FROM (SELECT s2.repo, s2.path, s2.content_hash IS DISTINCT FROM f.hash AS stale
+                          FROM {self._summaries} s2
+                          CROSS JOIN LATERAL (SELECT md5(string_agg(md5(c.code), '' ORDER BY c.start_line)) AS hash
+                                              FROM {self._chunks} c WHERE c.repo = s2.repo AND c.path = s2.path) f
+                          WHERE $1::text IS NULL OR s2.repo = $1) x
+                    WHERE s.repo = x.repo AND s.path = x.path AND s.stale IS DISTINCT FROM x.stale""", repo)
+        except (asyncpg.UndefinedTableError, asyncpg.UndefinedColumnError):
+            return 0
+        return int(res.split()[-1])
+
     async def prune(self) -> int:
         """Apaga resumos de arquivos que saíram do índice."""
         try:
@@ -147,15 +177,18 @@ class SummaryStore:
             row = await self._pool.fetchrow(
                 f"""SELECT count(*) AS files,
                            count(*) FILTER (WHERE s.content_hash = f.hash) AS fresh,
-                           count(*) FILTER (WHERE s.path IS NOT NULL AND s.content_hash <> f.hash) AS stale
+                           count(*) FILTER (WHERE s.path IS NOT NULL AND s.content_hash <> f.hash) AS stale,
+                           count(*) FILTER (WHERE s.path IS NULL AND NOT {self._eligible("f")}) AS skipped
                     FROM ({self._files_sql()}) f
                     LEFT JOIN {self._summaries} s ON s.repo = f.repo AND s.path = f.path""",
-                list(SUMMARY_LANGUAGES), None,
+                list(SUMMARY_LANGUAGES), None, self._min_lines, GENERATED_PATH_RE,
             )
         except asyncpg.UndefinedTableError:
-            return {"files": 0, "fresh": 0, "stale": 0, "missing": 0}
-        files, fresh, stale = int(row["files"]), int(row["fresh"]), int(row["stale"])
-        return {"files": files, "fresh": fresh, "stale": stale, "missing": files - fresh - stale}
+            return {"files": 0, "fresh": 0, "stale": 0, "missing": 0, "skipped": 0}
+        files, fresh, stale, skipped = int(row["files"]), int(row["fresh"]), int(row["stale"]), int(row["skipped"])
+        # missing: sem resumo e na fila; skipped: sem resumo e fora da fila (gerado ou curto)
+        return {"files": files, "fresh": fresh, "stale": stale, "missing": files - fresh - stale - skipped,
+                "skipped": skipped}
 
     @staticmethod
     def _row(row: asyncpg.Record) -> dict[str, Any]:
@@ -180,17 +213,18 @@ class SummaryStore:
             return {}
         try:
             rows = await self._pool.fetch(
-                f"""SELECT s.repo, s.path, s.summary, s.keywords FROM {self._summaries} s
+                f"""SELECT s.repo, s.path, s.summary, s.keywords, s.stale FROM {self._summaries} s
                     JOIN unnest($1::text[], $2::text[]) AS f(repo, path) ON f.repo = s.repo AND f.path = s.path""",
                 [f[0] for f in files], [f[1] for f in files])
         except asyncpg.UndefinedTableError:
             return {}
-        return {(r["repo"], r["path"]): {"summary": r["summary"], "keywords": json.loads(r["keywords"])} for r in rows}
+        return {(r["repo"], r["path"]): {"summary": r["summary"], "keywords": json.loads(r["keywords"]),
+                                         "stale": bool(r["stale"])} for r in rows}
 
     async def list_repo(self, repo: str, *, limit: int = 2000) -> list[dict[str, Any]]:
         """Resumos de um repo, por caminho."""
         rows = await self._pool.fetch(
-            f"""SELECT repo, path, summary, questions, keywords, agent, created_at FROM {self._summaries}
+            f"""SELECT repo, path, summary, questions, keywords, agent, created_at, stale FROM {self._summaries}
                 WHERE repo = $1 ORDER BY path LIMIT $2""", repo, limit)
         return [self._row(r) for r in rows]
 
@@ -212,6 +246,11 @@ class SummaryStore:
                  "summarizable": r["language"] in SUMMARY_LANGUAGES, "summary": r["summary"],
                  "keywords": json.loads(r["keywords"]) if r["keywords"] else [], "stale": bool(r["stale"])}
                 for r in rows]
+
+    async def summarized(self) -> list[tuple[str, str, bool]]:
+        """(repo, caminho, desatualizado) de todos os resumos."""
+        rows = await self._pool.fetch(f"SELECT repo, path, stale FROM {self._summaries}")
+        return [(r["repo"], r["path"], bool(r["stale"])) for r in rows]
 
     async def coverage(self) -> list[dict[str, Any]]:
         """Por repo: arquivos de código indexados, com resumo em dia e com resumo desatualizado."""

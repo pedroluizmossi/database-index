@@ -17,6 +17,9 @@ from ..indexing.orchestrator import ProgressSink, SyncBusy
 from ..infra.job_store import ActiveJobExists, JobRecord
 from .enrich import EnrichMixin
 from .apis import ApisMixin
+from .graph import GraphMixin
+from .vectors import VectorsMixin
+from .tests import TestsMixin
 
 
 log = logging.getLogger(__name__)
@@ -27,7 +30,7 @@ def worker_id(role: str) -> str:
     return f"{role}@{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
 
 
-class SyncMixin(ApisMixin, EnrichMixin):
+class SyncMixin(VectorsMixin, ApisMixin, EnrichMixin, TestsMixin, GraphMixin):
     """Sync e jobs. Depois de indexar, recalcula fatos dos repos alterados e as relações (sem custo de API)."""
 
     async def sync(
@@ -69,10 +72,24 @@ class SyncMixin(ApisMixin, EnrichMixin):
 
     async def after_index(self) -> dict[str, Any]:
         """Fatos dos repos cuja revisão mudou + catálogo de documentos + relações derivadas + resumos de
-        arquivos de volta nas colunas de busca (o sync regrava os trechos que reprocessa)."""
+        arquivos de volta nas colunas de busca (o sync regrava os trechos que reprocessa) + casos de teste e grafo de
+        chamadas dos repos que mudaram (lidos dos clones, sem embedding)."""
         facts = await self.enrich_facts(rebuild=False)
-        return {"facts": facts, "relations": await self.rebuild_relations(),
-                "summaries": await self.apply_file_summaries()}
+        out = {"facts": facts, "relations": await self.rebuild_relations(),
+               "summaries": await self.apply_file_summaries()}
+        try:
+            out["tests"] = await self.scan_tests()
+        except Exception:  # noqa: BLE001 - leitura dos testes é um extra: não derruba o sync
+            log.exception("leitura dos casos de teste falhou")
+        try:
+            out["vectors"] = await self.maintain_vectors()   # obsoletos saem; geração só com teto configurado
+        except Exception:  # noqa: BLE001 - os vetores extras são um extra: não derrubam o sync
+            log.exception("manutenção dos vetores extras falhou")
+        try:
+            out["calls"] = await self.scan_calls()
+        except Exception:  # noqa: BLE001 - o grafo de chamadas é um extra: não derruba o sync
+            log.exception("leitura do grafo de chamadas falhou")
+        return out
 
     async def start_sync(
         self,

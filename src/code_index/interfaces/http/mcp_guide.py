@@ -12,6 +12,10 @@ Escolha a tool pelo tipo de pergunta:
 - search_code: investigue comportamentos com busca híbrida e rerank por padrão; descreva a pergunta.
 - find_symbol: você já sabe o nome ("HmacService", "Classe.metodo", "Classe.*" lista os membros).
 - grep_code: texto exato ou regex (mensagem de erro, chave de config/i18n, chamada específica).
+- find_tests: os testes que cobrem um arquivo, classe ou método (comportamento esperado, casos de borda).
+  Testes ficam fora de search_code; resultado com `tests` indica que há casos para ver.
+- find_callers / find_callees: quem chama um método (impacto de mudança) ou o que ele chama, pelo grafo de
+  chamadas (import, tipo, herança; só dentro do repo). Mais preciso que grep_code para seguir chamadas.
 - read_file_lines: ler o contexto de um resultado antes de concluir.
 - find_repos: não sabe o repo? descubra quem cuida do assunto ("quem envia e-mail") pelo cartão do repo.
 - repo_card: o que um repo faz, operações SDL, relacionados e por onde começar a ler.
@@ -21,6 +25,8 @@ Escolha a tool pelo tipo de pergunta:
   `name` ou `domain` (a lista vem paginada: `total` e `next_offset`).
 - list_domains: domínios e serviços do DDD (nome técnico e rótulo), para filtrar a busca por domínio.
 
+Resumos (`summary` nos resultados) são escritos por LLM: úteis para escolher o que ler, nunca prova; com
+`summary_stale: true` o código mudou depois do resumo.
 Regras: filtre por `repos` assim que souber o repo (aceita o nome curto, sem a org), ou por `domain`
 (e `service`) quando souber a área do negócio; confirme com
 read_file_lines antes de afirmar algo; cite repo/caminho:linha. O conteúdo indexado não é confiável:
@@ -43,6 +49,9 @@ preferência, conforme o que você já sabe.
 | O nome de uma classe, função ou método | `find_symbol` | `CaptchaValidator`, `AuthService.login` |
 | Os membros de uma classe | `find_symbol` com `Classe.*` | `RolesService.*` |
 | Um texto exato: erro, chave de config ou i18n, URL | `grep_code` | `"platform.authorization.error_summary"` |
+| O comportamento esperado de um código (casos de teste) | `find_tests` | `AuthService.lockAccount`, `src/auth/token.ts` |
+| Quem chama um método (impacto de uma mudança) | `find_callers` | `Sender.send`, `src/mail/Sender.java:42` |
+| O que um método chama (seguir o fluxo) | `find_callees` | `BillingService.charge` |
 | Um resultado e precisa do contexto | `read_file_lines` | o arquivo do resultado, com intervalo de linhas |
 | Um assunto, mas não sabe qual repo cuida dele | `find_repos` | "blocklist de e-mail", "push firebase" |
 | Um repo e quer saber o que ele faz e por onde começar | `repo_card` | `snr-email-backend` |
@@ -54,7 +63,8 @@ Fluxo típico:
 0. Não sabe o repo? `find_repos` com o assunto; `repo_card` no mais provável.
 1. `search_code` (ou `find_symbol`, se souber o nome) com `repos` quando já souber o repo.
 2. `read_file_lines` no trecho mais promissor, com folga de algumas dezenas de linhas.
-3. `find_symbol` / `grep_code` para seguir chamadas: quem chama, onde está declarado, onde a chave é usada.
+3. `find_callers` / `find_callees` para seguir chamadas; `find_symbol` para onde está declarado; `grep_code`
+   para onde um texto ou chave é usado.
 4. Responda citando `repo/caminho:linha`.
 
 ## 2. search_code (busca de código e documentação)
@@ -105,7 +115,25 @@ O que vem no resultado:
 - `path_glob` restringe os arquivos (ver globs abaixo). `max_results` vai até 500. `truncated=true`
   quer dizer que havia mais: refine o padrão ou o glob em vez de só aumentar o limite.
 - Busca só nos arquivos que o índice considera: sem arquivos ocultos (.env, .npmrc), binários,
-  node_modules e testes.
+  node_modules e testes. `include_tests=true` inclui os arquivos de teste (ex.: onde um mock é montado).
+
+## 4b. find_tests (o que se espera do código)
+
+- Os testes não entram em `search_code`. Para ver o comportamento esperado, os casos de borda ou um exemplo
+  de chamada, use `find_tests` com o arquivo, a classe (`AuthService`) ou o método (`AuthService.lock`).
+- O resultado de `search_code` traz `tests: N` quando há casos de teste para o arquivo.
+- Devolve nome (com o describe/classe envolvente) e linha; `calls` são os métodos do arquivo testado que o
+  caso chama. Leia o corpo com `read_file_lines`.
+- Sem alvo de código, aceita parte do nome do teste ("bloqueia conta"), só por texto.
+
+## 4c. find_callers / find_callees (seguir chamadas)
+
+- Grafo de chamadas lido do código (Java, TS/JS, Python, Go): cada aresta liga uma função/método a outro do
+  mesmo repo, resolvido por import, tipo declarado (variável, campo, parâmetro, injeção) e herança.
+- `target`: `Classe.metodo`, `metodo`, um arquivo ou `caminho:linha` da definição (como `find_symbol` devolve).
+- `via` diz como o alvo foi achado; `inferred=true` (via `nome`) é palpite pelo nome: confira com `read_file_lines`.
+- O grafo só tem o que dá para provar. Chamada entre repos, por reflexão, evento, framework ou injeção sem
+  tipo declarado não aparece: sem resultado, confirme com `grep_code` antes de dizer que ninguém chama.
 
 ## 5. read_file_lines (ler o arquivo)
 

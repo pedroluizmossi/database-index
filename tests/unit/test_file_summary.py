@@ -72,3 +72,15 @@ def test_entrega_com_texto_em_volta_do_json() -> None:
     import pytest
     with pytest.raises(ValueError, match="JSON inválido"):
         parse_payload("não consegui resumir")
+
+
+def test_fila_pula_gerados_e_curtos() -> None:
+    from code_index.domain.file_summary import summary_skip_reason
+
+    assert summary_skip_reason("src/main/java/x/Billing.java", 120, 15) is None
+    assert summary_skip_reason("src/x/Dto.java", 8, 15) == "curto"
+    assert summary_skip_reason("src/x/Dto.java", 8, 0) is None
+    for path in ("model/src-gen/br/x/Impl.java", "api/generated/client.ts", "proto/user.pb.go", "x/user_pb2.py",
+                 "x/user_pb2_grpc.py", "types/index.d.ts", "lib/model.g.dart", "static/app.min.js"):
+        assert summary_skip_reason(path, 500, 15) == "gerado", path
+    assert summary_skip_reason("src/generator/Builder.java", 500, 15) is None   # "generator" não é "generated/"

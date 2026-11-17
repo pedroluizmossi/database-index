@@ -19,6 +19,7 @@ from . import (
     docs,
     enrich,
     evals,
+    graph,
     orgs,
     ownership,
     relations,
@@ -26,14 +27,16 @@ from . import (
     search,
     serve,
     sync,
+    tests,
     tokens,
     usage,
     users,
+    vectors,
 )
 from .common import CommandFn
 
 # Ordem do `--help`.
-_AREAS = (orgs, repos, sync, search, evals, apis, docs, code, enrich, relations, ownership, serve, tokens, users, usage)
+_AREAS = (orgs, repos, sync, vectors, search, evals, apis, docs, code, tests, graph, enrich, relations, ownership, serve, tokens, users, usage)
 
 
 def main() -> None:

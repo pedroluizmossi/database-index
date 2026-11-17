@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import Sequence
 from dataclasses import replace
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -15,8 +17,13 @@ from ..indexing.content import file_language
 from ..indexing.orchestrator import configured_repos, repo_for_row
 from ..infra.grep import GrepResult, GrepTarget
 from ..infra.summary_store import SummaryStore
+from ..infra.test_store import TestStore
+from ..domain.test_cases import without_test_excludes
 from ..retrieval import files as retrieval_files
-from ..retrieval.evaluation import CaseResult, ConfigReport, EvalCase, first_hit, load_cases
+from ..retrieval.evaluation import (
+    CaseResult, ConfigDiff, ConfigReport, EvalCase, baseline_payload, compare, expects_any, first_hit, load_baseline,
+    load_cases, save_baseline,
+)
 from ..retrieval.redaction import mask_output
 from ..retrieval.search import RerankOptions
 
@@ -91,7 +98,16 @@ class SearchMixin(OwnershipMixin):
             h.code = mask_output(h.code, h.language)
         await self.annotate_owners(hits)
         await self.annotate_summaries(hits)
+        await self.annotate_tests(hits)
         return hits
+
+    async def annotate_tests(self, hits: Sequence[Hit]) -> None:
+        """Preenche `tests` (quantos casos de teste cobrem o arquivo) nos resultados de código: o agent sabe
+        que existe teste sem que o teste ocupe lugar no resultado (find_tests lista os casos)."""
+        counts = await TestStore(self._chunks.pool, self.settings).counts(
+            sorted({(h.repo, h.path) for h in hits if h.kind != "doc"}))
+        for h in hits:
+            h.tests = counts.get((h.repo, h.path))
 
     async def annotate_summaries(self, hits: Sequence[Hit]) -> None:
         """Preenche `summary`/`summary_keywords` dos resultados cujo arquivo tem resumo (fila file_summaries)."""
@@ -101,6 +117,7 @@ class SearchMixin(OwnershipMixin):
             info = found.get((h.repo, h.path))
             if info:
                 h.summary, h.summary_keywords = info["summary"], info["keywords"]
+                h.summary_stale = True if info.get("stale") else None
 
     async def read_file(
         self,
@@ -133,33 +150,88 @@ class SearchMixin(OwnershipMixin):
             cfg("+instr, pula ident.", instruction=True, skip_identifiers=True),
         ]
 
-    def load_eval_cases(self, path: str | Path) -> list[EvalCase]:
-        """Perguntas de avaliação de um arquivo JSON (formato de evals/queries.json)."""
-        return load_cases(Path(path))
+    def load_eval_cases(self, path: str | Path, split: str | None = None) -> list[EvalCase]:
+        """Perguntas de avaliação de um arquivo JSON (formato de evals/queries.json).
+        split: 'dev' (para calibrar) ou 'test' (para confirmar); vazio = todas."""
+        return load_cases(Path(path), split)
+
+    @staticmethod
+    def eval_baseline_path(cases_file: str | Path, name: str) -> Path:
+        """Onde fica um baseline: nome simples vira `baselines/<nome>.json` ao lado do arquivo de perguntas;
+        caminho (com pasta ou terminado em .json) fica como está."""
+        path = Path(name)
+        if path.suffix == ".json" or path.parent != Path("."):
+            return path
+        return Path(cases_file).parent / "baselines" / f"{name}.json"
+
+    @staticmethod
+    def load_eval_baseline(path: Path) -> dict[str, Any]:
+        """Rodada gravada por `save_eval_baseline`. Arquivo ausente ou inválido → ValueError."""
+        try:
+            return load_baseline(path)
+        except (OSError, json.JSONDecodeError) as e:
+            raise ValueError(f"não foi possível ler o baseline {path}: {e}") from None
+
+    @staticmethod
+    def save_eval_baseline(path: Path, reports: list[ConfigReport], meta: dict[str, Any]) -> dict[str, Any]:
+        """Grava a rodada (métricas e a posição de cada pergunta) para comparar depois. Devolve o que gravou."""
+        payload = baseline_payload(reports, meta)
+        save_baseline(path, payload)
+        return payload
+
+    @staticmethod
+    def compare_eval(reports: list[ConfigReport], baseline: dict[str, Any]) -> list[ConfigDiff]:
+        """Diferença para um baseline, por configuração de mesmo nome e nas perguntas em comum."""
+        return compare(reports, baseline)
+
+    async def eval_meta(self, cases: Sequence[EvalCase], *, top_k: int, split: str | None) -> dict[str, Any]:
+        """O que identifica uma rodada de avaliação num baseline: quando, com que modelos e sobre o quê."""
+        s = self.settings
+        return {"date": date.today().isoformat(), "cases": len(cases), "split": split or "all", "top_k": top_k,
+                "embed_model": s.embed_model, "embed_dimensions": s.embed_dimensions,
+                "rerank_model": s.rerank_model, "rerank_candidates": s.rerank_candidates,
+                "keyword_engine": await self.search_engine()}
 
     async def evaluate(self, cases: Sequence[EvalCase], configs: Sequence[dict[str, Any]],
                        *, top_k: int = 10) -> list[ConfigReport]:
         """Roda as perguntas de avaliação em cada configuração de busca e mede os acertos.
 
         configs: [{"name", "mode", "rerank", "weights": (vetor, termos) | None,
-        "rerank_options": RerankOptions | None}]. Custo: um embedding
+        "rerank_options": RerankOptions | None, "extra_weights": (descrição do arquivo, cartões) | None,
+        "extra_options": {"file_kinds": (...), "stale_factor": float} | None}]. Custo: um embedding
         por pergunta (reaproveitado entre configurações) e um rerank por pergunta em cada
-        configuração com rerank.
+        configuração com rerank. Cada resultado traz também a posição da resposta entre os candidatos
+        da fusão (`candidate_rank`), que separa erro de recuperação de erro de ordenação.
         """
         reports = []
         for cfg in configs:
             results = []
             for case in cases:
+                seen: list[int | None] = []  # posição da resposta entre os candidatos, antes do rerank
+
+                def on_candidates(candidates: list[Hit], case: EvalCase = case, seen: list[int | None] = seen) -> None:
+                    seen.append(first_hit(candidates, case.expect))
+
                 hits = await self._searcher.search(
                     case.query, top_k=top_k, repos=await self._resolve_repos(case.repos),
                     kind=case.kind, language=case.language, path_glob=case.path_glob,
                     mode=cfg.get("mode", "hybrid"), rerank=cfg.get("rerank", True),
                     weights=cfg.get("weights"), rerank_options=cfg.get("rerank_options"),
+                    on_candidates=on_candidates, extra_weights=cfg.get("extra_weights"),
+                    extra_options=cfg.get("extra_options"),
                 )
                 results.append(CaseResult(case.query, first_hit(hits, case.expect),
-                                          [f"{h.repo}/{h.path}:{h.start_line}" for h in hits[:3]], case.tag))
+                                          [f"{h.repo}/{h.path}:{h.start_line}" for h in hits[:3]], case.tag,
+                                          candidate_rank=seen[0] if seen else None))
             reports.append(ConfigReport(cfg["name"], results))
         return reports
+
+    async def eval_summarized(self, cases: Sequence[EvalCase]) -> set[str]:
+        """Perguntas da avaliação cuja resposta está num arquivo com resumo (subconjunto onde a descrição do
+        arquivo pode agir)."""
+        rows = await self._chunks.pool.fetch(
+            f'SELECT repo, path FROM "{self.settings.pg_schema}".file_summaries')
+        return expects_any(list(cases), {(r["repo"], r["path"]) for r in rows})
 
     async def search_engine(self) -> str:
         """Motor da busca por termos em uso: bm25 | fts | fts-legacy | none (ver infra/chunk_store)."""
@@ -205,8 +277,10 @@ class SearchMixin(OwnershipMixin):
         regex: bool = False,
         case_sensitive: bool = False,
         max_results: int = 50,
+        include_tests: bool = False,
     ) -> GrepResult:
-        """Texto exato ou regex nos clones locais, com os filtros de arquivo do índice e segredos mascarados."""
+        """Texto exato ou regex nos clones locais, com os filtros de arquivo do índice e segredos mascarados.
+        `include_tests`: procura também nos arquivos de teste (fora do índice por padrão)."""
         wanted = await self._resolve_repos(repos)
         rows = await self._repos.all_rows()
         orgs = await self._config.orgs()
@@ -218,7 +292,8 @@ class SearchMixin(OwnershipMixin):
             repo = repo_for_row(row, orgs, manual)
             root = repo.local_path(self.settings.repos_dir)
             if root.is_dir():
-                targets.append(GrepTarget(repo.name, root.resolve(), repo.include, tuple(repo.all_excludes)))
+                excludes = without_test_excludes(repo.all_excludes) if include_tests else repo.all_excludes
+                targets.append(GrepTarget(repo.name, root.resolve(), repo.include, tuple(excludes)))
         if not targets:
             return GrepResult(matches=[], truncated=False)
 

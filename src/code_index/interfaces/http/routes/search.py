@@ -22,6 +22,7 @@ class GrepIn(BaseModel):
     regex: bool = False
     case_sensitive: bool = False
     max_results: int = Field(50, ge=1, le=500)
+    include_tests: bool = False
 
 
 class SearchIn(BaseModel):
@@ -71,8 +72,27 @@ async def grep(body: GrepIn, request: Request,
     res = await audited(request, principal, "grep", body.model_dump(exclude={"case_sensitive"}),
                         get_service(request).grep(body.pattern, repos=body.repos, path_glob=body.path_glob,
                                                   regex=body.regex, case_sensitive=body.case_sensitive,
-                                                  max_results=body.max_results))
+                                                  max_results=body.max_results, include_tests=body.include_tests))
     return {"matches": [m.to_dict() for m in res.matches], "truncated": res.truncated}
+
+
+@router.get("/api/v1/tests", tags=["busca"],
+            summary="Casos de teste que cobrem um arquivo, classe ou método (nome e linha, sem o corpo)")
+async def find_tests(request: Request, target: str = Query(min_length=1, max_length=300),
+                     repo: list[str] | None = Query(None), limit: int = Query(30, ge=1, le=200),
+                     principal: Principal = Depends(require(SEARCH_READ, bucket="search"))) -> dict[str, Any]:
+    return await audited(request, principal, "tests:find", {"target": target, "repo": repo},
+                         get_service(request).find_tests(target, repos=repo, limit=limit))
+
+
+@router.get("/api/v1/calls", tags=["busca"],
+            summary="Grafo de chamadas: quem chama (callers) ou o que é chamado por (callees) um símbolo")
+async def call_graph(request: Request, target: str = Query(min_length=1, max_length=300),
+                     direction: Literal["callers", "callees"] = Query("callers"),
+                     repo: list[str] | None = Query(None), limit: int = Query(30, ge=1, le=200),
+                     principal: Principal = Depends(require(SEARCH_READ, bucket="search"))) -> dict[str, Any]:
+    return await audited(request, principal, "calls", {"target": target, "direction": direction, "repo": repo},
+                         get_service(request).call_graph(target, direction=direction, repos=repo, limit=limit))
 
 
 @router.get("/api/v1/files/{repo}/{path:path}", tags=["busca"], summary="Lê arquivo (segredos mascarados)")

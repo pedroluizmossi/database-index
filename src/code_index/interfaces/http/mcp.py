@@ -224,7 +224,10 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
             domain: só o código deste domínio do DDD (nome técnico de list_domains, ex.: "platform").
             service: com domain, só este serviço (ex.: "authentication"). Inclui pastas de monorepos.
 
-        Devolve {"results": [...]}. Cada resultado traz `owners` (domínio/serviço dono do arquivo), quando conhecido.
+        Devolve {"results": [...]}. Cada resultado traz `owners` (domínio/serviço dono do arquivo), quando conhecido,
+        e `tests` (quantos casos de teste cobrem o arquivo; liste-os com find_tests), quando houver.
+        `summary` é um resumo do arquivo escrito por LLM; com `summary_stale: true` o código mudou depois dele:
+        confirme no código. `matched_by` diz por que o trecho veio (vetor, termos, descrição do arquivo, cartão).
         Resultados de documentação externa trazem `url` (página original), `title` e `linked_repos`.
         Trechos vizinhos do mesmo arquivo vêm fundidos (no máximo 2 por arquivo); trechos muito
         longos vêm cortados (leia o resto com read_file_lines). Trecho idêntico em vários repos
@@ -423,6 +426,7 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
         regex: bool = False,
         case_sensitive: bool = False,
         max_results: int = 50,
+        include_tests: bool = False,
         ctx: Context | None = None,
     ) -> dict:
         """Busca TEXTO EXATO (ou regex) nos repositórios: mensagens de erro, chaves de configuração,
@@ -435,17 +439,90 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
             regex: trata `pattern` como expressão regular (sintaxe do ripgrep).
             case_sensitive: diferencia maiúsculas/minúsculas (padrão: não).
             max_results: máximo de linhas (até 500).
+            include_tests: procura também nos arquivos de teste, que ficam de fora por padrão (padrão: não).
 
         Retorna {"matches": [{repo, path, line, text}], "truncated": bool}. Segredos aparecem como ***.
         """
 
         async def fn(svc: CodeIndexService) -> dict:
             res = await svc.grep(pattern, repos=repos, path_glob=path_glob, regex=regex,
-                                 case_sensitive=case_sensitive, max_results=max_results)
+                                 case_sensitive=case_sensitive, max_results=max_results, include_tests=include_tests)
             return {"matches": [m.to_dict() for m in res.matches], "truncated": res.truncated}
 
-        return await run_tool(ctx, "grep_code", {"pattern": pattern, "repos": repos, "path_glob": path_glob, "regex": regex},
+        return await run_tool(ctx, "grep_code", {"pattern": pattern, "repos": repos, "path_glob": path_glob, "regex": regex,
+                                                 "include_tests": include_tests},
                               "search", None, fn)
+
+    @server.tool()
+    async def find_tests(target: str, repos: list[str] | None = None, limit: int = 30,
+                         ctx: Context | None = None) -> dict:
+        """Quais TESTES cobrem um código: o comportamento esperado, casos de borda e exemplos de uso.
+
+        Os testes ficam fora de search_code; use esta tool quando quiser saber o que se espera de um arquivo,
+        classe ou método (ex.: depois de achar o código, ou quando o resultado de search_code trouxer `tests`).
+        Devolve só nome e linha de cada caso; leia o corpo com read_file_lines.
+
+        Args:
+            target: arquivo ("src/auth/AuthService.java" ou o fim do caminho), classe/módulo ("AuthService"),
+                método ("AuthService.lockAccount" ou "lockAccount") ou parte do nome do teste
+                ("bloqueia conta"; último recurso, só por texto).
+            repos: limita a estes repositórios.
+            limit: máximo de casos (até 200).
+
+        Retorna {"tests": [{repo, path, line, name, tests_file, calls}], "total", "truncated", "matched_by"}.
+        `name` traz o describe/classe envolvente ("Login > bloqueia após 5 falhas"); `tests_file` é o arquivo de
+        produção testado; `calls`, os métodos dele que o caso chama. matched_by diz como o alvo casou.
+        """
+
+        async def fn(svc: CodeIndexService) -> dict:
+            return await svc.find_tests(target, repos=repos, limit=limit)
+
+        return await run_tool(ctx, "find_tests", {"target": target, "repos": repos, "limit": limit},
+                              "read", None, fn)
+
+    async def _calls(ctx: Context | None, name: str, direction: str, target: str, repos: list[str] | None,
+                     limit: int) -> dict:
+        async def fn(svc: CodeIndexService) -> dict:
+            return await svc.call_graph(target, direction=direction, repos=repos, limit=limit)
+
+        return await run_tool(ctx, name, {"target": target, "repos": repos, "limit": limit}, "read", None, fn)
+
+    @server.tool()
+    async def find_callers(target: str, repos: list[str] | None = None, limit: int = 30,
+                           ctx: Context | None = None) -> dict:
+        """QUEM CHAMA um método ou função (impacto de uma mudança, de onde vem uma chamada), pelo grafo de
+        chamadas: resolvido por import, tipo declarado e herança, não por texto. Mais preciso que grep_code
+        para isso (não traz comentário, string nem outro método com o mesmo nome).
+
+        Args:
+            target: "Classe.metodo", "metodo", "caminho/do/arquivo.ts" (tudo o que chama algo dele) ou
+                "caminho:linha" (a linha da definição, como vem de find_symbol).
+            repos: limita a estes repositórios.
+            limit: máximo de arestas (até 200).
+
+        Retorna {"edges": [{repo, path, line, name, call_line, calls, via, inferred, of}], "total", "truncated"}.
+        Cada aresta é um chamador: `name` em `path:line` chama `of` (o alvo) na linha `call_line`, `calls` vezes.
+        `via` diz como o alvo foi achado (arquivo, pacote, import, tipo, herança; `nome` = inferida, confira).
+        Só dentro do mesmo repo, em Java, TS/JS, Python e Go. Sem resultado não prova que ninguém chama:
+        veja `note` e confirme com grep_code.
+        """
+        return await _calls(ctx, "find_callers", "callers", target, repos, limit)
+
+    @server.tool()
+    async def find_callees(target: str, repos: list[str] | None = None, limit: int = 30,
+                           ctx: Context | None = None) -> dict:
+        """O QUE um método ou função CHAMA dentro do próprio repo (para seguir um fluxo sem ler cada arquivo).
+        Chamadas a bibliotecas de fora não aparecem.
+
+        Args:
+            target: "Classe.metodo", "metodo", "caminho/do/arquivo.py" ou "caminho:linha" (linha da definição).
+            repos: limita a estes repositórios.
+            limit: máximo de arestas (até 200).
+
+        Retorna {"edges": [{repo, path, line, name, call_line, calls, via, inferred, of}], "total", "truncated"}.
+        Cada aresta é um alvo: `of` chama `name` (definido em `path:line`) na linha `call_line` do arquivo de `of`.
+        """
+        return await _calls(ctx, "find_callees", "callees", target, repos, limit)
 
     # ------------------------------------------------------------------ guia de uso
     # Texto fixo (sem dados do índice): não passa por run_tool. A autenticação do transporte já vale.

@@ -225,6 +225,32 @@ export interface Hit {
   /** Resumo do arquivo em português, escrito por agent (`enrich next --kind file_summaries`), se houver. */
   summary?: string | null;
   summary_keywords?: string[];
+  /** O código mudou depois do resumo: o resumo pode descrever o que não existe mais. */
+  summary_stale?: boolean | null;
+  /** Por quais fontes da busca o trecho veio: "vetor", "termos", "descrição" (resumo do arquivo), "cartão". */
+  matched_by?: string[];
+  /** Casos de teste que cobrem o arquivo (os testes ficam fora da busca; `find_tests` lista os casos). */
+  tests?: number | null;
+}
+
+/** Um caso de teste (lido do clone, sem embedding): nome com o describe/classe envolvente e a linha. */
+export interface TestCaseRef {
+  repo: string;
+  path: string;
+  line: number;
+  name: string;
+  /** Arquivo de produção que o teste cobre. */
+  tests_file?: string;
+  /** Métodos do arquivo testado que o caso chama. */
+  calls?: string[];
+}
+
+export interface FindTestsResult {
+  /** Como o alvo casou: arquivo, classe, membro ou nome do teste (null: nada encontrado). */
+  matched_by: string | null;
+  total: number;
+  truncated: boolean;
+  tests: TestCaseRef[];
 }
 
 /** Resumo de um arquivo de código escrito por agent: entra na busca por termos. */
@@ -237,8 +263,10 @@ export interface FileSummary {
   keywords: string[];
   agent: string;
   created_at: string;
-  /** O arquivo mudou no índice depois que o resumo foi escrito (só no resumo de um arquivo). */
+  /** O arquivo mudou no índice depois que o resumo foi escrito. */
   stale?: boolean;
+  /** O resumo ainda não tem vetor em dia (não entra na busca semântica até gerar). Só na lista de um repo. */
+  vector_pending?: boolean;
 }
 
 /** Arquivo indexado de um repo (GET /api/v1/repos/{name}/files), com o resumo quando existe. */
@@ -263,6 +291,8 @@ export interface SummaryCoverageRepo {
   fresh: number;
   /** Com resumo escrito antes da última mudança do arquivo. */
   stale: number;
+  /** Com resumo em dia, mas sem vetor gerado (está dentro de `fresh`). */
+  unembedded?: number;
 }
 
 export interface SummaryCoverage {
@@ -271,6 +301,56 @@ export interface SummaryCoverage {
   stale: number;
   missing: number;
   repos: SummaryCoverageRepo[];
+}
+
+export interface VectorKindCounts {
+  label: string;
+  /** Textos que deveriam ter vetor (perguntas dos resumos, cartões escritos). */
+  sources: number;
+  /** Vetor em dia: mesmo texto e mesmo modelo. */
+  embedded: number;
+  /** Sem vetor ou com vetor de outro texto/modelo: custa ao gerar. */
+  pending: number;
+  /** Vetor sem texto de origem: sai no fim do próximo sync, sem custo. */
+  obsolete: number;
+  /** Custo estimado dos pendentes deste tipo. */
+  pending_estimate?: VectorEstimate | null;
+}
+
+/** Estimativa antes de gerar: caracteres, tokens (≈ caracteres/4) e US$ pela tabela de preços (null: sem preço). */
+export interface VectorEstimate {
+  chars: number;
+  tokens: number;
+  cost_usd: number | null;
+}
+
+export interface VectorRun {
+  requested_by: string;
+  started_at: string;
+  finished_at: string | null;
+  status: "running" | "done" | "failed";
+  result: { embedded: number; deleted: number; embed_tokens: number; cost_usd: number; seconds: number } | null;
+  error: string | null;
+}
+
+/** Vetores extras da busca: perguntas dos resumos e cartões dos repos (gerados sob pedido). */
+export interface VectorStatus {
+  model: string;
+  kinds: Record<string, VectorKindCounts>;
+  pending: number;
+  pending_chars: number;
+  pending_estimate?: VectorEstimate;
+  obsolete: number;
+  /** Vetores de outro modelo (EMBED_MODEL mudou): a busca os ignora até gerar de novo. */
+  other_model?: number;
+  /** Resumos escritos antes da última mudança do arquivo: votam com peso reduzido. */
+  stale_summaries?: number;
+  /** Arquivos de código: com resumo em dia, desatualizado, na fila e fora da fila (gerados ou curtos). */
+  summary_coverage?: { files: number; fresh: number; stale: number; missing: number; skipped: number };
+  last_embedded_at: string | null;
+  /** Uma geração está rodando neste servidor. */
+  running: boolean;
+  last_run: VectorRun | null;
 }
 
 export type HitKind = "code" | "doc";

@@ -1,6 +1,8 @@
 import { getJson, getText, postJson, sendJson } from "./client";
 import type {
   AuditEntry,
+  FindTestsResult,
+  VectorStatus,
   XrayData,
   Hit,
   LoginProvider,
@@ -71,6 +73,9 @@ export const api = {
   repoFiles: (repo: string) => getJson<RepoFile[]>(`/api/v1/repos/${seg(repo)}/files`),
   repoSummaries: (repo: string) => getJson<FileSummary[]>(`/api/v1/summaries/repo/${seg(repo)}`),
   summaryCoverage: () => getJson<SummaryCoverage>("/api/v1/summaries/coverage"),
+  // casos de teste que cobrem um arquivo, classe ou método (testes ficam fora da busca; só nome e linha)
+  findTests: (target: string, repo?: string, limit = 200) =>
+    getJson<FindTestsResult>("/api/v1/tests", { query: { target, limit, ...(repo ? { repo } : {}) } }),
   logout: () => postJson<{ status: string }>("/auth/logout", undefined),
 
   // sync (index:write). A prévia (dry_run) não custa nada; a indexação gera custo na Voyage.
@@ -104,6 +109,10 @@ export const api = {
     postJson<SyncStart>("/api/v1/sync", { repos, batch, discover: repos === null, pull: true, dry_run: false }),
   syncJob: (id: string) => getJson<SyncJob>(`/api/v1/sync/jobs/${seg(id)}`),
   syncJobs: (limit = 20) => getJson<SyncJob[]>("/api/v1/sync/jobs", { query: { limit } }),
+  // vetores das perguntas dos resumos e dos cartões (index:write): o estado não custa; gerar custa na Voyage
+  vectorStatus: () => getJson<VectorStatus>("/api/v1/vectors/status"),
+  vectorEmbed: (body?: { kinds?: string[]; limit?: number }) =>
+    postJson<VectorStatus>("/api/v1/vectors/embed", body ?? undefined),
 
   // repos e orgs (admin)
   addRepo: (body: RepoInput) => postJson<{ name: string }>("/api/v1/repos", body),

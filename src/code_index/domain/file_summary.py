@@ -12,6 +12,7 @@ uma palavra do resumo num campo de peso 1 perde para palavras comuns no caminho 
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -27,6 +28,21 @@ QUESTIONS = 3
 QUESTION_MAX = 200
 KEYWORDS_MIN, KEYWORDS_MAX = 3, 10
 KEYWORD_MAX = 60
+# Fora da fila de resumos (o nome e o código já dizem tudo, ou ninguém lê): arquivos gerados e muito curtos
+# (SUMMARY_MIN_LINES). A regex vale igual no Python e no Postgres (operador ~): sem lookahead nem classes do Python.
+GENERATED_PATH_RE = (r"(^|/)(src-gen|generated|__generated__|gen-src)/"
+                     r"|\.(g|freezed|gr|pb)\.(dart|go)$|_pb2(_grpc)?\.py$|\.d\.ts$|\.min\.js$")
+
+
+def summary_skip_reason(path: str, lines: int, min_lines: int) -> str | None:
+    """Por que um arquivo de código fica fora da fila de resumos (None = entra)."""
+    if re.search(GENERATED_PATH_RE, path):
+        return "gerado"
+    if lines < min_lines:
+        return "curto"
+    return None
+
+
 # Separa o que o índice gravou do que veio do resumo, para reaplicar sem acumular. É uma "palavra" que
 # ninguém busca e que sobrevive aos tokenizadores (whitespace do BM25 e `simple` do full-text).
 MARK = "xqzresumoxqz"

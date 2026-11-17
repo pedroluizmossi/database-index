@@ -72,10 +72,28 @@ class GraphMixin(ServiceBase):
     async def graph_status(self) -> dict[str, Any]:
         return await self._graph.status()
 
+    async def call_counts(self, repo: str, path: str) -> dict[str, int]:
+        """Chamadas entre um arquivo e os outros do repo (para o painel do arquivo): `callers` = trechos de outros
+        arquivos que chamam algo dele; `callees` = alvos em outros arquivos que ele chama."""
+        name = (await self._resolve_repos([repo]) or [repo])[0]
+        return await self._graph.file_counts(name, path.lstrip("/"))
+
+    async def central_files(self, repo: str, *, limit: int = 10) -> list[dict[str, Any]]:
+        """Os arquivos mais chamados por outros arquivos do repo (por onde começar a ler)."""
+        name = (await self._resolve_repos([repo]) or [repo])[0]
+        return await self._graph.central_files(name, max(1, min(limit, 50)))
+
+    async def annotate_callers(self, hits: Sequence[Any]) -> None:
+        """Preenche `callers` (trechos de outros arquivos que chamam algo do arquivo) nos resultados de código."""
+        counts = await self._graph.caller_counts(sorted({(h.repo, h.path) for h in hits if h.kind != "doc"}))
+        for h in hits:
+            h.callers = counts.get((h.repo, h.path)) or None
+
     async def call_graph(self, target: str, *, direction: str = "callers", repos: Sequence[str] | None = None,
-                         limit: int = 50) -> dict[str, Any]:
+                         limit: int = 50, external: bool = False) -> dict[str, Any]:
         """Quem chama (`callers`) ou o que é chamado por (`callees`) um símbolo: `Classe.metodo`, `metodo`,
-        `caminho/arquivo.java` ou `caminho:linha` (linha da definição)."""
+        `caminho/arquivo.java` ou `caminho:linha` (linha da definição). `external`: só chamadas entre arquivos
+        diferentes (o painel do arquivo não lista as chamadas internas)."""
         target = target.strip()
         if not target or len(target) > MAX_TARGET_CHARS:
             raise ValueError(f"alvo vazio ou maior que {MAX_TARGET_CHARS} caracteres")
@@ -89,7 +107,7 @@ class GraphMixin(ServiceBase):
             query = {"path": target}
         else:
             query = {"name": target}
-        found, total = await self._graph.neighbors(direction, repos=names, limit=limit, **query)
+        found, total = await self._graph.neighbors(direction, repos=names, limit=limit, external=external, **query)
         out: dict[str, Any] = {"direction": direction, "total": total, "truncated": total > len(found),
                                "edges": [_public(e, direction) for e in found]}
         if not found:

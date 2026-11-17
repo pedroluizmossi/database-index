@@ -229,6 +229,8 @@ export interface Hit {
   summary_stale?: boolean | null;
   /** Por quais fontes da busca o trecho veio: "vetor", "termos", "descrição" (resumo do arquivo), "cartão". */
   matched_by?: string[];
+  /** Trechos de outros arquivos que chamam algo deste (grafo de chamadas), se houver. */
+  callers?: number | null;
   /** Casos de teste que cobrem o arquivo (os testes ficam fora da busca; `find_tests` lista os casos). */
   tests?: number | null;
 }
@@ -795,4 +797,75 @@ export interface UserStatus {
   email: string;
   active: boolean;
   disabled_at: string | null;
+}
+
+/** Uma aresta do grafo de chamadas, do ponto de vista de quem pergunta: em "callers", quem chama; em
+ * "callees", quem é chamado. `of` é o outro lado (o símbolo consultado). */
+export interface CallEdge {
+  repo: string;
+  path: string;
+  line: number;
+  name: string;
+  /** Linha da chamada (no arquivo de quem chama). */
+  call_line: number;
+  calls: number;
+  /** Como o alvo foi achado: arquivo, pacote, import, tipo, herança ou nome (inferida). */
+  via: string;
+  inferred: boolean;
+  of: { path: string; line: number; name: string };
+}
+
+export interface CallGraphResult {
+  direction: "callers" | "callees";
+  total: number;
+  truncated: boolean;
+  edges: CallEdge[];
+  note?: string;
+}
+
+export interface CallCounts {
+  callers: number;
+  callees: number;
+}
+
+/** Arquivo muito chamado por outros arquivos do repo, com o membro mais chamado. */
+export interface CentralFile {
+  path: string;
+  callers: number;
+  files: number;
+  top: { name: string | null; line: number | null };
+}
+
+export interface ScanRun {
+  requested_by: string;
+  force: boolean;
+  started_at: string;
+  finished_at: string | null;
+  status: "running" | "done" | "failed";
+  result: Record<string, number> | null;
+  error: string | null;
+}
+
+/** Leituras dos clones (sem custo de API): grafo de chamadas e casos de teste. */
+export interface ScansStatus {
+  graph: {
+    repos: number;
+    files: number;
+    calls: number;
+    resolved: number;
+    inferred: number;
+    edges: number;
+    last_scan: string | null;
+    running: boolean;
+    last_run: ScanRun | null;
+  };
+  tests: {
+    repos: number;
+    files: number;
+    cases: number;
+    linked: number;
+    last_scan: string | null;
+    running: boolean;
+    last_run: ScanRun | null;
+  };
 }

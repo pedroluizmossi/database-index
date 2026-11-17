@@ -532,7 +532,13 @@ uv run code-index graph status
 - MCP: tools `find_callers` (quem chama; impacto de uma mudança) e `find_callees` (o que um método chama). Aceitam
   `Classe.metodo`, `metodo`, um arquivo ou `caminho:linha` da definição; cada aresta traz `via` e `inferred`. Sem
   resultado, vem um `note` lembrando que o grafo não cobre chamadas entre repos, reflexão nem eventos.
-- API: `GET /api/v1/calls?target=...&direction=callers|callees` (`search:read`).
+- API: `GET /api/v1/calls?target=...&direction=callers|callees[&external=true]` e `GET /api/v1/calls/counts?repo=&path=`
+  (`search:read`); `GET /api/v1/repos/{repo}/central-files`; leitura sob pedido em `GET /api/v1/scans/status` e
+  `POST /api/v1/scans/{graph|tests}[?force=true]` (`index:write`, em segundo plano, sem custo).
+- Interface: no arquivo aberto, **"Chamado por N"** e **"Chama N"** listam as chamadas entre ele e os outros arquivos
+  do repo (clicar abre o outro lado ali mesmo); na ficha do repo, **"Mais chamados pelo resto do código"** em "Por
+  onde começar"; na busca, "chamado em N lugares" a partir de 10 chamadores; em Indexação, **Leituras do código**
+  mostra o grafo e os casos de teste lidos, com "Atualizar" e "reler tudo".
 
 ## Servidor HTTP: API REST + MCP
 

@@ -230,6 +230,7 @@ class Hit:
     summary_stale: bool | None = None       # True: o arquivo mudou depois do resumo (confirme no código)
     matched_by: list[str] = field(default_factory=list)  # fontes da fusão: vetor, termos, descrição, cartão
     tests: int | None = None                # casos de teste que cobrem o arquivo (find_tests lista), se houver
+    callers: int | None = None              # trechos de outros arquivos que chamam algo deste (find_callers lista)
 
     def to_dict(self) -> dict:
         return asdict(self)

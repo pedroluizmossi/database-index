@@ -1,6 +1,10 @@
 import { getJson, getText, postJson, sendJson } from "./client";
 import type {
   AuditEntry,
+  CallCounts,
+  CallGraphResult,
+  CentralFile,
+  ScansStatus,
   FindTestsResult,
   VectorStatus,
   XrayData,
@@ -73,6 +77,19 @@ export const api = {
   repoFiles: (repo: string) => getJson<RepoFile[]>(`/api/v1/repos/${seg(repo)}/files`),
   repoSummaries: (repo: string) => getJson<FileSummary[]>(`/api/v1/summaries/repo/${seg(repo)}`),
   summaryCoverage: () => getJson<SummaryCoverage>("/api/v1/summaries/coverage"),
+  // grafo de chamadas (lido dos clones, sem embedding): quem chama / o que é chamado
+  callGraph: (target: string, direction: "callers" | "callees", repo?: string, external = false, limit = 200) =>
+    getJson<CallGraphResult>("/api/v1/calls", {
+      query: { target, direction, limit, ...(repo ? { repo } : {}), ...(external ? { external: "true" } : {}) },
+    }),
+  callCounts: (repo: string, path: string) => getJson<CallCounts>("/api/v1/calls/counts", { query: { repo, path } }),
+  centralFiles: (repo: string, limit = 8) =>
+    getJson<{ files: CentralFile[] }>(`/api/v1/repos/${seg(repo)}/central-files`, { query: { limit } }),
+  // leituras dos clones (index:write; sem custo de API)
+  scansStatus: () => getJson<ScansStatus>("/api/v1/scans/status"),
+  startScan: (kind: "graph" | "tests", force = false) =>
+    postJson<ScansStatus>(`/api/v1/scans/${kind}${force ? "?force=true" : ""}`, undefined),
+
   // casos de teste que cobrem um arquivo, classe ou método (testes ficam fora da busca; só nome e linha)
   findTests: (target: string, repo?: string, limit = 200) =>
     getJson<FindTestsResult>("/api/v1/tests", { query: { target, limit, ...(repo ? { repo } : {}) } }),

@@ -26,7 +26,7 @@ STATE_PARAMS = "usage_params"
 STATE_RESULT_COUNT = "usage_result_count"
 # Leituras que não são uso do índice: polling que a interface repete sozinha e as telas de observação
 # (o próprio dashboard de uso, pessoas, auditoria). Sem isto, olhar o dashboard inflaria o uso.
-NOT_USAGE_PREFIXES = ("/api/v1/sync/jobs", "/api/v1/vectors/status", "/api/v1/usage", "/api/v1/me/usage", "/api/v1/users", "/api/v1/audit")
+NOT_USAGE_PREFIXES = ("/api/v1/sync/jobs", "/api/v1/vectors/status", "/api/v1/scans/status", "/api/v1/usage", "/api/v1/me/usage", "/api/v1/users", "/api/v1/audit")
 
 
 class UsageMiddleware:

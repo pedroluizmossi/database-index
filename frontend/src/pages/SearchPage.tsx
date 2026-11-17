@@ -237,6 +237,9 @@ export function SearchPage() {
                     onOpenTest={(testRepo, path, line) =>
                       setTarget({ repo: testRepo, path, highlight: { start: line, end: line } })
                     }
+                    onOpenAt={(callerRepo, path, line) =>
+                      setTarget({ repo: callerRepo, path, highlight: { start: line, end: line } })
+                    }
                     onOpen={() =>
                       setTarget({
                         repo: hit.repo,

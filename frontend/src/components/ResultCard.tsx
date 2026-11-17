@@ -6,6 +6,10 @@ import { CodeLines, type CodeLine } from "./CodeLines";
 import { HitSummary } from "./summaries";
 import { KindIcon } from "./kind";
 import { TestCasesDialog } from "./TestCasesDialog";
+import { CallsDialog, DIRECTION_ICON } from "./CallsDialog";
+
+/** Só a partir daqui o cartão diz quantos chamadores o arquivo tem: abaixo disso é ruído num cartão já cheio. */
+const CALLERS_SHOWN_FROM = 10;
 
 interface ResultCardProps {
   hit: Hit;
@@ -16,15 +20,20 @@ interface ResultCardProps {
   onOpenImpl?: (repo: string, path: string, line: number) => void;
   /** Abre um arquivo de teste na linha do caso (lista de "N casos de teste"). */
   onOpenTest?: (repo: string, path: string, line: number) => void;
+  /** Abre um arquivo numa linha (lista de quem chama o arquivo). */
+  onOpenAt?: (repo: string, path: string, line: number) => void;
 }
 
-export function ResultCard({ hit, maxScore, onOpen, onOpenImpl, onOpenTest }: ResultCardProps) {
+export function ResultCard({ hit, maxScore, onOpen, onOpenImpl, onOpenTest, onOpenAt }: ResultCardProps) {
   const lines = useMemo<CodeLine[]>(
     () => hit.code.split("\n").map((text, i) => ({ n: hit.start_line + i, text })),
     [hit],
   );
   const [copied, setCopied] = useState(false);
   const [testsOpen, setTestsOpen] = useState(false);
+  const [callersOpen, setCallersOpen] = useState(false);
+  const callers = (hit.callers ?? 0) >= CALLERS_SHOWN_FROM ? (hit.callers ?? 0) : 0;
+  const CallersIcon = DIRECTION_ICON.callers;
   const percent = maxScore > 0 ? Math.round((hit.score / maxScore) * 100) : 0;
 
   async function copyCode() {
@@ -68,7 +77,7 @@ export function ResultCard({ hit, maxScore, onOpen, onOpenImpl, onOpenTest }: Re
         </div>
       </header>
 
-      {(hit.url || hit.linked_repos.length > 0 || (hit.implemented_in?.length ?? 0) > 0 || (hit.tests ?? 0) > 0) && (
+      {(hit.url || hit.linked_repos.length > 0 || (hit.implemented_in?.length ?? 0) > 0 || (hit.tests ?? 0) > 0 || callers > 0) && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 pb-3 text-xs text-stone-500 dark:text-stone-400">
           {hit.url && (
             <a
@@ -114,6 +123,17 @@ export function ResultCard({ hit, maxScore, onOpen, onOpenImpl, onOpenTest }: Re
               {hit.tests} {hit.tests === 1 ? "caso de teste" : "casos de teste"}
             </button>
           )}
+          {callers > 0 && (
+            <button
+              type="button"
+              onClick={() => setCallersOpen(true)}
+              className="inline-flex items-center gap-1 font-medium tabular-nums hover:text-accent-600 hover:underline dark:hover:text-accent-400"
+              title="Trechos de outros arquivos do repo que chamam algo deste arquivo (grafo de chamadas)"
+            >
+              <CallersIcon className="size-3" aria-hidden="true" />
+              chamado em {callers} lugares
+            </button>
+          )}
         </div>
       )}
 
@@ -139,6 +159,19 @@ export function ResultCard({ hit, maxScore, onOpen, onOpenImpl, onOpenTest }: Re
           Abrir arquivo
         </Button>
       </footer>
+      {callersOpen && (
+        <CallsDialog
+          repo={hit.repo}
+          path={hit.path}
+          direction="callers"
+          open
+          onClose={() => setCallersOpen(false)}
+          onOpen={(repo, path, line) => {
+            setCallersOpen(false);
+            onOpenAt?.(repo, path, line);
+          }}
+        />
+      )}
       {testsOpen && (
         <TestCasesDialog
           repo={hit.repo}

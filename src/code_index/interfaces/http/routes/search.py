@@ -85,16 +85,6 @@ async def find_tests(request: Request, target: str = Query(min_length=1, max_len
                          get_service(request).find_tests(target, repos=repo, limit=limit))
 
 
-@router.get("/api/v1/calls", tags=["busca"],
-            summary="Grafo de chamadas: quem chama (callers) ou o que é chamado por (callees) um símbolo")
-async def call_graph(request: Request, target: str = Query(min_length=1, max_length=300),
-                     direction: Literal["callers", "callees"] = Query("callers"),
-                     repo: list[str] | None = Query(None), limit: int = Query(30, ge=1, le=200),
-                     principal: Principal = Depends(require(SEARCH_READ, bucket="search"))) -> dict[str, Any]:
-    return await audited(request, principal, "calls", {"target": target, "direction": direction, "repo": repo},
-                         get_service(request).call_graph(target, direction=direction, repos=repo, limit=limit))
-
-
 @router.get("/api/v1/files/{repo}/{path:path}", tags=["busca"], summary="Lê arquivo (segredos mascarados)")
 async def read_file(repo: str, path: str, request: Request, start_line: int | None = Query(None, ge=1),
                     end_line: int | None = Query(None, ge=1),

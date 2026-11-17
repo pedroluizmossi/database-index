@@ -18,7 +18,7 @@ from ..infra.job_store import ActiveJobExists, JobRecord
 from .enrich import EnrichMixin
 from .apis import ApisMixin
 from .graph import GraphMixin
-from .vectors import VectorsMixin
+from .vectors import VectorsMixin, _now
 from .tests import TestsMixin
 
 
@@ -69,6 +69,56 @@ class SyncMixin(VectorsMixin, ApisMixin, EnrichMixin, TestsMixin, GraphMixin):
             await self._ensure_search_indexes()
             await self.after_index()
         return result
+
+    # ------------------------------------------------------------ leituras dos clones (sem custo de API)
+
+    SCAN_KINDS = ("graph", "tests")
+    _scan_tasks: dict[str, asyncio.Task[Any]] | None = None
+    _scan_runs: dict[str, dict[str, Any]] | None = None
+
+    async def scans_status(self) -> dict[str, Any]:
+        """Grafo de chamadas e casos de teste lidos dos clones: números, se uma leitura está rodando neste
+        processo e o resultado da última pedida pela API."""
+        tasks, runs = self._scan_tasks or {}, self._scan_runs or {}
+        out: dict[str, Any] = {}
+        for kind, status in (("graph", await self.graph_status()), ("tests", await self.tests_status())):
+            task = tasks.get(kind)
+            out[kind] = {**status, "running": task is not None and not task.done(), "last_run": runs.get(kind)}
+        return out
+
+    async def start_scan(self, kind: str, principal: Principal | None, *, force: bool = False) -> dict[str, Any]:
+        """Relê o grafo de chamadas ou os casos de teste em segundo plano (sem custo de API). Uma leitura de cada
+        tipo por vez neste processo (RuntimeError se já houver). `force`: relê mesmo os repos sem mudança."""
+        if kind not in self.SCAN_KINDS:
+            raise ValueError(f"leitura desconhecida: {kind} (use {', '.join(self.SCAN_KINDS)})")
+        if self._scan_tasks is None:
+            self._scan_tasks, self._scan_runs = {}, {}
+        assert self._scan_runs is not None
+        running = self._scan_tasks.get(kind)
+        if running is not None and not running.done():
+            raise RuntimeError("já existe uma leitura deste tipo em andamento")
+        actor = principal.actor if principal else "operador local"
+        run: dict[str, Any] = {"requested_by": actor, "force": force, "started_at": _now(), "finished_at": None,
+                               "status": "running", "result": None, "error": None}
+        self._scan_runs[kind] = run
+
+        async def go() -> None:
+            try:
+                run["result"] = await (self.scan_calls(force=force) if kind == "graph" else self.scan_tests(force=force))
+                run["status"] = "done"
+            except Exception as e:  # noqa: BLE001 - o erro vai para o estado, não derruba o servidor
+                log.exception("leitura %s falhou", kind)
+                run["status"], run["error"] = "failed", str(e)[:500]
+            finally:
+                run["finished_at"] = _now()
+            await self._audit.record(actor=actor, token_id=principal.token_id if principal else None,
+                                     action=f"scan:{kind}", params={"status": run["status"], "force": force})
+
+        task = asyncio.create_task(go())
+        self._scan_tasks[kind] = task
+        self._job_tasks.add(task)
+        task.add_done_callback(self._job_tasks.discard)
+        return await self.scans_status()
 
     async def after_index(self) -> dict[str, Any]:
         """Fatos dos repos cuja revisão mudou + catálogo de documentos + relações derivadas + resumos de

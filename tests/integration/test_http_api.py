@@ -375,6 +375,17 @@ def test_grafo_de_chamadas_na_api(server: Server) -> None:
     assert r.status_code == 200 and r.json()["direction"] == "callees" and r.json()["edges"] == []
     assert client(server, "leitor").get("/api/v1/calls", params={"target": "ola", "direction": "x"}).status_code == 422
     assert client(server).get("/api/v1/calls", params={"target": "ola"}).status_code == 401
+    r = client(server, "leitor").get("/api/v1/calls/counts", params={"repo": "nao-existe", "path": "app.py"})
+    assert r.status_code == 400 and "desconhecido" in r.json()["detail"]
+    assert client(server, "leitor").get("/api/v1/repos/nao-existe/central-files").status_code == 400
+    # leituras dos clones: estado e releitura só com index:write
+    assert client(server, "leitor").get("/api/v1/scans/status").status_code == 403
+    assert client(server, "leitor").post("/api/v1/scans/graph").status_code == 403
+    st = client(server, "admin-bot").get("/api/v1/scans/status")
+    assert st.status_code == 200 and set(st.json()) == {"graph", "tests"}
+    assert client(server, "admin-bot").post("/api/v1/scans/outra").status_code == 422
+    r = client(server, "admin-bot").post("/api/v1/scans/tests")
+    assert r.status_code == 202 and r.json()["tests"]["running"] in (True, False)
 
 
 def test_auditoria(server: Server) -> None:

@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import { api } from "../api/endpoints";
 import { describeError } from "../api/client";
-import type { ApiImpl, Repo, RepoCardInfo, RepoFile, SdlService, SummaryCoverageRepo } from "../api/types";
+import type { ApiImpl, CentralFile, Repo, RepoCardInfo, RepoFile, SdlService, SummaryCoverageRepo } from "../api/types";
 import { ORIGIN_HINT, ORIGIN_LABEL } from "../lib/ownership";
 import { cx, formatDateTime, plural, repoShortName, timeAgo } from "../lib/utils";
 import type { FileTarget } from "./FileDrawer";
@@ -66,10 +66,12 @@ export function RepoSheet({ repo, knownRepos, onSelectRepo, onOpenFile, docs, do
   const [files, setFiles] = useState<RepoFile[] | null>(null);
   const [filesError, setFilesError] = useState<string | null>(null);
   const [fileFilter, setFileFilter] = useState("");
+  const [central, setCentral] = useState<CentralFile[] | null>(null);
 
   useEffect(() => {
     let active = true;
     setInfo(null);
+    setCentral(null);
     setInfoState("loading");
     setFiles(null);
     setFilesError(null);
@@ -86,6 +88,10 @@ export function RepoSheet({ repo, knownRepos, onSelectRepo, onOpenFile, docs, do
       .repoFiles(repo.name)
       .then((data) => active && setFiles(data))
       .catch((err: unknown) => active && setFilesError(describeError(err)));
+    api
+      .centralFiles(repo.name)
+      .then((data) => active && setCentral(data.files))
+      .catch(() => active && setCentral([])); // grafo é um extra: sem ele, fica só o que o cartão indica
     return () => {
       active = false;
     };
@@ -226,7 +232,7 @@ export function RepoSheet({ repo, knownRepos, onSelectRepo, onOpenFile, docs, do
               {label}
               <SectionCount
                 value={
-                  id === "comecar" ? (card?.entrypoints?.length ?? null)
+                  id === "comecar" ? (card || central ? (card?.entrypoints?.length ?? 0) + (central?.length ?? 0) : null)
                   : id === "apis" ? (info ? operations : null)
                   : id === "arquivos" ? (files?.length ?? null)
                   : id === "docs" ? docCount
@@ -240,9 +246,16 @@ export function RepoSheet({ repo, knownRepos, onSelectRepo, onOpenFile, docs, do
       </Panel>
 
       {/* 2. Por onde começar */}
-      <Section id="comecar" icon={Compass} title="Por onde começar" hint="Arquivos e pastas que o cartão indica para a primeira leitura.">
+      <Section
+        id="comecar"
+        icon={Compass}
+        title="Por onde começar"
+        hint="Arquivos e pastas que o cartão indica para a primeira leitura, e os mais chamados pelo resto do código."
+      >
         {!card?.entrypoints?.length ? (
-          <Empty>{card ? "O cartão não indica pontos de entrada." : "Aparece quando o repo tiver cartão."}</Empty>
+          !central?.length && (
+            <Empty>{card ? "O cartão não indica pontos de entrada." : "Aparece quando o repo tiver cartão ou o grafo de chamadas for lido."}</Empty>
+          )
         ) : (
           <ul className="divide-y divide-stone-100 dark:divide-stone-800">
             {card.entrypoints.map((path) => {
@@ -265,6 +278,34 @@ export function RepoSheet({ repo, knownRepos, onSelectRepo, onOpenFile, docs, do
               );
             })}
           </ul>
+        )}
+        {(central?.length ?? 0) > 0 && (
+          <div className="border-t border-stone-100 dark:border-stone-800">
+            <p className="px-5 pt-3 pb-1 font-mono text-[10px] tracking-[0.16em] text-stone-500 uppercase dark:text-stone-400">
+              Mais chamados pelo resto do código
+            </p>
+            <ul className="divide-y divide-stone-100 dark:divide-stone-800">
+              {central!.map((c) => (
+                <li key={c.path}>
+                  <button
+                    type="button"
+                    onClick={() => open(c.path, c.top.line ?? undefined)}
+                    title={`${c.callers} ${c.callers === 1 ? "trecho chama" : "trechos chamam"} algo deste arquivo, de ${c.files} ${c.files === 1 ? "arquivo" : "arquivos"}`}
+                    className="flex w-full items-center gap-3 px-5 py-2.5 text-left transition hover:bg-stone-50 dark:hover:bg-white/[0.03]"
+                  >
+                    <Network className="size-4 shrink-0 text-stone-400" aria-hidden="true" />
+                    <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-stone-700 dark:text-stone-200">{c.path}</span>
+                    {c.top.name && (
+                      <span className="hidden max-w-[35%] truncate font-mono text-xs text-stone-500 md:inline dark:text-stone-400">{c.top.name}</span>
+                    )}
+                    <span className="shrink-0 text-xs text-stone-500 tabular-nums dark:text-stone-400">
+                      {numberFormat.format(c.callers)} {c.callers === 1 ? "chamador" : "chamadores"}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
       </Section>
 

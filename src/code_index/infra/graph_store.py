@@ -70,8 +70,51 @@ class GraphStore:
             "last_scan": row["last_scan"].isoformat() if row["last_scan"] else None,
         }
 
+    async def caller_counts(self, files: Sequence[tuple[str, str]]) -> dict[tuple[str, str], int]:
+        """Quantos trechos de OUTROS arquivos chamam algo de cada arquivo (repo, caminho)."""
+        if not files:
+            return {}
+        try:
+            rows = await self._pool.fetch(
+                f"""SELECT e.repo, e.dst_path, count(DISTINCT (e.src_path, e.src_line)) AS n FROM {self._edges} e
+                    JOIN unnest($1::text[], $2::text[]) AS f(repo, path) ON f.repo = e.repo AND f.path = e.dst_path
+                    WHERE e.src_path <> e.dst_path GROUP BY e.repo, e.dst_path""",
+                [f[0] for f in files], [f[1] for f in files])
+        except asyncpg.UndefinedTableError:
+            return {}
+        return {(r["repo"], r["dst_path"]): int(r["n"]) for r in rows}
+
+    async def file_counts(self, repo: str, path: str) -> dict[str, int]:
+        """Chamadas entre este arquivo e os outros do repo: quem chama algo dele e quantos alvos ele chama."""
+        row = await self._pool.fetchrow(
+            f"""SELECT count(DISTINCT (src_path, src_line)) FILTER (WHERE dst_path = $2) AS callers,
+                       count(DISTINCT (dst_path, dst_line, dst_name)) FILTER (WHERE src_path = $2) AS callees
+                FROM {self._edges} WHERE repo = $1 AND (dst_path = $2 OR src_path = $2) AND src_path <> dst_path""",
+            repo, path)
+        return {"callers": int(row["callers"]), "callees": int(row["callees"])}
+
+    async def central_files(self, repo: str, limit: int = 10) -> list[dict[str, Any]]:
+        """Arquivos com mais chamadores vindos de outros arquivos (os centrais do repo), com o membro mais chamado."""
+        rows = await self._pool.fetch(
+            f"""WITH per_def AS (
+                    SELECT dst_path, dst_name, dst_line, count(DISTINCT (src_path, src_line)) AS n
+                    FROM {self._edges} WHERE repo = $1 AND src_path <> dst_path
+                    GROUP BY dst_path, dst_name, dst_line),
+                per_file AS (
+                    SELECT dst_path, count(DISTINCT (e.src_path, e.src_line)) AS callers,
+                           count(DISTINCT e.src_path) AS files
+                    FROM {self._edges} e WHERE repo = $1 AND src_path <> dst_path GROUP BY dst_path)
+                SELECT f.dst_path AS path, f.callers, f.files,
+                       (SELECT d.dst_name FROM per_def d WHERE d.dst_path = f.dst_path ORDER BY d.n DESC, d.dst_line
+                        LIMIT 1) AS top_name,
+                       (SELECT d.dst_line FROM per_def d WHERE d.dst_path = f.dst_path ORDER BY d.n DESC, d.dst_line
+                        LIMIT 1) AS top_line
+                FROM per_file f ORDER BY f.callers DESC, f.dst_path LIMIT $2""", repo, limit)
+        return [{"path": r["path"], "callers": int(r["callers"]), "files": int(r["files"]),
+                 "top": {"name": r["top_name"], "line": r["top_line"]}} for r in rows]
+
     async def neighbors(self, direction: str, *, repos: Sequence[str] | None, name: str | None = None,
-                        path: str | None = None, line: int | None = None,
+                        path: str | None = None, line: int | None = None, external: bool = False,
                         limit: int = 50) -> tuple[list[dict[str, Any]], int]:
         """Arestas que chegam (`callers`) ou saem (`callees`) de um símbolo. `name` casa o nome qualificado
         ("Classe.metodo") ou só o final ("metodo"); `path` casa o fim do caminho; `line`, a linha da definição.
@@ -95,7 +138,9 @@ class GraphStore:
             clauses.append(f"({side}_path = {arg(clean)} OR {side}_path LIKE {arg('%/' + _like(clean))})")
         if line is not None:
             clauses.append(f"{side}_line = {arg(int(line))}")
-        if not clauses or (repos and len(clauses) == 1):
+        if external:
+            clauses.append("src_path <> dst_path")
+        if not (name or path or line is not None):
             raise ValueError("informe o símbolo (nome, caminho ou caminho:linha)")
         where = " AND ".join(clauses)
         order = ("CASE via WHEN 'arquivo' THEN 0 WHEN 'pacote' THEN 1 WHEN 'import' THEN 2 WHEN 'tipo' THEN 3 "

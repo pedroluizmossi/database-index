@@ -7,6 +7,7 @@ import { CodeLines, type CodeLine } from "./CodeLines";
 import { EmptyState, IconButton, Skeleton } from "./ui";
 import { FileSummaryPanel } from "./summaries";
 import { TestCasesDialog } from "./TestCasesDialog";
+import { CallsDialog, DIRECTION_ICON, type CallDirection } from "./CallsDialog";
 
 export interface FileTarget {
   repo: string;
@@ -22,6 +23,8 @@ interface FileDrawerProps {
 /**
  * Painel lateral com o arquivo inteiro. Abre no trecho destacado e fecha com Esc.
  * Arquivo coberto por testes mostra "N casos de teste": a lista abre o teste aqui mesmo, com "Voltar" ao original.
+ * Pelo grafo de chamadas, "Chamado por N" e "Chama N" listam as chamadas entre este e outros arquivos do repo, e
+ * cada item abre o outro arquivo aqui mesmo.
  */
 export function FileDrawer({ target: opened, onClose }: FileDrawerProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -33,13 +36,29 @@ export function FileDrawer({ target: opened, onClose }: FileDrawerProps) {
   const [target, setTarget] = useState<FileTarget | null>(opened);
   const [tests, setTests] = useState(0);
   const [testsOpen, setTestsOpen] = useState(false);
+  const [calls, setCalls] = useState<{ callers: number; callees: number }>({ callers: 0, callees: 0 });
+  const [callsOpen, setCallsOpen] = useState<CallDirection | null>(null);
   const key = target ? JSON.stringify([target.repo, target.path]) : null;
   const navigated = target !== null && opened !== null && (target.repo !== opened.repo || target.path !== opened.path);
 
   useEffect(() => {
     setTarget(opened);
     setTestsOpen(false);
+    setCallsOpen(null);
   }, [opened]);
+
+  useEffect(() => {
+    setCalls({ callers: 0, callees: 0 });
+    if (!target) return;
+    let active = true;
+    api
+      .callCounts(target.repo, target.path)
+      .then((res) => active && setCalls(res))
+      .catch(() => undefined); // contagem é um extra: sem grafo, o painel segue igual
+    return () => {
+      active = false;
+    };
+  }, [key]);
 
   useEffect(() => {
     setTests(0);
@@ -136,6 +155,27 @@ export function FileDrawer({ target: opened, onClose }: FileDrawerProps) {
                 {tests} {tests === 1 ? "caso de teste" : "casos de teste"}
               </button>
             )}
+            {(["callers", "callees"] as const).map((direction) => {
+              const n = calls[direction];
+              if (n === 0) return null;
+              const Icon = DIRECTION_ICON[direction];
+              return (
+                <button
+                  key={direction}
+                  type="button"
+                  onClick={() => setCallsOpen(direction)}
+                  title={
+                    direction === "callers"
+                      ? "Trechos de outros arquivos do repo que chamam algo deste (grafo de chamadas)"
+                      : "Funções e métodos de outros arquivos do repo que este chama (grafo de chamadas)"
+                  }
+                  className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-stone-600 tabular-nums hover:bg-stone-100 hover:text-accent-600 dark:text-stone-300 dark:hover:bg-stone-800 dark:hover:text-accent-400"
+                >
+                  <Icon className="size-3.5" aria-hidden="true" />
+                  {direction === "callers" ? `Chamado por ${n}` : `Chama ${n}`}
+                </button>
+              );
+            })}
             <IconButton label={copied ? "Caminho copiado" : "Copiar caminho"} onClick={copyPath}>
               {copied ? <Check className="size-4 text-emerald-500" /> : <Copy className="size-4" />}
             </IconButton>
@@ -160,6 +200,19 @@ export function FileDrawer({ target: opened, onClose }: FileDrawerProps) {
               </span>
             )}
           </footer>
+          {callsOpen && (
+            <CallsDialog
+              repo={target.repo}
+              path={target.path}
+              direction={callsOpen}
+              open
+              onClose={() => setCallsOpen(null)}
+              onOpen={(repo, path, line) => {
+                setCallsOpen(null);
+                setTarget({ repo, path, highlight: { start: line, end: line } });
+              }}
+            />
+          )}
           {testsOpen && (
             <TestCasesDialog
               repo={target.repo}

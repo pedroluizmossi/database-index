@@ -14,6 +14,7 @@ import { ActiveJobPanel, JobDialog, JobsPanel, useJobs } from "../components/Job
 import { IndexCoverage, useRepoCounts, type RepoCounts } from "../components/IndexCoverage";
 import { SyncDialog } from "../components/SyncDialog";
 import { VectorsPanel } from "../components/VectorsPanel";
+import { ScansPanel } from "../components/ScansPanel";
 import { Button, Panel, Skeleton } from "../components/ui";
 
 const numberFormat = new Intl.NumberFormat("pt-BR");
@@ -120,6 +121,7 @@ export function IndexingPage() {
       />
 
       {canSeeJobs && <VectorsPanel canRun={canIndex} />}
+      {canSeeJobs && <ScansPanel canRun={canIndex} />}
 
       <JobsPanel state={jobs} onOpen={setJobDetail} />
 

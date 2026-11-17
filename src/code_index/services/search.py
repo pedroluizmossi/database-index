@@ -99,6 +99,10 @@ class SearchMixin(OwnershipMixin):
         await self.annotate_owners(hits)
         await self.annotate_summaries(hits)
         await self.annotate_tests(hits)
+        try:
+            await self.annotate_callers(hits)  # type: ignore[attr-defined]  # GraphMixin, no CodeIndexService
+        except Exception:  # noqa: BLE001 - contagem é um extra: a busca segue sem ela
+            log.warning("contagem de chamadores falhou", exc_info=True)
         return hits
 
     async def annotate_tests(self, hits: Sequence[Hit]) -> None:

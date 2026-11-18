@@ -1,0 +1,6 @@
+apiVersion: v2
+name: code-index
+description: Indexador de código (API REST, MCP e interface web) com worker da fila de sync
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

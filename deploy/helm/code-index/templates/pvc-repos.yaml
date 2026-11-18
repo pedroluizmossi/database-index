@@ -1,0 +1,19 @@
+{{- if not .Values.repos.existingClaim }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "code-index.fullname" . }}-repos
+  labels:
+    {{- include "code-index.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep   # clones não somem num helm uninstall
+spec:
+  accessModes:
+    {{- toYaml .Values.repos.accessModes | nindent 4 }}
+  {{- with .Values.repos.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.repos.size }}
+{{- end }}

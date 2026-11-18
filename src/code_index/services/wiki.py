@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
+from ..domain.auth import Principal
 from ..domain.models import DocLinkRule, DocSource, SyncResult
 from .base import ServiceBase
 
@@ -25,14 +26,16 @@ class WikiMixin(ServiceBase):
         include: Sequence[str] = (),
         exclude: Sequence[str] = (),
         links: Sequence[tuple[str, Sequence[str]]] = (),
+        principal: Principal | None = None,
     ) -> dict:
-        """Cadastra uma wiki (Wiki.js), validando acesso à lista e ao conteúdo de uma página."""
-        from ..sources.wikijs import WikiJsClient, WikiJsError, selected_pages
+        """Cadastra uma wiki (Wiki.js), validando acesso à lista e ao conteúdo de uma página.
+
+        `principal` (pedido remoto, pela API): exige a allowlist de hosts da wiki (`check_wiki_url`)."""
+        from ..sources.wikijs import WikiJsClient, WikiJsError, check_wiki_url, selected_pages, wikijs_token
 
         if any(d.name == name for d in await self._config.docs()):
             raise ValueError(f"fonte de documentação já existe: {name}")
-        if not url.startswith(("https://", "http://")):
-            raise ValueError("url da wiki deve começar com https://")
+        check_wiki_url(url, self.settings, remote=principal is not None)
         source = DocSource(
             name=name, url=url.rstrip("/"), locale=locale, include=tuple(include), exclude=tuple(exclude),
             links=tuple(DocLinkRule(path=p, repos=tuple(r)) for p, r in links),
@@ -43,8 +46,7 @@ class WikiMixin(ServiceBase):
             raise ValueError(f"fonte de documentação conflita com repo existente: {source.repo_name}")
         if (self.settings.repos_dir / source.repo_name).exists():
             raise ValueError(f"pasta já existe para {source.repo_name}; escolha outro nome")
-        token = self.settings.wikijs_token.get_secret_value() if self.settings.wikijs_token else None
-        client = WikiJsClient(source.url, token)
+        client = WikiJsClient(source.url, wikijs_token(self.settings, source.url))
         pages = await client.list_pages(source.locale)
         if not pages:
             raise WikiJsError("nenhuma página acessível para validar read:source; publique uma página antes de cadastrar")
@@ -60,7 +62,7 @@ class WikiMixin(ServiceBase):
         A página precisa estar na seleção da fonte. A seleção não muda, e as outras páginas já baixadas
         ficam como estão (sem reprocessar nem apagar nada).
         """
-        from ..sources.wikijs import WikiJsClient, selected_pages
+        from ..sources.wikijs import WikiJsClient, selected_pages, wikijs_token
 
         source = await self._doc_source(name)
         if source.type != "wikijs":
@@ -68,7 +70,7 @@ class WikiMixin(ServiceBase):
         wanted = {p.strip().strip("/") for p in pages if p.strip().strip("/")}
         if not wanted or any(".." in p.split("/") for p in wanted):
             raise ValueError("informe caminhos de página válidos, ex.: Plataforma/Email")
-        token = self.settings.wikijs_token.get_secret_value() if self.settings.wikijs_token else None
+        token = wikijs_token(self.settings, source.url)
         listed = selected_pages(source, await WikiJsClient(source.url, token).list_pages(source.locale))
         missing = sorted(wanted - {p.path for p in listed})
         if missing:
@@ -90,10 +92,9 @@ class WikiMixin(ServiceBase):
         return source
 
     async def _wiki_pages(self, source: DocSource) -> list[PageMeta]:
-        from ..sources.wikijs import WikiJsClient
+        from ..sources.wikijs import WikiJsClient, wikijs_token
 
-        token = self.settings.wikijs_token.get_secret_value() if self.settings.wikijs_token else None
-        return await WikiJsClient(source.url, token).list_pages(source.locale)
+        return await WikiJsClient(source.url, wikijs_token(self.settings, source.url)).list_pages(source.locale)
 
     async def wiki_catalog(self, name: str) -> dict[str, Any]:
         """Todas as páginas publicadas no idioma da wiki (só a lista; nada é baixado), marcando as da seleção

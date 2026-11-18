@@ -6,7 +6,6 @@ Vínculos são relações (`RelationStore`); o catálogo de documentos (tipo, at
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import shutil
 from typing import Any
@@ -36,7 +35,8 @@ class DocsMixin(ServiceBase):
             out.append({"name": d.name, "repo": d.repo_name, "type": d.type, "label": doc_plugin(d.type).label,
                         "url": d.url, "locale": d.locale, "include": list(d.include), "exclude": list(d.exclude),
                         "documents": c.get("documents", 0), "ignored": c.get("ignored", 0),
-                        "page_selection": d.type == WIKI_TYPE})
+                        "page_selection": d.type == WIKI_TYPE,
+                        "links": [{"path": rule.path, "repos": list(rule.repos)} for rule in d.links]})
         return out
 
     async def docs_preview(self, name: str, *, limit: int = 200) -> dict:
@@ -198,4 +198,4 @@ class DocsMixin(ServiceBase):
         await self._documents.drop_source(source.repo_name)
         await self.rebuild_relations()
         if not keep_files and folder.is_dir():
-            await asyncio.to_thread(shutil.rmtree, folder)
+            await self._remove_local(shutil.rmtree, folder)

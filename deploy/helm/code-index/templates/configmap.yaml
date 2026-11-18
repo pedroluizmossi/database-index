@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "code-index.fullname" . }}-config
+  labels:
+    {{- include "code-index.labels" . | nindent 4 }}
+data:
+  CODE_INDEX_PUBLIC_URL: {{ printf "%s://%s" .Values.publicScheme (required "defina publicHost" .Values.publicHost) | quote }}
+  CODE_INDEX_ALLOWED_HOSTS: {{ include "code-index.allowedHosts" . | quote }}
+  {{- with .Values.oauthRedirectUris }}
+  CODE_INDEX_OAUTH_REDIRECT_URIS: {{ join "," . | quote }}
+  {{- end }}
+  CODE_INDEX_HTTP_HOST: "0.0.0.0"
+  CODE_INDEX_HTTP_PORT: {{ .Values.api.port | quote }}
+  CODE_INDEX_SYNC_WORKER_EMBEDDED: "false"
+  CODE_INDEX_REPOS_DIR: /data/repos
+  CODE_INDEX_HOME: /data/home
+  COCOINDEX_DB: /data/state/cocoindex
+  {{- range $k, $v := .Values.config }}
+  {{- if not (eq (toString $v) "") }}
+  {{ $k }}: {{ $v | toString | quote }}
+  {{- end }}
+  {{- end }}

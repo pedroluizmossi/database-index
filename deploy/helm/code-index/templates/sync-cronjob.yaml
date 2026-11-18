@@ -1,0 +1,62 @@
+{{- if .Values.syncCron.enabled }}
+# Sync periódico: a CLI em modo remoto pede o sync à api (CODE_INDEX_URL + token index:write);
+# quem executa é o worker. Este pod não fala com o banco.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "code-index.fullname" . }}-sync
+  labels:
+    {{- include "code-index.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sync-cron
+spec:
+  schedule: {{ .Values.syncCron.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            {{- include "code-index.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: sync-cron
+        spec:
+          restartPolicy: Never
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          automountServiceAccountToken: false
+          securityContext:
+            {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          containers:
+            - name: sync
+              image: {{ include "code-index.image" . }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command: ["code-index"]
+              args:
+                {{- toYaml .Values.syncCron.args | nindent 16 }}
+              env:
+                - name: HOME
+                  value: /tmp
+                - name: CODE_INDEX_HOME
+                  value: /tmp
+                - name: CODE_INDEX_URL
+                  value: {{ include "code-index.internalUrl" . | quote }}
+                - name: CODE_INDEX_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.syncCron.tokenSecret.name }}
+                      key: {{ .Values.syncCron.tokenSecret.key }}
+              resources:
+                {{- toYaml .Values.syncCron.resources | nindent 16 }}
+              securityContext:
+                {{- toYaml .Values.securityContext | nindent 16 }}
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir: {}
+{{- end }}

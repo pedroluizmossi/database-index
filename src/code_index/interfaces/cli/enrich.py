@@ -5,19 +5,18 @@ from __future__ import annotations
 import argparse
 import sys
 
-from ...services import open_service
 from ...settings import Settings
-from .common import Subparsers, print_json
+from .common import Subparsers, open_backend, print_json
 
 
 async def _cmd_enrich_facts(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         st = await svc.enrich_facts(a.repo or None, force=a.force)
     print(f"fatos coletados de {st['updated']} repo(s) (de {st['repos']}); sem LLM e sem custo.")
 
 
 async def _cmd_enrich_next(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         task = await svc.enrich_next(agent=a.agent or "", repo=a.repo, kind=a.kind, scope=a.escopo)
     if task is None:
         print("nenhuma tarefa pendente.")
@@ -34,7 +33,7 @@ async def _cmd_enrich_submit(a: argparse.Namespace, settings: Settings) -> None:
             payload = fh.read()
     else:
         payload = sys.stdin.read()
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         res = await svc.enrich_submit(a.id, payload, agent=a.agent or "")
     if res["kind"] == "file_summaries":
         print(f"{res['files']} resumo(s) gravado(s) em {res['repo']} ({res['chunks']} trecho(s) atualizado(s) na busca). "
@@ -55,19 +54,19 @@ async def _cmd_enrich_submit(a: argparse.Namespace, settings: Settings) -> None:
 
 
 async def _cmd_enrich_apply_summaries(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         res = await svc.apply_file_summaries()
     print(f"{res['chunks']} trecho(s) atualizado(s); {res['pruned']} resumo(s) de arquivos que saíram do índice apagado(s).")
 
 
 async def _cmd_enrich_release(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         ok = await svc.enrich_release(a.id)
     print("tarefa devolvida à fila." if ok else "tarefa não está reservada (já entregue, expirada ou inexistente).")
 
 
 async def _cmd_enrich_status(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         st = await svc.enrich_status()
     if a.json:
         print_json(st, default=str)
@@ -96,7 +95,7 @@ async def _cmd_enrich_status(a: argparse.Namespace, settings: Settings) -> None:
 
 
 async def _cmd_enrich_show(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         info = await svc.repo_card(a.repo)
     if info is None:
         print("sem fatos para este repo ainda (rode `code-index enrich facts`).")

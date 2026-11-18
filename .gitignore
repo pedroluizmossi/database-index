@@ -12,3 +12,4 @@ node_modules/
 frontend/dist/
 .backups/
 evals/
+.archify/

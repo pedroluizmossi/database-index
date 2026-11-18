@@ -1,0 +1,104 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $np := .Values.networkPolicy }}
+# api: entra só o Ingress Controller e a CLI remota do CronJob; sai para DNS, Postgres e a internet.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "code-index.fullname" . }}-api
+  labels:
+    {{- include "code-index.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "code-index.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            {{- toYaml $np.ingressControllerNamespaceSelector | nindent 12 }}
+        - podSelector:
+            matchLabels:
+              {{- include "code-index.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: sync-cron
+      ports:
+        - port: {{ .Values.api.port }}
+          protocol: TCP
+    # sondas do kubelet não passam por NetworkPolicy na maioria dos CNIs
+  egress:
+    {{- include "code-index.appEgress" . | nindent 4 }}
+---
+# worker e migrations: não recebem conexões; saem para DNS, Postgres e a internet (GitHub, Voyage, Wiki).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "code-index.fullname" . }}-worker
+  labels:
+    {{- include "code-index.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - {key: app.kubernetes.io/instance, operator: In, values: [{{ .Release.Name | quote }}]}
+      - {key: app.kubernetes.io/component, operator: In, values: [worker, migrate]}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    {{- include "code-index.appEgress" . | nindent 4 }}
+---
+# CronJob de sync: só DNS e a api.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "code-index.fullname" . }}-sync-cron
+  labels:
+    {{- include "code-index.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "code-index.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: sync-cron
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - ports:
+        - {port: 53, protocol: UDP}
+        - {port: 53, protocol: TCP}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "code-index.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: api
+      ports:
+        - {port: {{ .Values.api.port }}, protocol: TCP}
+{{- if $np.postgres.enabled }}
+---
+# Postgres (CNPG): na 5432 só entram api, worker e migrations desta release (e as próprias
+# instâncias, para replicação); o operador do CNPG consulta a porta 8000.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "code-index.fullname" . }}-postgres
+  labels:
+    {{- include "code-index.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    {{- toYaml $np.postgres.podSelector | nindent 4 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              {{- include "code-index.dbAccessLabel" . | nindent 14 }}
+        - podSelector:
+            {{- toYaml $np.postgres.podSelector | nindent 12 }}
+      ports:
+        - {port: 5432, protocol: TCP}
+    - from:
+        - namespaceSelector:
+            {{- toYaml $np.postgres.operatorNamespaceSelector | nindent 12 }}
+      ports:
+        - {port: 8000, protocol: TCP}
+        - {port: 5432, protocol: TCP}
+{{- end }}
+{{- end }}

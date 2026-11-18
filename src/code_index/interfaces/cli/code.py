@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import argparse
 
-from ...services import open_service
 from ...settings import Settings
-from .common import Subparsers, print_json
+from .common import Subparsers, open_backend, print_json
 
 
 async def _cmd_skips(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         rows = await svc.skipped_files(a.repo, limit=a.limit)
     if a.json:
         print_json(rows)
@@ -24,7 +23,7 @@ async def _cmd_skips(a: argparse.Namespace, settings: Settings) -> None:
 
 
 async def _cmd_symbol(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         hits = await svc.find_symbol(a.name, kind=a.kind, repos=a.repo, language=a.lang, limit=a.limit)
     if a.json:
         print_json([h.to_dict() for h in hits])
@@ -38,7 +37,7 @@ async def _cmd_symbol(a: argparse.Namespace, settings: Settings) -> None:
 
 
 async def _cmd_grep(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         res = await svc.grep(" ".join(a.pattern), repos=a.repo, path_glob=a.path, regex=a.regex,
                              case_sensitive=a.case_sensitive, max_results=a.max, include_tests=a.tests)
     if a.json:
@@ -61,7 +60,7 @@ async def _cmd_show(a: argparse.Namespace, settings: Settings) -> None:
     if rng:
         s, _, e = rng.partition("-")
         start, end = int(s), int(e or s)
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         text = await svc.read_file(repo, path, start, end)
     print(text)
 

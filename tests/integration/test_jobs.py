@@ -246,14 +246,17 @@ async def test_encerramento_limpo_devolve_o_job(int_settings: Settings, fake_llm
 
 
 async def test_trava_local_ocupada_deixa_o_job_na_fila(int_settings: Settings, fake_llm: Any) -> None:
-    """Sync da CLI segurando o flock: o worker não reserva (e nem gasta tentativa)."""
-    import fcntl
+    """Sync da CLI (ou de outro pod) segurando a trava do sync: o worker não reserva (e nem gasta tentativa)."""
+    import asyncpg
 
     async with open_service(int_settings) as svc:
         job = await svc.start_sync(None, None, batch=1, do_discover=False)
-        int_settings.lock_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(int_settings.lock_file, "w") as f:
-            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        other = await asyncpg.connect(int_settings.database_url, timeout=5)
+        try:
+            assert await other.fetchval("SELECT pg_try_advisory_lock(hashtextextended($1, 0))",
+                                        f"code_index.sync.{int_settings.pg_schema}")
             assert await svc.run_sync_worker(once=True) == 0
+        finally:
+            await other.close()
         job = await svc.get_job(job.id)
         assert (job.status, job.attempts) == ("queued", 0)

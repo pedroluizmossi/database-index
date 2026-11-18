@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import argparse
 
-from ...services import open_service
 from ...settings import Settings
-from .common import Subparsers, print_json
+from .common import Subparsers, as_remote, open_backend, print_json
 
 
 async def _cmd_api(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         if a.api_command == "domains":
             catalog = await svc.openapi_catalog()
             for domain in sorted({x["domain"] for x in catalog}):
@@ -24,16 +23,21 @@ async def _cmd_api(a: argparse.Namespace, settings: Settings) -> None:
             preview = await svc.openapi_preview(a.domain, a.service)
             print_json(preview)
             if not a.dry_run:
-                name = await svc.register_openapi(a.domain, a.service)
-                result = await svc.sync([name], batch=None, do_discover=False,
-                                        doc_pages=frozenset(a.service) if a.service else None)
+                remote = as_remote(svc)
+                if remote is not None:  # o servidor registra e enfileira; o job roda no worker
+                    job = await remote.openapi_index(a.domain, a.service)
+                    result = await remote.job_result(job["job_id"])
+                else:
+                    name = await svc.register_openapi(a.domain, a.service)
+                    result = await svc.sync([name], batch=None, do_discover=False,
+                                            doc_pages=frozenset(a.service) if a.service else None)
                 print_json(result.to_dict())
                 if result.errors:
                     raise SystemExit(1)
 
 
 async def _cmd_api_impl(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         rows = await svc.find_api_impl(" ".join(a.operation), service=a.service, domain=a.domain, limit=a.limit)
     if a.json:
         print_json(rows)

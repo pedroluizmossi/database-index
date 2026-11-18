@@ -1,0 +1,183 @@
+# Valores do chart do code-index. Veja deploy/README.md.
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: registry.example.com/code-index   # imagem do Dockerfile da raiz
+  tag: ""                                      # vazio = appVersion do Chart
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Host público (o mesmo do Ingress). Dele saem CODE_INDEX_PUBLIC_URL e CODE_INDEX_ALLOWED_HOSTS.
+publicHost: code-index.example.com
+# Esquema da URL pública. Com https, os cookies saem com Secure.
+publicScheme: https
+# Hosts extras aceitos no header Host (além do publicHost e dos nomes do Service interno).
+extraAllowedHosts: []
+# redirect_uri aceitos no OAuth do MCP, além de loopback (CODE_INDEX_OAUTH_REDIRECT_URIS).
+oauthRedirectUris: []
+#  - https://claude.ai/api/mcp/auth_callback
+
+# Configuração não secreta (vai para o ConfigMap). Chaves = variáveis de ambiente do settings.py.
+config:
+  CODE_INDEX_ADMIN_EMAILS: ""
+  GOOGLE_CLIENT_ID: ""
+  GOOGLE_ALLOWED_EMAILS: ""
+  GOOGLE_ALLOWED_DOMAIN: ""
+  AZURE_TENANT_ID: ""
+  AZURE_CLIENT_ID: ""
+  AZURE_ALLOWED_EMAILS: ""
+  AZURE_ALLOWED_DOMAIN: ""
+  EMBED_MODEL: voyage/voyage-code-4
+  RERANK_MODEL: voyage/rerank-2.5
+# Chaves vazias em "config" não são exportadas (o padrão do settings.py vale).
+
+# Segredos (os que hoje ficam no .env). Use existingSecret em produção (Secret criado fora do Helm,
+# por exemplo pelo External Secrets/Sealed Secrets) com as chaves abaixo; só as presentes são lidas.
+secrets:
+  existingSecret: ""
+  # Usados só quando existingSecret está vazio; chaves vazias ficam fora do Secret.
+  values:
+    CODE_INDEX_AUTH_SECRET: ""     # obrigatório (>= 32 caracteres)
+    VOYAGE_API_KEY: ""             # obrigatório (embeddings e rerank)
+    GITHUB_TOKEN: ""
+    WIKIJS_TOKEN: ""
+    GOOGLE_CLIENT_SECRET: ""
+    AZURE_CLIENT_SECRET: ""
+
+# Postgres (CloudNativePG, ver deploy/cnpg/cluster.yaml). A URL vem de um Secret: por padrão o
+# "<cluster>-app" que o CNPG cria, chave "uri".
+database:
+  existingSecret: code-index-db-app
+  key: uri
+  # Alternativa: URL aqui (o chart cria um Secret próprio, como hook, para o Job de migrations).
+  url: ""
+
+api:
+  replicas: 2
+  port: 8765
+  # IPs/CIDRs do proxy confiáveis para X-Forwarded-* (uvicorn --forwarded-allow-ips). "*" só é seguro
+  # porque a NetworkPolicy deixa só o Ingress Controller falar com a api; restrinja ao CIDR dos pods.
+  forwardedAllowIps: "*"
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {memory: 1536Mi}
+  hpa:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+  pdb:
+    enabled: true
+    minAvailable: 1
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+service:
+  type: ClusterIP
+  port: 8765
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "8m"
+    # Rotas que esperam o trabalho na requisição (POST /api/v1/scans/{kind}?wait=true, usado pela CLI remota,
+    # e POST /api/v1/enrich/facts) passam de 60 s em muitos clones.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "1800"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "1800"
+  tls:
+    enabled: true
+    secretName: code-index-tls
+  # Ingress separado para /mcp: Streamable HTTP sem buffering e com timeouts longos.
+  mcp:
+    annotations:
+      nginx.ingress.kubernetes.io/proxy-buffering: "off"
+      nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+      nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+      nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+
+worker:
+  # Sempre 1 réplica: o estado do CocoIndex (LMDB) é de um processo só.
+  resources:
+    requests: {cpu: 500m, memory: 1Gi}
+    limits: {memory: 4Gi}
+  # Segredos que o worker recebe (do Secret do chart ou do existingSecret; ausentes são ignorados).
+  # Nunca ponha aqui CODE_INDEX_AUTH_SECRET nem os segredos do login: só a api precisa deles.
+  secretKeys: [VOYAGE_API_KEY, GITHUB_TOKEN, GH_TOKEN, WIKIJS_TOKEN]
+  # Tempo para devolver o job em andamento à fila no SIGTERM (o lease é SYNC_JOB_LEASE_SECONDS).
+  terminationGracePeriodSeconds: 120
+  cocoindex:
+    # PVC RWO (volumeClaimTemplate). LMDB: nunca em NFS/RWX.
+    storageClass: ""
+    size: 10Gi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# Clones dos repositórios (.repos): RWX, o worker grava e a api lê (montado só leitura).
+repos:
+  existingClaim: ""
+  storageClass: ""        # confira a StorageClass RWX do cluster (ex.: nfs-csi, efs-sc, azurefile-csi)
+  size: 50Gi
+  accessModes: [ReadWriteMany]
+
+# Job de migrations (hook pre-install/pre-upgrade do Helm).
+migrations:
+  enabled: true
+  command: ["code-index", "db", "migrate"]
+  backoffLimit: 2
+  activeDeadlineSeconds: 600
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {memory: 512Mi}
+
+# Sync periódico pela CLI em modo remoto (pede um job à api; quem executa é o worker).
+syncCron:
+  enabled: false
+  schedule: "0 */6 * * *"
+  args: ["sync"]
+  # Secret com um token cix_ de scope index:write (crie depois da instalação, ver deploy/README.md).
+  tokenSecret:
+    name: code-index-sync-token
+    key: token
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {memory: 256Mi}
+
+# Usuário não-root (a imagem não define USER; o uid vem daqui).
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile: {type: RuntimeDefault}
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities: {drop: [ALL]}
+
+networkPolicy:
+  enabled: true
+  # Onde está o Ingress Controller (só ele fala com a api pela porta HTTP).
+  ingressControllerNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: ingress-nginx
+  # Postgres do CNPG: só api, worker e migrations entram na 5432.
+  postgres:
+    enabled: true
+    podSelector:
+      matchLabels:
+        cnpg.io/cluster: code-index-db
+    # O operador do CNPG consulta as instâncias (porta 8000).
+    operatorNamespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: cnpg-system
+  # Saída para fora do cluster (Voyage, GitHub, Wiki.js, login Google/Microsoft).
+  egress:
+    cidr: 0.0.0.0/0
+    except: []
+    ports: [443]

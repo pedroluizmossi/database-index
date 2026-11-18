@@ -18,6 +18,8 @@ SETTINGS_ENV = (
     "CODE_INDEX_AUTH_SECRET", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_ALLOWED_DOMAIN", "GOOGLE_ALLOWED_EMAILS",
     "CODE_INDEX_ADMIN_EMAILS", "CODE_INDEX_SESSION_TTL_HOURS", "CODE_INDEX_TOKEN_TTL_DAYS",
     "CODE_INDEX_RATE_READ_PER_MIN", "CODE_INDEX_RATE_SEARCH_PER_MIN", "CODE_INDEX_RATE_SYNC_PER_HOUR",
+    "CODE_INDEX_URL", "CODE_INDEX_TOKEN", "CODE_INDEX_CREDENTIALS", "CODE_INDEX_CLI_MODE", "CODE_INDEX_REMOTE_TIMEOUT",
+    "XDG_CONFIG_HOME",
 )
 
 
@@ -40,7 +42,6 @@ def make_settings(tmp_path, clean_env) -> Callable[..., Settings]:
             "base_dir": base,
             "repos_dir": base / ".repos",
             "cocoindex_db": base / ".cocoindex",
-            "lock_file": base / ".code-index.lock",
         }
         values.update(overrides)
         return Settings(**values)

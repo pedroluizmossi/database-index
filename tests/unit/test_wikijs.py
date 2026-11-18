@@ -10,7 +10,8 @@ import httpx
 import pytest
 
 from code_index.domain.models import DocSource
-from code_index.sources.wikijs import MANIFEST, WikiJsClient, WikiJsError, sync_docs
+from code_index.settings import Settings
+from code_index.sources.wikijs import MANIFEST, WikiJsClient, WikiJsError, check_wiki_url, sync_docs, wikijs_token
 
 
 class FakeWiki:
@@ -207,3 +208,29 @@ def test_selecao_inalterada_reproduz_as_regras_escritas_a_mao() -> None:
     include, exclude = ("Plataforma", "Plataforma/**", "SRE/oncall/**"), ("Plataforma/Legado/**",)
     paths = [*WIKI_PATHS, "Plataforma/Legado", "SRE/oncall/escala"]
     assert selection_rules(paths, _matches(include, exclude, paths)) == (include, exclude)
+
+
+def _wiki_settings(*hosts: str) -> Settings:
+    return Settings(_env_file=None, wikijs_token="tok", wikijs_allowed_hosts=list(hosts))  # type: ignore[call-arg]
+
+
+def test_url_da_wiki_https_e_allowlist() -> None:
+    livre, restrito = _wiki_settings(), _wiki_settings("wiki.exemplo.com")
+    check_wiki_url("https://qualquer.exemplo.com", livre, remote=False)       # CLI local sem allowlist: livre
+    check_wiki_url("http://localhost:3000", livre, remote=False)              # http só em loopback
+    with pytest.raises(ValueError, match="https"):
+        check_wiki_url("http://wiki.exemplo.com", restrito, remote=True)
+    with pytest.raises(ValueError):
+        check_wiki_url("ftp://wiki.exemplo.com", livre, remote=False)
+    with pytest.raises(PermissionError, match="ALLOWED_HOSTS"):               # API sem allowlist: recusa
+        check_wiki_url("https://wiki.exemplo.com", livre, remote=True)
+    check_wiki_url("https://WIKI.exemplo.com/", restrito, remote=True)
+    with pytest.raises(PermissionError, match="atacante"):
+        check_wiki_url("https://atacante.exemplo.net", restrito, remote=True)
+
+
+def test_token_da_wiki_so_para_hosts_da_allowlist() -> None:
+    assert wikijs_token(_wiki_settings(), "https://qualquer.exemplo.com") == "tok"
+    assert wikijs_token(_wiki_settings("wiki.exemplo.com"), "https://wiki.exemplo.com") == "tok"
+    with pytest.raises(WikiJsError, match="não é enviado"):
+        wikijs_token(_wiki_settings("wiki.exemplo.com"), "https://outra.exemplo.com")

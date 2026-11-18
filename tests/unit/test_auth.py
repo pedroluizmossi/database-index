@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
+from fastapi import HTTPException
 
 from code_index.domain.auth import (
     ADMIN, ENRICH_WRITE, INDEX_WRITE, SEARCH_READ, Principal, check_can_issue, effective_scopes, scopes_for_user,
     validate_scopes,
 )
-from code_index.interfaces.http.security import RateLimiter
+from code_index.interfaces.http.security import RateLimiter, enforce_rate_limit
+from code_index.settings import Settings
 
 
 def session(*scopes: str) -> Principal:
@@ -47,25 +51,39 @@ def test_token_de_agent_nao_emite_token() -> None:
     assert agent.actor == "ana@example.com [bot]"
 
 
-def test_rate_limiter_janela_deslizante(monkeypatch: pytest.MonkeyPatch) -> None:
-    now = [1000.0]
-    monkeypatch.setattr("code_index.interfaces.http.security.time.monotonic", lambda: now[0])
-    rl = RateLimiter()
-    assert rl.hit("search", "t1", limit=2, window=60) is None
-    assert rl.hit("search", "t1", limit=2, window=60) is None
-    assert rl.hit("search", "t1", limit=2, window=60) == pytest.approx(60)
-    assert rl.hit("search", "t2", limit=2, window=60) is None  # outra chave, outro balde
-    now[0] += 61
-    assert rl.hit("search", "t1", limit=2, window=60) is None
+class FakeService:
+    def __init__(self, retry: float | None = None) -> None:
+        self.retry = retry
+        self.calls: list[tuple[str, str, int, float]] = []
+
+    async def rate_limit_hit(self, bucket: str, key: str, *, limit: int, window: float) -> float | None:
+        self.calls.append((bucket, key, limit, window))
+        return self.retry
 
 
-def test_rate_limiter_descarta_chaves_ociosas(monkeypatch: pytest.MonkeyPatch) -> None:
-    now = [1000.0]
-    monkeypatch.setattr("code_index.interfaces.http.security.time.monotonic", lambda: now[0])
-    rl = RateLimiter()
-    for i in range(100):  # tokens que rotacionam: cada um usado uma vez e nunca mais
-        assert rl.hit("search", f"t{i}", limit=2, window=60) is None
-    now[0] += 61
-    for _ in range(RateLimiter._SWEEP_EVERY):
-        assert rl.hit("search", "ativo", limit=10**6, window=60) is None
-    assert set(rl._events) == {("search", "ativo")}
+async def test_rate_limiter_delega_ao_servico() -> None:
+    svc = FakeService(retry=12.5)
+    rl = RateLimiter(lambda: svc)  # type: ignore[arg-type, return-value]
+    assert await rl.hit("search", "t1", limit=2, window=60) == 12.5
+    assert svc.calls == [("search", "t1", 2, 60)]
+
+
+async def test_rate_limiter_sem_servico_deixa_passar() -> None:
+    def not_started() -> Any:
+        raise RuntimeError("serviço ainda não iniciado")
+
+    assert await RateLimiter(not_started).hit("oauth-register", "1.2.3.4", limit=1, window=3600) is None
+
+
+async def test_enforce_rate_limit_429_com_retry_after() -> None:
+    settings = Settings(_env_file=None, rate_limit_search_per_min=5)
+    agent = Principal(subject="ana@example.com", kind="agent", scopes=effective_scopes([SEARCH_READ]),
+                      token_id="tok-1", token_name="bot")
+    svc = FakeService()
+    rl = RateLimiter(lambda: svc)  # type: ignore[arg-type, return-value]
+    await enforce_rate_limit(rl, settings, agent, "search")
+    assert svc.calls == [("search", "tok-1", 5, 60.0)]  # chave = id do token, nunca o valor
+    svc.retry = 41.3
+    with pytest.raises(HTTPException) as exc:
+        await enforce_rate_limit(rl, settings, agent, "search")
+    assert exc.value.status_code == 429 and exc.value.headers == {"Retry-After": "42"}

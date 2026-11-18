@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import argparse
 
-from ...services import open_service
 from ...settings import Settings
-from .common import Subparsers, print_json
+from .common import Subparsers, open_backend, print_json
 
 
 def _fmt_int(n: float | int | None) -> str:
@@ -14,7 +13,7 @@ def _fmt_int(n: float | int | None) -> str:
 
 
 async def _cmd_usage(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         rep = await svc.usage_report(a.days, email=a.email)
     if a.json:
         print_json(rep, default=str)

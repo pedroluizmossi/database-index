@@ -39,7 +39,12 @@ class GraphMixin(ServiceBase):
 
     async def scan_calls(self, repos: Sequence[str] | None = None, *, force: bool = False) -> dict[str, int]:
         """Lê as chamadas dos repos de código indexados cuja revisão mudou desde a última leitura (ou todos, com
-        `force`). Sem custo de API. Apaga as arestas de repos que saíram."""
+        `force`). Sem custo de API. Apaga as arestas de repos que saíram. Uma leitura por vez entre processos e
+        pods (ScanBusy, um RuntimeError, se outra já roda)."""
+        async with self._scan_lock("graph"):
+            return await self._scan_calls(repos, force=force)
+
+    async def _scan_calls(self, repos: Sequence[str] | None, *, force: bool) -> dict[str, int]:
         store = self._graph
         wanted = await self._resolve_repos(repos)
         rows = await self._repos.all_rows()

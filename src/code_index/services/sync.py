@@ -8,8 +8,8 @@ import logging
 import os
 import socket
 import uuid
-from collections.abc import Coroutine
-from typing import Any, Literal
+from collections.abc import Coroutine, Sequence
+from typing import TYPE_CHECKING, Any, Literal
 
 from ..domain.auth import ADMIN, Principal
 from ..domain.models import SyncResult
@@ -17,12 +17,18 @@ from ..indexing.orchestrator import ProgressSink, SyncBusy
 from ..infra.job_store import ActiveJobExists, JobRecord
 from .enrich import EnrichMixin
 from .apis import ApisMixin
+from .base import ScanBusy
 from .graph import GraphMixin
 from .vectors import VectorsMixin, _now
 from .tests import TestsMixin
+from .wiki import WIKI_TYPE
 
 
 log = logging.getLogger(__name__)
+
+
+class ScanFailed(Exception):
+    """A leitura pedida com wait=true falhou (erro interno: vira 500, o detalhe fica no log e no status)."""
 
 
 def worker_id(role: str) -> str:
@@ -32,6 +38,9 @@ def worker_id(role: str) -> str:
 
 class SyncMixin(VectorsMixin, ApisMixin, EnrichMixin, TestsMixin, GraphMixin):
     """Sync e jobs. Depois de indexar, recalcula fatos dos repos alterados e as relações (sem custo de API)."""
+
+    if TYPE_CHECKING:  # WikiMixin (a fachada junta os dois; herdar daqui quebraria a MRO)
+        async def index_doc_pages(self, name: str, pages: Sequence[str]) -> SyncResult: ...
 
     async def sync(
         self,
@@ -86,9 +95,11 @@ class SyncMixin(VectorsMixin, ApisMixin, EnrichMixin, TestsMixin, GraphMixin):
             out[kind] = {**status, "running": task is not None and not task.done(), "last_run": runs.get(kind)}
         return out
 
-    async def start_scan(self, kind: str, principal: Principal | None, *, force: bool = False) -> dict[str, Any]:
+    async def start_scan(self, kind: str, principal: Principal | None, *, force: bool = False,
+                         repos: list[str] | None = None) -> dict[str, Any]:
         """Relê o grafo de chamadas ou os casos de teste em segundo plano (sem custo de API). Uma leitura de cada
-        tipo por vez neste processo (RuntimeError se já houver). `force`: relê mesmo os repos sem mudança."""
+        tipo por vez neste processo (RuntimeError se já houver). `force`: relê mesmo os repos sem mudança;
+        `repos`: só estes (padrão: todos os de código indexados)."""
         if kind not in self.SCAN_KINDS:
             raise ValueError(f"leitura desconhecida: {kind} (use {', '.join(self.SCAN_KINDS)})")
         if self._scan_tasks is None:
@@ -98,27 +109,47 @@ class SyncMixin(VectorsMixin, ApisMixin, EnrichMixin, TestsMixin, GraphMixin):
         if running is not None and not running.done():
             raise RuntimeError("já existe uma leitura deste tipo em andamento")
         actor = principal.actor if principal else "operador local"
-        run: dict[str, Any] = {"requested_by": actor, "force": force, "started_at": _now(), "finished_at": None,
-                               "status": "running", "result": None, "error": None}
+        if repos:
+            await self._resolve_repos(repos)  # nome desconhecido falha já (ValueError), não dentro da tarefa
+        run: dict[str, Any] = {"requested_by": actor, "force": force, "repos": repos or None, "started_at": _now(),
+                               "finished_at": None, "status": "running", "result": None, "error": None}
         self._scan_runs[kind] = run
 
         async def go() -> None:
             try:
-                run["result"] = await (self.scan_calls(force=force) if kind == "graph" else self.scan_tests(force=force))
+                run["result"] = await (self.scan_calls(repos or None, force=force) if kind == "graph"
+                                       else self.scan_tests(repos or None, force=force))
                 run["status"] = "done"
+            except ScanBusy as e:  # outra réplica (ou o fim de um sync) está lendo: não é falha da leitura
+                run["status"], run["error"] = "busy", str(e)
             except Exception as e:  # noqa: BLE001 - o erro vai para o estado, não derruba o servidor
                 log.exception("leitura %s falhou", kind)
                 run["status"], run["error"] = "failed", str(e)[:500]
             finally:
                 run["finished_at"] = _now()
             await self._audit.record(actor=actor, token_id=principal.token_id if principal else None,
-                                     action=f"scan:{kind}", params={"status": run["status"], "force": force})
+                                     action=f"scan:{kind}",
+                                     params={"status": run["status"], "force": force, "repos": repos or None})
 
         task = asyncio.create_task(go())
         self._scan_tasks[kind] = task
         self._job_tasks.add(task)
         task.add_done_callback(self._job_tasks.discard)
         return await self.scans_status()
+
+    async def run_scan(self, kind: str, principal: Principal | None, *, force: bool = False,
+                       repos: list[str] | None = None) -> dict[str, int]:
+        """Como `start_scan`, mas espera o fim e devolve o resultado (o `wait=true` da API). Usa a mesma guarda:
+        RuntimeError se já houver uma leitura deste tipo em andamento; a falha da leitura vira RuntimeError."""
+        await self.start_scan(kind, principal, force=force, repos=repos)
+        assert self._scan_tasks is not None and self._scan_runs is not None
+        await asyncio.shield(self._scan_tasks[kind])  # a conexão do cliente cair não interrompe a leitura
+        run = self._scan_runs[kind]
+        if run["status"] == "busy":
+            raise ScanBusy(run["error"])
+        if run["status"] != "done":
+            raise ScanFailed(f"leitura {kind} falhou: {run['error']}")
+        return dict(run["result"])
 
     async def after_index(self) -> dict[str, Any]:
         """Fatos dos repos cuja revisão mudou + catálogo de documentos + relações derivadas + resumos de
@@ -146,19 +177,44 @@ class SyncMixin(VectorsMixin, ApisMixin, EnrichMixin, TestsMixin, GraphMixin):
         principal: Principal | None,
         names: list[str] | None,
         *,
-        batch: int,
+        batch: int | None,
         do_discover: bool = True,
         pull: bool = True,
+        full: bool = False,
+        doc_pages: list[str] | None = None,
         openapi_domain: str | None = None,
         openapi_services: list[str] | None = None,
     ) -> JobRecord:
         """Enfileira uma indexação e devolve o job (`queued`, já com id). Quem executa é o worker
         (`run_sync_worker`: embutido no `serve` ou o `code-index worker`). Um job ativo por vez.
 
+        `batch` None = sem limite de lote (o `--all` da CLI). `full`: reprocessa ignorando caches (caro; só
+        admin). `doc_pages`: só estas páginas (sem idioma) de UMA fonte de documentação (o `--page` da CLI).
         Levanta RuntimeError (ActiveJobExists) se já houver um job na fila ou rodando.
         """
         actor = principal.actor if principal else "operador local"
-        params: dict[str, Any] = {"repos": names, "batch": batch, "discover": do_discover, "pull": pull}
+        params: dict[str, Any] = {"repos": names, "batch": batch, "all": batch is None,
+                                  "discover": do_discover, "pull": pull}
+        if full:
+            if principal is not None and not principal.has(ADMIN):
+                raise PermissionError("só administradores pedem reprocessamento completo (full): ignora os caches")
+            params["full"] = True
+        if batch is None and not names and doc_pages is None and openapi_domain is None:
+            # Lote automático sem teto (o --all): tão caro quanto o full; quem não é admin pede um lote limitado.
+            if principal is not None and not principal.has(ADMIN):
+                raise PermissionError("só administradores pedem o lote sem limite (all); informe um lote (batch)")
+        if doc_pages is not None:
+            if openapi_domain is not None or full:
+                raise ValueError("páginas avulsas não combinam com full nem com OpenAPI")
+            if not names or len(names) != 1:
+                raise ValueError("páginas avulsas exigem exatamente uma fonte de documentação, ex.: docs__wiki")
+            source = await self._doc_source(names[0])
+            if source.type != WIKI_TYPE:
+                raise ValueError("indexação por página só existe para wikis")
+            pages = sorted({p.strip().strip("/") for p in doc_pages if p.strip().strip("/")})
+            if not pages or any(".." in p.split("/") for p in pages):
+                raise ValueError("informe caminhos de página válidos, ex.: Plataforma/Email")
+            params["repos"], params["doc_pages"] = [source.repo_name], pages
         active = await self._jobs.active()
         if active is not None:  # antes de registrar fonte nova (a criação abaixo também recusa, atomicamente)
             raise ActiveJobExists(active.id, active.status)
@@ -204,7 +260,7 @@ class SyncMixin(VectorsMixin, ApisMixin, EnrichMixin, TestsMixin, GraphMixin):
             try:
                 await self.recover_interrupted_jobs()
                 # Trava local ocupada (sync da CLI, watch): não reserva; o job espera na fila.
-                if not self._indexer.busy():
+                if not await self._indexer.busy():
                     job = await self._jobs.lease_next(worker=worker,
                                                       lease_seconds=self.settings.sync_job_lease_seconds)
             except asyncio.CancelledError:
@@ -276,12 +332,17 @@ class SyncMixin(VectorsMixin, ApisMixin, EnrichMixin, TestsMixin, GraphMixin):
         heartbeat = asyncio.create_task(self._heartbeat(job.id, worker))
         try:
             batch = params.get("batch")
-            res = await self.sync(
-                params.get("repos"), batch=self.settings.default_batch if batch is None else int(batch),
-                do_discover=bool(params.get("discover", True)), pull=bool(params.get("pull", True)),
-                progress=False, allow_register=job.allow_register,
-                doc_pages=frozenset(services) if services is not None else None, on_progress=save_progress,
-            )
+            pages = params.get("doc_pages")
+            if pages:  # páginas avulsas de uma wiki: o mesmo caminho do `code-index index docs__x --page`
+                res = await self.index_doc_pages(params["repos"][0], pages)
+            else:
+                res = await self.sync(
+                    params.get("repos"),
+                    batch=None if params.get("all") else (self.settings.default_batch if batch is None else int(batch)),
+                    do_discover=bool(params.get("discover", True)), pull=bool(params.get("pull", True)),
+                    full=bool(params.get("full", False)), progress=False, allow_register=job.allow_register,
+                    doc_pages=frozenset(services) if services is not None else None, on_progress=save_progress,
+                )
             status, result = "done", res.to_dict()
             if res.all_failed:
                 # Nada foi indexado e todos os selecionados falharam: o job falhou, não "concluiu".

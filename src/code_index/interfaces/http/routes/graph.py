@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 
 from ....domain.auth import INDEX_WRITE, SEARCH_READ, Principal
 from ..deps import audited, http_error
@@ -54,15 +54,28 @@ async def scans_status(request: Request, _: Principal = Depends(require(INDEX_WR
 
 
 @router.post("/api/v1/scans/{kind}", tags=["sync"], status_code=202,
-             summary="Relê o grafo de chamadas ou os casos de teste em segundo plano (sem custo de API)")
-async def start_scan(kind: Literal["graph", "tests"], request: Request, force: bool = Query(False),
+             summary="Relê o grafo de chamadas ou os casos de teste (sem custo de API): em segundo plano, ou "
+                     "esperando o fim com wait=true")
+async def start_scan(kind: Literal["graph", "tests"], request: Request, response: Response,
+                     force: bool = Query(False), repo: list[str] | None = Query(None),
+                     wait: bool = Query(False, description="espera a leitura e devolve {kind, result} (como a CLI)"),
                      principal: Principal = Depends(require(INDEX_WRITE))) -> dict[str, Any]:
+    """Sem `wait`, responde 202 com o estado (acompanhe em GET /api/v1/scans/status; o estado é do processo que
+    recebeu o pedido). Com `wait`, responde 200 com o mesmo resultado de `code-index graph|tests scan`."""
     svc = get_service(request)
-    enforce_rate_limit(request.app.state.limiter, get_settings_dep(request), principal, "sync")
+    await enforce_rate_limit(request.app.state.limiter, get_settings_dep(request), principal, "sync")
+    repos = repo or None
+    params = {"force": force, "repos": repos}
+    if wait:
+        response.status_code = status.HTTP_200_OK
+        scan = svc.run_scan(kind, principal, force=force, repos=repos)  # mesma guarda do segundo plano (409)
+        return {"kind": kind, "result": await audited(request, principal, f"scan:{kind}", params, scan)}
     try:
-        state = await svc.start_scan(kind, principal, force=force)
-    except RuntimeError as e:
-        await svc.audit(principal, f"scan:{kind}:start", status=409, client_ip=client_ip(request))
-        raise HTTPException(status.HTTP_409_CONFLICT, str(e)) from None
-    await svc.audit(principal, f"scan:{kind}:start", params={"force": force}, status=202, client_ip=client_ip(request))
+        state = await svc.start_scan(kind, principal, force=force, repos=repos)
+    except (ValueError, RuntimeError) as e:
+        err = http_error(e)
+        await svc.audit(principal, f"scan:{kind}:start", params=params, status=err.status_code,
+                        client_ip=client_ip(request))
+        raise err from None
+    await svc.audit(principal, f"scan:{kind}:start", params=params, status=202, client_ip=client_ip(request))
     return state

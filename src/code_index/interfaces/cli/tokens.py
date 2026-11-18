@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import argparse
 
-from ...services import open_service
 from ...settings import Settings
-from .common import Subparsers
+from .common import Subparsers, local_only, open_backend
 
 
+@local_only("emitir token é coisa de pessoa logada: crie na interface web (Tokens), com os seus scopes")
 async def _cmd_token_create(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         token, info = await svc.create_agent_token(
             None, name=a.name, scopes=a.scopes, ttl_days=a.days, owner_email=a.owner,
         )
@@ -21,7 +21,7 @@ async def _cmd_token_create(a: argparse.Namespace, settings: Settings) -> None:
 
 
 async def _cmd_token_list(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         tokens = await svc.list_tokens(None, include_inactive=a.all)
     if not tokens:
         print("nenhum token.")
@@ -34,7 +34,7 @@ async def _cmd_token_list(a: argparse.Namespace, settings: Settings) -> None:
 
 
 async def _cmd_token_revoke(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         await svc.revoke_token(None, a.id)
         await svc.audit(None, "token:revoke:local", params={"id": a.id})
     print(f"token {a.id} revogado.")

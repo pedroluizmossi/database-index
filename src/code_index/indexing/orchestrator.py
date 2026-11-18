@@ -1,7 +1,7 @@
 """Orquestra descoberta, seleção de lote, git sync e o pipeline CocoIndex.
 
 Fluxo de um `sync`, em etapas (métodos privados, nesta ordem):
-  1. `_lock`: um sync por vez (flock em `lock_file`);
+  1. `exclusive`: um sync por vez (advisory lock do Postgres, vale entre processos e pods);
   2. `_discover_all`: redescobre os repos das orgs pela API (opcional);
   3. `_load_rows`: espelha os repos avulsos e fontes de docs da configuração (banco) na tabela de estado e poda orgs removidas;
   4. `_select`: os nomes pedidos, ou um lote de até N repos (alterados upstream > pendentes > com erro);
@@ -15,13 +15,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import fcntl
 import logging
+import shutil
 import time
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 from pathlib import Path
 
+import asyncpg
 import cocoindex as coco
 
 from ..domain.models import Org, Repo, RepoState, SyncResult
@@ -33,6 +34,7 @@ from ..domain.policies import (
     resolve_name,
 )
 from ..infra.config_store import ConfigStore
+from ..infra.db import try_advisory_lock
 from ..infra.git import GitClient
 from ..infra.github import GitHubClient
 from ..infra.repo_store import RepoStore
@@ -48,10 +50,12 @@ log = logging.getLogger(__name__)
 ProgressSink = Callable[[dict[str, Any]], Awaitable[None]]
 # De quanto em quanto tempo o progresso do pipeline é lido e publicado (o job é gravado no banco).
 PROGRESS_INTERVAL_S = 2.0
+# De quanto em quanto tempo o sync confere a conexão que segura a trava (caiu = trava perdida: o sync para).
+LOCK_HEARTBEAT_S = 30.0
 
 
 class SyncBusy(RuntimeError):
-    """Outro sync (CLI, watch ou worker) detém a trava neste computador."""
+    """Outro sync (CLI, watch ou worker, em qualquer processo ou pod do mesmo banco) detém a trava."""
 
 
 class Indexer:
@@ -62,8 +66,10 @@ class Indexer:
         config: ConfigStore,
         git: GitClient,
         github: GitHubClient,
+        pool: asyncpg.Pool,
     ) -> None:
         self._settings = settings
+        self._pool = pool  # trava do sync (advisory lock): o mesmo banco das tabelas de estado
         self._repos = repos
         self._config = config
         self._git = git
@@ -116,7 +122,7 @@ class Indexer:
             return res
         tracker = SyncProgress()
         publish = _publisher(tracker, on_progress)
-        with self.exclusive():
+        async with self.exclusive():
             orgs = await self._config.orgs()
             if do_discover and orgs:
                 await publish()
@@ -150,32 +156,49 @@ class Indexer:
             for name, msg in res.errors.items():
                 tracker.update(name, status="error", error=msg.splitlines()[0][:300] if msg else msg)
             await publish()
+            await self._prune_orphan_folders()
         return res
+
+    async def _prune_orphan_folders(self) -> None:
+        """Apaga as pastas de `repos_dir` de repos e fontes que saíram (repo/org/fonte removidos pela API, cujo pod
+        monta os clones só para leitura e não apaga nada). Só pastas que o code-index criou: clone git ou pasta de
+        documentação; o resto fica. Roda sob a trava do sync (nenhum sync lendo os clones)."""
+        root = self._settings.repos_dir
+        if not root.is_dir():
+            return
+        known = set(await self._repos.all_rows()) | set(await configured_repos(self._config))
+        for entry in await asyncio.to_thread(lambda: sorted(root.iterdir())):
+            if entry.name in known or entry.name.startswith(".") or not entry.is_dir() or entry.is_symlink():
+                continue
+            if not ((entry / ".git").exists() or is_docs_folder(entry)):
+                continue
+            try:
+                await asyncio.to_thread(shutil.rmtree, entry)
+                log.info("pasta órfã apagada: %s (repo ou fonte que saiu da configuração)", entry)
+            except OSError as e:
+                log.warning("não consegui apagar a pasta órfã %s: %s", entry, e)
 
     # --- etapas -------------------------------------------------------------------
 
-    @contextlib.contextmanager
-    def exclusive(self) -> Iterator[None]:
-        """Trava do sync (arquivo, entre processos). Também a usa quem apaga clones, para não tirar a pasta
-        de baixo de um sync em andamento. RuntimeError se outro sync já está rodando."""
-        path = self._settings.lock_file
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w") as f:
-            try:
-                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                raise SyncBusy(
-                    "já existe um sync em andamento (watch, worker ou outro terminal)"
-                ) from None
+    @property
+    def lock_key(self) -> str:
+        """Chave do advisory lock do sync: por schema (dois índices no mesmo banco não se travam)."""
+        return f"code_index.sync.{self._settings.pg_schema}"
+
+    @contextlib.asynccontextmanager
+    async def exclusive(self) -> AsyncIterator[None]:
+        """Trava do sync: advisory lock do Postgres numa conexão reservada do pool, mantida durante todo o
+        bloco (vale entre processos e pods). Também a usa quem apaga clones, para não tirar a pasta de baixo
+        de um sync em andamento. SyncBusy (RuntimeError) se outro sync já está rodando."""
+        async with try_advisory_lock(self._pool, self.lock_key, heartbeat_s=LOCK_HEARTBEAT_S) as got:
+            if not got:
+                raise SyncBusy("já existe um sync em andamento (watch, worker ou outro terminal)")
             yield
 
-    def busy(self) -> bool:
+    async def busy(self) -> bool:
         """True se outro sync detém a trava agora (sonda sem esperar; o worker a usa antes de reservar um job)."""
-        try:
-            with self.exclusive():
-                return False
-        except SyncBusy:
-            return True
+        async with try_advisory_lock(self._pool, self.lock_key) as got:
+            return not got
 
     async def _discover_all(self, orgs: list[Org], res: SyncResult) -> None:
         for org in orgs:

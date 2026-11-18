@@ -53,7 +53,7 @@ async def openapi_preview(body: OpenApiSelection, request: Request,
 async def openapi_index(body: OpenApiSelection, request: Request,
                         principal: Principal = Depends(require(ADMIN))) -> dict[str, Any]:
     svc = get_service(request)
-    enforce_rate_limit(request.app.state.limiter, get_settings_dep(request), principal, "sync")
+    await enforce_rate_limit(request.app.state.limiter, get_settings_dep(request), principal, "sync")
     try:
         job = await svc.start_sync(principal, None, batch=1, do_discover=False,
                                    openapi_domain=body.domain, openapi_services=body.services)

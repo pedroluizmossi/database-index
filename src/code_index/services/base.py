@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Sequence
+import os
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from ..domain.auth import Principal
 from ..domain.models import DocSource, RepoState, RepoStatus, validate_name
@@ -18,12 +20,14 @@ from ..indexing.orchestrator import Indexer, configured_repos
 from ..infra.auth_store import AuditStore, TokenStore
 from ..infra.chunk_store import ChunkStore
 from ..infra.config_store import ConfigStore
+from ..infra.db import try_advisory_lock
 from ..infra.document_store import DocumentStore
 from ..infra.enrich_store import EnrichStore
 from ..infra.git import GitClient
 from ..infra.grep import Grep
 from ..infra.job_store import JobStore
 from ..infra.oauth_store import OAuthStore
+from ..infra.rate_limit_store import RateLimitStore
 from ..infra.relation_store import RelationStore
 from ..infra.repo_store import RepoStore
 from ..infra.symbol_store import SymbolStore
@@ -33,6 +37,10 @@ from ..retrieval.search import Searcher
 from ..settings import Settings
 
 log = logging.getLogger(__name__)
+
+
+class ScanBusy(RuntimeError):
+    """Outra leitura dos clones do mesmo tipo (grafo ou testes) está em andamento, em qualquer processo ou pod."""
 
 
 def _iso_local(dt: datetime | None) -> str | None:
@@ -64,6 +72,7 @@ class ServiceBase:
         oauth: OAuthStore,
         users: UserStore,
         usage: UsageStore,
+        rate_limits: RateLimitStore | None = None,
     ) -> None:
         self.settings = settings
         self._repos = repos
@@ -83,11 +92,37 @@ class ServiceBase:
         self._oauth = oauth
         self._users = users
         self._usage = usage
+        self._rate_limits = rate_limits  # None: sem rate limit (fail-open; services/rate_limit.py)
         self._job_wakeup = asyncio.Event()  # job novo na fila: acorda o worker embutido sem esperar a consulta
         self._job_tasks: set[asyncio.Task[Any]] = set()  # worker embutido (services/sync.py)
         self._owner_cache: Any = None  # dono no DDD resolvido (services/ownership.py); limpo ao recalcular relações
 
     # ------------------------------------------------------------ repos e fontes
+
+    @asynccontextmanager
+    async def _scan_lock(self, kind: str) -> AsyncIterator[None]:
+        """Uma leitura dos clones de cada tipo por vez (advisory lock: vale entre réplicas). As gravações
+        (DELETE + INSERT por repo) de duas leituras simultâneas do mesmo repo colidiriam."""
+        key = f"code_index.scan.{kind}.{self.settings.pg_schema}"
+        async with try_advisory_lock(self._chunks.pool, key) as got:
+            if not got:
+                raise ScanBusy(f"já existe uma leitura de {kind} em andamento (outro pedido ou o fim de um sync)")
+            yield
+
+    async def _remove_local(self, fn: Callable[..., None], *args: Any) -> bool:
+        """Apaga um clone ou pasta de fonte em `repos_dir` (`fn(*args)` numa thread). Devolve False sem apagar
+        quando a pasta dos clones não é gravável (a api no Kubernetes monta os clones só para leitura) ou quando a
+        remoção falha: o worker apaga as pastas órfãs no fim do próximo sync (`Indexer._prune_orphan_folders`)."""
+        root = self.settings.repos_dir
+        if root.exists() and not os.access(root, os.W_OK):
+            log.info("%s é só leitura neste processo: a pasta fica para o worker apagar no próximo sync", root)
+            return False
+        try:
+            await asyncio.to_thread(fn, *args)
+            return True
+        except OSError as e:
+            log.warning("não consegui apagar a pasta (o worker tenta no próximo sync): %s", e)
+            return False
 
     async def _local_path(self, repo: str) -> Path:
         try:

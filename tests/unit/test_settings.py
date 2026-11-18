@@ -44,7 +44,6 @@ def test_caminhos_relativos_sao_resolvidos_a_partir_de_base_dir(make_settings, t
     assert s.base_dir == base.resolve()
     assert s.repos_dir == (base / "clones").resolve()
     assert s.cocoindex_db == (base / ".db").resolve()
-    assert s.lock_file == (base / ".code-index.lock").resolve()
 
 
 def test_caminho_absoluto_nao_e_alterado(make_settings, tmp_path: Path) -> None:

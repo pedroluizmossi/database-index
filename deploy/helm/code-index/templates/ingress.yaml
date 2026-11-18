@@ -1,0 +1,38 @@
+{{- if .Values.ingress.enabled }}
+{{- $root := . }}
+{{- range $part := list "main" "mcp" }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "code-index.fullname" $root }}{{ if eq $part "mcp" }}-mcp{{ end }}
+  labels:
+    {{- include "code-index.labels" $root | nindent 4 }}
+  {{- $ann := $root.Values.ingress.annotations }}
+  {{- if eq $part "mcp" }}{{ $ann = merge (dict) $root.Values.ingress.mcp.annotations $root.Values.ingress.annotations }}{{ end }}
+  {{- with $ann }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with $root.Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if $root.Values.ingress.tls.enabled }}
+  tls:
+    - hosts: [{{ $root.Values.publicHost | quote }}]
+      secretName: {{ $root.Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ $root.Values.publicHost | quote }}
+      http:
+        paths:
+          - path: {{ if eq $part "mcp" }}/mcp{{ else }}/{{ end }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "code-index.apiService" $root }}
+                port:
+                  name: http
+{{- end }}
+{{- end }}

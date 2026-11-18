@@ -7,11 +7,14 @@ pelo CocoIndex.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 import asyncpg
 from pgvector.asyncpg import register_vector
@@ -63,7 +66,15 @@ async def create_pool(settings: Settings) -> asyncpg.Pool:
         # O pg_search avisa (WARNING) quando não usa o plano de agregação dele (ex.: COUNT ... GROUP BY):
         # é só ruído. Vai como parâmetro de conexão porque o pool faz RESET ALL ao devolver a conexão
         # (um SET no init seria perdido). Parâmetro com ponto é aceito mesmo sem a extensão.
-        server_settings={"paradedb.planner_warnings": "off"},
+        # Keepalive do lado do servidor: a trava do sync (advisory lock de sessão) fica numa conexão ociosa por
+        # horas. Se o pod do worker some sem fechar o TCP, o Postgres derruba a sessão (e solta a trava) em ~2 min,
+        # em vez das ~2 h do padrão do SO.
+        server_settings={
+            "paradedb.planner_warnings": "off",
+            "tcp_keepalives_idle": "60",
+            "tcp_keepalives_interval": "10",
+            "tcp_keepalives_count": "6",
+        },
     )
 
 
@@ -90,6 +101,92 @@ async def migrate(pool: asyncpg.Pool, settings: Settings) -> list[str]:
                 await conn.execute(f'INSERT INTO "{schema}".schema_migrations (version) VALUES ($1)', version)
                 applied_now.append(version)
     return applied_now
+
+
+class AdvisoryLockLost(RuntimeError):
+    """A conexão que segurava a trava caiu: a trava sumiu no servidor e o trabalho protegido foi interrompido."""
+
+
+def _consume(task: asyncio.Future[Any]) -> None:
+    """Lê o resultado de uma task abandonada (evita 'Task exception was never retrieved' no log)."""
+    if not task.cancelled():
+        task.exception()
+
+
+async def _unlock(conn: asyncpg.Connection, key: str) -> None:
+    """`pg_advisory_unlock` blindado contra cancelamento. Cancelado no meio, espera o unlock até 5 s; se não
+    completar (ou falhar), encerra a conexão: fechar a sessão solta a trava no servidor."""
+    task = asyncio.ensure_future(conn.execute("SELECT pg_advisory_unlock(hashtextextended($1, 0))", key))
+    task.add_done_callback(_consume)
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        try:
+            await asyncio.wait_for(task, 5)
+        except BaseException:  # noqa: BLE001 - qualquer falha aqui: derruba a sessão (solta a trava)
+            conn.terminate()
+        raise
+    except BaseException:
+        conn.terminate()
+        raise
+
+
+@asynccontextmanager
+async def try_advisory_lock(pool: asyncpg.Pool, key: str, *,
+                            heartbeat_s: float | None = None) -> AsyncIterator[bool]:
+    """Tenta a trava de sessão `pg_try_advisory_lock` (sem esperar) numa conexão reservada do pool.
+
+    Devolve True se conseguiu; a conexão fica reservada (e a trava, de pé) até o fim do bloco, quando a trava é
+    liberada com `pg_advisory_unlock` e a conexão volta ao pool, inclusive em erro ou cancelamento. Vale entre
+    processos e pods que usam o mesmo banco. Se o unlock não completar, a conexão é encerrada: fechar a sessão
+    solta a trava no servidor (e o asyncpg ainda roda `pg_advisory_unlock_all()` ao devolver uma conexão).
+
+    `heartbeat_s`: a cada N segundos confere a conexão da trava (`SELECT 1`). Se ela caiu, a trava já não existe
+    no servidor (outro processo pode pegá-la): a task que está no bloco é cancelada e o bloco termina com
+    AdvisoryLockLost. Trabalho já entregue a uma thread (`asyncio.to_thread`) não para no meio: só o que vem
+    depois dele.
+    """
+    conn = await pool.acquire()
+    watchdog: asyncio.Task[None] | None = None
+    lost = False
+    try:
+        got = bool(await conn.fetchval("SELECT pg_try_advisory_lock(hashtextextended($1, 0))", key))
+        owner = asyncio.current_task()
+        if got and heartbeat_s and owner is not None:
+            interval = heartbeat_s
+
+            async def watch() -> None:
+                nonlocal lost
+                while True:
+                    await asyncio.sleep(interval)
+                    try:
+                        await asyncio.wait_for(conn.fetchval("SELECT 1"), interval)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:  # noqa: BLE001 - qualquer falha: a sessão (e a trava) não é confiável
+                        lost = True
+                        log.error("trava %s perdida (conexão com o Postgres caiu: %s); interrompendo", key, e)
+                        owner.cancel()
+                        return
+
+            watchdog = asyncio.create_task(watch())
+        try:
+            yield got
+        except asyncio.CancelledError:
+            if lost and owner is not None and owner.uncancel() == 0:
+                raise AdvisoryLockLost(f"a trava {key} se perdeu: a conexão com o Postgres caiu") from None
+            raise
+        finally:
+            if watchdog is not None:
+                watchdog.cancel()
+                await asyncio.gather(watchdog, return_exceptions=True)
+            if lost:
+                with contextlib.suppress(Exception):  # o asyncpg pode já ter desligado a conexão caída do pool
+                    conn.terminate()
+            elif got:
+                await _unlock(conn, key)
+    finally:
+        await pool.release(conn)
 
 
 @asynccontextmanager

@@ -68,7 +68,21 @@ async def xray(request: Request, _: Principal = Depends(require(SEARCH_READ))) -
             summary="Arquivos descartados na indexação de um repo, com o motivo")
 async def repo_skipped(name: str, request: Request, limit: int = Query(200, ge=1, le=2000),
                        _: Principal = Depends(require(SEARCH_READ))) -> list[dict[str, Any]]:
-    return await get_service(request).skipped_files(name, limit=limit)
+    try:
+        return await get_service(request).skipped_files(name, limit=limit)
+    except ValueError as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(e)) from None
+
+
+@router.get("/api/v1/skipped", tags=["repos"],
+            summary="Arquivos descartados na indexação de todos os repos (ou de um, com repo=), com o motivo")
+async def skipped(request: Request, repo: str | None = Query(None, max_length=300),
+                  limit: int = Query(200, ge=1, le=2000),
+                  _: Principal = Depends(require(SEARCH_READ))) -> list[dict[str, Any]]:
+    try:
+        return await get_service(request).skipped_files(repo, limit=limit)
+    except ValueError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from None
 
 
 @router.post("/api/v1/repos", tags=["repos"], status_code=201)

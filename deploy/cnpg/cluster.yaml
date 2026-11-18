@@ -1,0 +1,58 @@
+# Postgres do code-index no CloudNativePG (exemplo).
+#
+# Imagem: a de docker/postgres (pgvector/pgvector:pg17 + pg_search), publicada no seu registry:
+#   docker build -t registry.example.com/code-index-postgres:17-pgsearch0.26.5 docker/postgres
+#   docker push registry.example.com/code-index-postgres:17-pgsearch0.26.5
+# Não troque pela paradedb/paradedb (traz um pgvector mais antigo que o do banco: downgrade).
+#
+# A imagem herda o usuário postgres (uid/gid 999) da imagem oficial do Postgres; o CNPG usa 26 por
+# padrão, por isso postgresUID/postgresGID abaixo. O CMD da imagem (shared_preload_libraries=pg_search)
+# é ignorado pelo CNPG: a biblioteca é carregada por spec.postgresql.shared_preload_libraries.
+#
+# O CNPG cria o Secret "code-index-db-app" (chave "uri"), que o chart usa por padrão (database.existingSecret).
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: code-index-db
+spec:
+  instances: 2
+  imageName: registry.example.com/code-index-postgres:17-pgsearch0.26.5   # o CNPG exige a tag começando pela versão
+  # imagePullSecrets:
+  #   - name: registry-cred
+  postgresUID: 999
+  postgresGID: 999
+  enableSuperuserAccess: false
+
+  postgresql:
+    shared_preload_libraries:
+      - pg_search
+    parameters:
+      max_connections: "200"
+      shared_buffers: "1GB"
+      # Busca vetorial (HNSW) e índices BM25 gostam de memória para manutenção
+      maintenance_work_mem: "512MB"
+
+  bootstrap:
+    initdb:
+      database: cocoindex
+      owner: cocoindex
+      # Extensões criadas pelo superusuário: o usuário da aplicação não precisa de privilégio para isso
+      # (o code-index só cria as que faltam).
+      postInitApplicationSQL:
+        - CREATE EXTENSION IF NOT EXISTS vector
+        - CREATE EXTENSION IF NOT EXISTS pg_search
+
+  storage:
+    size: 50Gi
+    # storageClass: <disco de bloco RWO>
+  walStorage:
+    size: 10Gi
+
+  resources:
+    requests:
+      cpu: "1"
+      memory: 4Gi
+    limits:
+      memory: 4Gi
+
+  # Backups: configure o plugin barman-cloud (ou volume snapshots) conforme o cluster.

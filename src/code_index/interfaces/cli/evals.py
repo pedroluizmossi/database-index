@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from ...services import CodeIndexService, open_service
 from ...settings import Settings
-from .common import Subparsers, print_json
+from .common import Subparsers, local_only, print_json
 
 if TYPE_CHECKING:
     from ...retrieval.evaluation import ConfigDiff, ConfigReport
@@ -98,6 +98,7 @@ def _print_report(reports: list[ConfigReport], n_cases: int, top_k: int, split: 
                 print(f"  {_rank(c.rank):>3}  [{c.tag}] {c.query}{where}")
 
 
+@local_only("a avaliação lê evals/ local e consulta o índice direto (ferramenta de desenvolvimento)")
 async def _cmd_eval(a: argparse.Namespace, settings: Settings) -> None:
     configs = [c for c in _EVAL_CONFIGS if a.no_rerank is False or not c["rerank"]]
     if a.rerank_variants:

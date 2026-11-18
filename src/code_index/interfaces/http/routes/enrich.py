@@ -4,15 +4,20 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
-from ....domain.auth import ENRICH_WRITE, Principal
+from ....domain.auth import ENRICH_WRITE, INDEX_WRITE, Principal
 from ..deps import audited
 from ..security import get_service, require
 from ..usage import STATE_PARAMS
 
 router = APIRouter()
+
+
+class EnrichFactsIn(BaseModel):
+    repos: list[str] | None = Field(None, max_length=500, description="só estes repos (padrão: todos)")
+    force: bool = Field(False, description="recoleta mesmo sem mudança de revisão")
 
 
 class EnrichNextIn(BaseModel):
@@ -54,6 +59,27 @@ async def enrich_release(task_id: str, request: Request,
     released = await audited(request, principal, "enrich:release", {"task": task_id},
                              get_service(request).enrich_release(task_id))
     return {"released": bool(released)}
+
+
+@router.post("/api/v1/enrich/facts", tags=["enrich"],
+             summary="Recoleta os fatos dos repos (SDL, PDL, catalog-info...) dos clones, sem LLM e sem custo")
+async def enrich_facts(request: Request, body: EnrichFactsIn | None = Body(None),
+                       principal: Principal = Depends(require(INDEX_WRITE))) -> dict[str, int]:
+    """Mesmo efeito de `code-index enrich facts`: {repos, updated}. O sync já faz isso para os repos que mudam."""
+    body = body or EnrichFactsIn()
+    result: dict[str, int] = await audited(request, principal, "enrich:facts", body.model_dump(),
+                                           get_service(request).enrich_facts(body.repos or None, force=body.force))
+    return result
+
+
+@router.post("/api/v1/enrich/apply-summaries", tags=["enrich"],
+             summary="Reaplica os resumos de arquivos às colunas de busca e apaga os órfãos (sem custo)")
+async def enrich_apply_summaries(request: Request,
+                                 principal: Principal = Depends(require(INDEX_WRITE))) -> dict[str, int]:
+    """Mesmo efeito de `code-index enrich apply-summaries`: {chunks, pruned, stale}."""
+    result: dict[str, int] = await audited(request, principal, "enrich:apply-summaries", None,
+                                           get_service(request).apply_file_summaries())
+    return result
 
 
 @router.get("/api/v1/enrich/status", tags=["enrich"], summary="Progresso do enriquecimento: cartões, vínculos e resumos")

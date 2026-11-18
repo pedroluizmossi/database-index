@@ -56,6 +56,8 @@ def pick_batch(
     batch: int | None,
     orgs: Iterable[Org] = (),
     manual_changed: set[str] | frozenset[str] = frozenset(),
+    *,
+    only_changed: bool = False,
 ) -> tuple[list[str], int]:
     """Escolhe os próximos repos a processar.
 
@@ -64,6 +66,8 @@ def pick_batch(
     Em (1) e (2): pela posição da linguagem em `Org.languages`, depois push mais recente.
     `manual_changed`: repos avulsos com HEAD remoto diferente do indexado (calculado fora, via git).
     Diretórios locais (`path`) indexados entram sempre em (1): revarrer é barato.
+    `only_changed`: só o que já foi indexado e pode ter mudado: (1) e as fontes de documentação indexadas (o
+    conector baixa só as páginas novas ou alteradas). Pendentes (1ª indexação, a parte cara) e erros ficam de fora.
 
     Retorna (selecionados, quantos ficaram na fila).
     """
@@ -87,8 +91,12 @@ def pick_batch(
         rank = org.language_rank(r.language) if org else 0
         return rank, -(r.pushed_at.timestamp() if r.pushed_at else 0)
 
-    order = (sorted(changed, key=priority) + sorted(pending, key=priority)
-             + sorted(retry_or_docs, key=lambda r: r.updated_at))
+    if only_changed:
+        docs = [r for r in retry_or_docs if r.kind == "docs" and not r.error]
+        order = sorted(changed, key=priority) + sorted(docs, key=lambda r: r.updated_at)
+    else:
+        order = (sorted(changed, key=priority) + sorted(pending, key=priority)
+                 + sorted(retry_or_docs, key=lambda r: r.updated_at))
     names = [r.name for r in order]
     if batch is None:
         return names, 0

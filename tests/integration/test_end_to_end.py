@@ -5,15 +5,16 @@ Só roda com `pytest -m integration` e pula se o Postgres do docker-compose não
 
 from __future__ import annotations
 
-import fcntl
-from collections.abc import Iterator
-from contextlib import contextmanager
+import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 import asyncpg
 import pytest
 
+from code_index.indexing.orchestrator import SyncBusy
 from code_index.infra.db import migrate, open_pool
 from code_index.settings import Settings
 
@@ -132,20 +133,94 @@ async def test_repo_avulso_ponta_a_ponta(int_settings: Settings, tmp_path: Path,
         assert (project / "src" / "app" / "payments.py").is_file()
 
 
-@contextmanager
-def held_lock(path: Path) -> Iterator[None]:
-    """Segura o flock do arquivo de lock, como faria outro processo de sync."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
-        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+SYNC_LOCK_SQL = "SELECT pg_try_advisory_lock(hashtextextended($1, 0))"
+
+
+@asynccontextmanager
+async def held_lock(settings: Settings) -> AsyncIterator[None]:
+    """Segura o advisory lock do sync numa conexão própria, como faria outro processo ou pod."""
+    conn = await asyncpg.connect(settings.database_url, timeout=5)
+    try:
+        assert await conn.fetchval(SYNC_LOCK_SQL, f"code_index.sync.{settings.pg_schema}")
         yield
+    finally:
+        await conn.close()  # fechar a sessão solta a trava
+
+
+async def sync_locks(settings: Settings) -> int:
+    """Quantas sessões seguram agora o advisory lock do sync deste schema."""
+    conn = await asyncpg.connect(settings.database_url, timeout=5)
+    try:
+        return await conn.fetchval(
+            "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND granted "
+            "AND ((classid::bigint << 32) | objid::bigint) = hashtextextended($1, 0)",
+            f"code_index.sync.{settings.pg_schema}")
+    finally:
+        await conn.close()
 
 
 async def test_sync_recusa_quando_outro_sync_segura_o_lock(int_settings: Settings) -> None:
-    with held_lock(int_settings.lock_file):
+    async with held_lock(int_settings):
         async with open_service(int_settings) as svc:
+            assert await svc._indexer.busy()
             with pytest.raises(RuntimeError, match="já existe um sync em andamento"):
                 await svc.sync(None, batch=None, do_discover=False, progress=False)
+    async with open_service(int_settings) as svc:
+        assert not await svc._indexer.busy()  # a outra sessão fechou: a trava saiu junto
+
+
+async def test_dois_syncs_concorrentes_nao_rodam_juntos(int_settings: Settings, fake_llm: Any) -> None:
+    """Dois serviços (como dois pods) no mesmo banco: enquanto um sync roda, o outro recebe SyncBusy; a trava
+    sai no fim do sync (e também em erro ou cancelamento), e a conexão reservada volta ao pool."""
+    async with open_service(int_settings) as a, open_service(int_settings) as b:
+        started, finish = asyncio.Event(), asyncio.Event()
+        load_rows = a._indexer._load_rows
+
+        async def slow_load_rows(orgs: Any) -> Any:
+            started.set()
+            await finish.wait()
+            return await load_rows(orgs)
+
+        a._indexer._load_rows = slow_load_rows
+        first = asyncio.create_task(a.sync(None, batch=None, do_discover=False, progress=False))
+        await asyncio.wait_for(started.wait(), 10)
+
+        assert await sync_locks(int_settings) == 1
+        assert await b._indexer.busy() and await a._indexer.busy()
+        with pytest.raises(SyncBusy, match="já existe um sync em andamento"):
+            await b.sync(None, batch=None, do_discover=False, progress=False)
+        with pytest.raises(SyncBusy):  # vale também dentro do mesmo processo
+            await a.sync(None, batch=None, do_discover=False, progress=False)
+
+        finish.set()
+        await asyncio.wait_for(first, 30)
+        assert await sync_locks(int_settings) == 0
+        await b.sync(None, batch=None, do_discover=False, progress=False)  # livre: o outro sync roda
+
+        # Erro no meio do sync: a trava sai e a conexão volta ao pool.
+        async def boom(orgs: Any) -> Any:
+            raise RuntimeError("falha no meio do sync")
+
+        a._indexer._load_rows = boom
+        with pytest.raises(RuntimeError, match="falha no meio"):
+            await a.sync(None, batch=None, do_discover=False, progress=False)
+        assert await sync_locks(int_settings) == 0
+
+        # Cancelamento (worker encerrado): idem.
+        started.clear()
+        finish.clear()
+        a._indexer._load_rows = slow_load_rows
+        task = asyncio.create_task(a.sync(None, batch=None, do_discover=False, progress=False))
+        await asyncio.wait_for(started.wait(), 10)
+        assert await sync_locks(int_settings) == 1
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert await sync_locks(int_settings) == 0
+        assert not await b._indexer.busy()
+
+        pool = a._indexer._pool
+        assert pool.get_size() - pool.get_idle_size() == 0  # nenhuma conexão ficou presa
 
 
 async def test_migracoes_sao_aplicadas_uma_vez(int_settings: Settings) -> None:

@@ -20,6 +20,12 @@ async def relation_origins(_: Principal = Depends(require(SEARCH_READ))) -> list
     return origins_payload()
 
 
+@router.get("/api/v1/relations/stats", tags=["relações"],
+            summary="Contagem das relações gravadas (tipo, origem, status, ação) e das efetivas por tipo")
+async def relations_stats(request: Request, _: Principal = Depends(require(SEARCH_READ))) -> dict[str, Any]:
+    return await get_service(request).relation_stats()
+
+
 @router.get("/api/v1/relations", tags=["relações"], summary="Tudo ligado a uma entidade (repo, doc:, op:, code:)")
 async def relations_of(request: Request, entity: str = Query(..., min_length=1, max_length=1500),
                        type: str | None = None, limit: int = Query(200, ge=1, le=1000),

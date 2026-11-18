@@ -164,7 +164,7 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
             await done(403)
             raise ToolError(f"scope necessário: {scope}")
         try:
-            enforce_rate_limit(limiter, settings, principal, bucket)
+            await enforce_rate_limit(limiter, settings, principal, bucket)
         except Exception:
             await done(429)
             raise ToolError("limite de requisições atingido; tente mais tarde") from None

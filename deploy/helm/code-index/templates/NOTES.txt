@@ -1,0 +1,13 @@
+code-index instalado.
+
+  URL:      {{ .Values.publicScheme }}://{{ .Values.publicHost }}
+  MCP:      {{ .Values.publicScheme }}://{{ .Values.publicHost }}/mcp
+  Interno:  {{ include "code-index.internalUrl" . }}
+
+Primeiro acesso: entre pelo navegador com um e-mail de CODE_INDEX_ADMIN_EMAILS e crie tokens
+na interface. Veja deploy/README.md.
+{{- if .Values.syncCron.enabled }}
+
+Sync periódico ligado: o Secret {{ .Values.syncCron.tokenSecret.name }} (chave {{ .Values.syncCron.tokenSecret.key }})
+precisa de um token cix_ com scope index:write.
+{{- end }}

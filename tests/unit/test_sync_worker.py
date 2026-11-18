@@ -57,7 +57,7 @@ class FakeIndexer:
     def __init__(self, busy: bool = False) -> None:
         self._busy = busy
 
-    def busy(self) -> bool:
+    async def busy(self) -> bool:
         return self._busy
 
 

@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
 from ....domain.auth import INDEX_WRITE, Principal
-from ..deps import audited
+from ..deps import audited, http_error
 from ..security import client_ip, enforce_rate_limit, get_service, get_settings_dep, require
 
 router = APIRouter()
@@ -17,8 +17,17 @@ router = APIRouter()
 class SyncIn(BaseModel):
     repos: list[str] | None = Field(None, description="nomes a indexar; vazio = lote automático")
     batch: int | None = Field(None, ge=0, le=50, description="tamanho do lote (padrão do servidor)")
+    all: bool = Field(False, description="sem limite de lote (ignora batch), como o --all da CLI")
     discover: bool = True
     pull: bool = True
+    full: bool = Field(False, description="reprocessa tudo, ignorando caches (caro!; só admin)")
+    pages: list[str] | None = Field(
+        None, max_length=200,
+        description="fonte de documentação: só estas páginas (sem idioma, ex.: Plataforma/Email); exige um único "
+                    "item em repos (ex.: docs__wiki), como o --page da CLI")
+    only_changed: bool = Field(
+        False, description="lote automático só com o que já foi indexado e mudou (push novo, fontes de docs); "
+                           "sem pendentes nem erros")
     dry_run: bool = False
 
 
@@ -29,22 +38,31 @@ async def sync(body: SyncIn, request: Request,
     svc = get_service(request)
     settings = get_settings_dep(request)
     if body.dry_run:  # prévia: sem custo, só o balde de leitura (a interface a chama a cada mudança de lote)
+        if body.pages:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                "pages não combina com dry_run (use GET /api/v1/docs/{nome}/preview)")
+        batch: int | None | Literal["default"] = None if body.all else (
+            "default" if body.batch is None else body.batch)
         res = await audited(request, principal, "sync:dry-run", body.model_dump(), svc.sync(
-            body.repos or None, batch="default" if body.batch is None else body.batch,
-            do_discover=body.discover, dry_run=True, progress=False, allow_register=False,
+            body.repos or None, batch=batch,
+            do_discover=body.discover, full=body.full, dry_run=True, progress=False, allow_register=False,
+            only_changed=body.only_changed,
         ))
         return res.to_dict()
     # Só iniciar uma indexação (custo na Voyage) gasta o balde de sync, que é de poucas por hora.
-    enforce_rate_limit(request.app.state.limiter, settings, principal, "sync")
+    await enforce_rate_limit(request.app.state.limiter, settings, principal, "sync")
     try:
         job = await svc.start_sync(
             principal, body.repos or None,
-            batch=settings.default_batch if body.batch is None else body.batch,
-            do_discover=body.discover, pull=body.pull,
+            batch=None if body.all else (settings.default_batch if body.batch is None else body.batch),
+            do_discover=body.discover, pull=body.pull, full=body.full, doc_pages=body.pages,
+            only_changed=body.only_changed,
         )
-    except RuntimeError as e:
-        await svc.audit(principal, "sync:start", params=body.model_dump(), status=409, client_ip=client_ip(request))
-        raise HTTPException(status.HTTP_409_CONFLICT, str(e)) from None
+    except (ValueError, RuntimeError, PermissionError) as e:  # 400 pedido inválido, 403 full sem admin, 409 job ativo
+        err = http_error(e)
+        await svc.audit(principal, "sync:start", params=body.model_dump(), status=err.status_code,
+                        client_ip=client_ip(request))
+        raise err from None
     await svc.audit(principal, "sync:start", params={"job": job.id, **body.model_dump()},
                     status=202, client_ip=client_ip(request))
     return {"job_id": job.id, "status": job.status, "url": f"/api/v1/sync/jobs/{job.id}"}

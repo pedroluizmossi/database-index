@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import argparse
 
-from ...services import open_service
 from ...settings import Settings
 from ...domain.search_vectors import KINDS
-from .common import Subparsers, print_json
+from .common import Subparsers, open_backend, print_json
 
 
 def _pct(part: int, total: int) -> str:
@@ -20,7 +19,7 @@ def _estimate(e: dict) -> str:
 
 
 async def _cmd_status(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         st = await svc.vector_status()
     if a.json:
         print_json(st)
@@ -41,10 +40,13 @@ async def _cmd_status(a: argparse.Namespace, settings: Settings) -> None:
 
 
 async def _cmd_embed(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         res = await svc.embed_vectors(dry_run=a.dry_run, limit=a.limit, kinds=a.kind)
     if a.json:
         print_json(res)
+        return
+    if res.get("detached"):  # modo remoto: a rodada ficou em outra réplica do servidor
+        print(f"geração iniciada no servidor ({res['pending']} pendente(s)); acompanhe com `code-index vectors status`.")
         return
     if res["dry_run"]:
         print(f"{res['to_embed']} texto(s) seriam embedados ({_estimate(res['estimate'])}) e "

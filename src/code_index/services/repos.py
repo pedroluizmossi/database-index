@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections import Counter
 from collections.abc import Sequence
@@ -57,11 +56,11 @@ class ReposMixin(OwnershipMixin):
         """Remove um repo avulso; um repo de org é apenas marcado como ignorado."""
         manual = next((r for r in await self._config.repos() if r.name == name), None)
         if manual is not None:
-            with self._indexer.exclusive():  # o sync em andamento pode estar lendo este clone
+            async with self._indexer.exclusive():  # o sync em andamento pode estar lendo este clone
                 await self._config.delete("repo", name)
                 await self._repos.delete([name])
                 if not keep_clone:
-                    await asyncio.to_thread(self._git.remove_clone, manual)
+                    await self._remove_local(self._git.remove_clone, manual)
             await self.rebuild_relations()
             return "removed"
         if await self._repos.set_ignored(name, True):
@@ -184,12 +183,12 @@ class ReposMixin(OwnershipMixin):
         if not any(o.name == name for o in orgs):
             raise ValueError(f"org não configurada: {name}")
         remaining = [o for o in orgs if o.name != name]
-        with self._indexer.exclusive():  # o sync em andamento pode estar lendo estes clones
+        async with self._indexer.exclusive():  # o sync em andamento pode estar lendo estes clones
             await self._config.delete("org", name)
             removed = await self._repos.prune_orgs([o.name for o in remaining])
             if not keep_clones:
                 for repo_name in removed:
-                    await asyncio.to_thread(self._git.remove_clone, Repo(name=repo_name, url="-"))
+                    await self._remove_local(self._git.remove_clone, Repo(name=repo_name, url="-"))
         if removed:
             await self.rebuild_relations()
         return len(removed)

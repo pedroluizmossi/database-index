@@ -1,0 +1,57 @@
+{{- if .Values.migrations.enabled }}
+# Aplica as migrations antes de api/worker subirem a versão nova. Só precisa da URL do banco
+# (Secret do CNPG ou o "-db" do chart, que também é hook), então roda antes do resto da release.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "code-index.fullname" . }}-migrate
+  labels:
+    {{- include "code-index.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrate
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "code-index.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migrate
+        {{- include "code-index.dbAccessLabel" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ include "code-index.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            {{- toYaml .Values.migrations.command | nindent 12 }}
+          env:
+            {{- include "code-index.env" . | nindent 12 }}
+            # O ConfigMap ainda não existe no pre-install: o mapa "config" entra direto (ex.: PG_SCHEMA).
+            {{- include "code-index.configEnv" . | nindent 12 }}
+            - name: CODE_INDEX_HOME
+              value: /tmp
+            - name: CODE_INDEX_CLI_MODE
+              value: local
+          resources:
+            {{- toYaml .Values.migrations.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}

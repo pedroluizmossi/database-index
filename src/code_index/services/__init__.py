@@ -28,6 +28,7 @@ from ..infra.github import GitHubClient
 from ..infra.grep import Grep
 from ..infra.job_store import JobStore
 from ..infra.oauth_store import OAuthStore
+from ..infra.rate_limit_store import RateLimitStore
 from ..infra.repo_store import RepoStore
 from ..infra.symbol_store import SymbolStore
 from ..infra.usage_store import UsageStore
@@ -41,6 +42,7 @@ from .docs import DocsMixin
 from .enrich import EnrichMixin
 from .oauth import OAuthMixin
 from .ownership import OwnershipMixin
+from .rate_limit import RateLimitMixin
 from .repos import ReposMixin
 from .search import SearchMixin
 from .sync import SyncMixin
@@ -53,7 +55,7 @@ log = logging.getLogger(__name__)
 
 
 class CodeIndexService(SyncMixin, VectorsMixin, ReposMixin, DocsMixin, WikiMixin, SearchMixin, ApisMixin, EnrichMixin, AuthMixin,
-                       OAuthMixin, OwnershipMixin, UsersMixin, UsageMixin, ServiceBase):
+                       OAuthMixin, OwnershipMixin, UsersMixin, UsageMixin, RateLimitMixin, ServiceBase):
     """Casos de uso do índice. Construído por `open_service()`, que cuida do ciclo de vida.
     Cada área fica num módulo deste pacote; as interfaces só conhecem esta classe."""
 
@@ -78,6 +80,7 @@ async def open_service(settings: Settings | None = None) -> AsyncIterator[CodeIn
                 config=config,
                 git=git,
                 github=GitHubClient(token),
+                pool=pool,
             )
             symbols = SymbolStore(pool, settings)
             searcher = Searcher(settings, chunks=chunks, symbols=symbols)
@@ -100,6 +103,7 @@ async def open_service(settings: Settings | None = None) -> AsyncIterator[CodeIn
                 oauth=OAuthStore(pool, settings),
                 users=UserStore(pool, settings),
                 usage=UsageStore(pool, settings),
+                rate_limits=RateLimitStore(pool, settings),
             )
             await svc._ensure_search_indexes()
             await svc.ensure_relations()

@@ -384,8 +384,24 @@ def test_grafo_de_chamadas_na_api(server: Server) -> None:
     st = client(server, "admin-bot").get("/api/v1/scans/status")
     assert st.status_code == 200 and set(st.json()) == {"graph", "tests"}
     assert client(server, "admin-bot").post("/api/v1/scans/outra").status_code == 422
+    r = client(server, "admin-bot").post("/api/v1/scans/graph", params={"wait": "true"})
+    assert r.status_code == 200 and r.json()["kind"] == "graph" and set(r.json()["result"]) == {"repos", "edges", "pruned"}
     r = client(server, "admin-bot").post("/api/v1/scans/tests")
     assert r.status_code == 202 and r.json()["tests"]["running"] in (True, False)
+
+
+async def _mcp_buscas(server: Server, token: str, n: int) -> list[Any]:
+    headers = {"Authorization": f"Bearer {server.tokens[token]}"}
+    async with httpx2.AsyncClient(headers=headers, timeout=30) as http:
+        async with streamable_http_client(f"{server.url}/mcp", http_client=http) as (r, w), ClientSession(r, w) as s:
+            await s.initialize()
+            return [await s.call_tool("search_code", {"query": "ola", "mode": "keyword"}) for _ in range(n)]
+
+
+def test_rate_limit_das_tools_mcp(server: Server) -> None:
+    res = asyncio.run(_mcp_buscas(server, "leitor", 4))  # rate_limit_search_per_min = 3
+    assert [r.is_error for r in res] == [False, False, False, True]
+    assert "limite de requisições" in res[-1].content[0].text
 
 
 def test_auditoria(server: Server) -> None:

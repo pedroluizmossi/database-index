@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import argparse
 
-from ...services import open_service
 from ...settings import Settings
-from .common import Subparsers, print_json
+from .common import Subparsers, open_backend, print_json
 
 
 async def _cmd_relations_rebuild(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         res = await svc.rebuild_relations()
     docs = ", ".join(f"{k} {v}" for k, v in res["documents"].items()) or "nenhuma fonte"
     print(f"documentos: {docs}")
@@ -19,7 +18,7 @@ async def _cmd_relations_rebuild(a: argparse.Namespace, settings: Settings) -> N
 
 
 async def _cmd_relations_stats(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         st = await svc.relation_stats()
     if a.json:
         print_json(st, default=str)
@@ -31,7 +30,7 @@ async def _cmd_relations_stats(a: argparse.Namespace, settings: Settings) -> Non
 
 
 async def _cmd_relations_show(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         res = await svc.related(a.entity, type_=a.type, limit=a.limit)
     if a.json:
         print_json(res)

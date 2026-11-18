@@ -170,7 +170,7 @@ class SyncProgress:
         }
 
 
-# Sync em andamento neste processo (só um por vez: o orquestrador segura um flock). O pipeline do
+# Sync em andamento neste processo (só um por vez: o orquestrador segura um advisory lock). O pipeline do
 # CocoIndex lê daqui para registrar os grupos de estatística dos repos acompanhados.
 _active: SyncProgress | None = None
 

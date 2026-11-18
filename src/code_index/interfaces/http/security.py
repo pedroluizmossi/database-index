@@ -3,13 +3,11 @@
 - Credencial: `Authorization: Bearer cix_...` (agents) ou cookie de sessão `cix_session`
   (pessoas logadas pelo navegador: Google ou Microsoft). Token na URL nunca é aceito.
 - Cookie + método que altera estado exige `Origin`/`Referer` da própria aplicação (CSRF).
-- Rate limit em memória por principal (janela deslizante), por categoria.
+- Rate limit por principal e categoria, compartilhado entre réplicas (Postgres, janela fixa; fail-open).
 """
 
 from __future__ import annotations
 
-import time
-from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable
 from urllib.parse import urlsplit
 
@@ -24,40 +22,24 @@ _UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 
 class RateLimiter:
-    """Janela deslizante em memória: no máximo `limit` eventos por `window` segundos, por chave.
+    """Rate limit compartilhado entre as réplicas da API: a contagem fica no Postgres (janela fixa por balde,
+    chave e início da janela; ver services/rate_limit.py). Uma ida ao banco por requisição.
 
-    Suficiente para uma instância. Com várias réplicas, troque por Redis/Postgres.
+    Fail-open: se o banco falhar, ou antes de o serviço subir (lifespan), a requisição passa e a falha vai para o
+    log. O rate limit protege custo e abuso; ele não deve derrubar a API quando o Postgres oscila.
+    `key` é o id do token, o subject da sessão ou o IP: nunca o valor de um token.
     """
 
-    _SWEEP_EVERY = 1024  # a cada N eventos, descarta as chaves sem evento dentro da janela delas
+    def __init__(self, service: Callable[[], CodeIndexService]) -> None:
+        self._service = service
 
-    def __init__(self) -> None:
-        self._events: dict[tuple[str, str], deque[float]] = defaultdict(deque)
-        self._windows: dict[tuple[str, str], float] = {}
-        self._hits = 0
-
-    def hit(self, bucket: str, key: str, *, limit: int, window: float) -> float | None:
+    async def hit(self, bucket: str, key: str, *, limit: int, window: float) -> float | None:
         """Registra um evento. Retorna None se permitido, ou os segundos até liberar."""
-        now = time.monotonic()
-        self._hits += 1
-        if self._hits % self._SWEEP_EVERY == 0:
-            self._sweep(now)
-        slot = (bucket, key)
-        self._windows[slot] = window
-        q = self._events[slot]
-        while q and q[0] <= now - window:
-            q.popleft()
-        if len(q) >= limit:
-            return max(0.0, q[0] + window - now)
-        q.append(now)
-        return None
-
-    def _sweep(self, now: float) -> None:
-        """Chaves cujo último evento já saiu da janela (token rotacionado, IP que sumiu): sem isso o
-        dicionário cresce para sempre no servidor."""
-        for slot in [s for s, q in self._events.items() if not q or q[-1] <= now - self._windows.get(s, 0.0)]:
-            del self._events[slot]
-            self._windows.pop(slot, None)
+        try:
+            svc = self._service()
+        except RuntimeError:  # serviço ainda não iniciado
+            return None
+        return await svc.rate_limit_hit(bucket, key, limit=limit, window=window)
 
 
 def origin_of(url: str) -> str:
@@ -136,13 +118,14 @@ def require(scope: str, *, bucket: str = "read") -> Callable[..., Awaitable[Prin
     async def dep(request: Request, principal: Principal = Depends(current_principal)) -> Principal:
         if not principal.has(scope):
             raise HTTPException(status.HTTP_403_FORBIDDEN, f"scope necessário: {scope}")
-        enforce_rate_limit(request.app.state.limiter, request.app.state.settings, principal, bucket)
+        await enforce_rate_limit(request.app.state.limiter, request.app.state.settings, principal, bucket)
         return principal
 
     return dep
 
 
-def enforce_rate_limit(limiter: RateLimiter, settings: Settings, principal: Principal, bucket: str) -> None:
+async def enforce_rate_limit(limiter: RateLimiter, settings: Settings, principal: Principal, bucket: str) -> None:
+    """Aplica o limite da categoria `bucket` (CODE_INDEX_RATE_*) ao principal; estourou: 429 com Retry-After."""
     limits = {
         "read": (settings.rate_limit_read_per_min, 60.0),
         "search": (settings.rate_limit_search_per_min, 60.0),
@@ -150,7 +133,7 @@ def enforce_rate_limit(limiter: RateLimiter, settings: Settings, principal: Prin
     }
     limit, window = limits[bucket]
     key = principal.token_id or principal.subject
-    retry = limiter.hit(bucket, key, limit=limit, window=window)
+    retry = await limiter.hit(bucket, key, limit=limit, window=window)
     if retry is not None:
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS, f"limite de requisições ({bucket}) atingido",

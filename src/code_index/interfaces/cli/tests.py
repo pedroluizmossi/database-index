@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import argparse
 
-from ...services import open_service
 from ...settings import Settings
-from .common import Subparsers, print_json
+from .common import Subparsers, open_backend, print_json
 
 
 async def _cmd_scan(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         res = await svc.scan_tests(a.repo or None, force=a.force)
         st = await svc.tests_status()
     if a.json:
@@ -22,7 +21,7 @@ async def _cmd_scan(a: argparse.Namespace, settings: Settings) -> None:
 
 
 async def _cmd_find(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         res = await svc.find_tests(" ".join(a.target), repos=a.repo, limit=a.limit)
     if a.json:
         print_json(res)
@@ -40,7 +39,7 @@ async def _cmd_find(a: argparse.Namespace, settings: Settings) -> None:
 
 
 async def _cmd_status(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         st = await svc.tests_status()
     print_json(st)
 

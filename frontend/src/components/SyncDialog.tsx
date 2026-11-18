@@ -16,6 +16,11 @@ interface SyncDialogProps {
   onClose: () => void;
   /** Repos a indexar agora. Null = um lote automático dos pendentes/alterados. */
   names: string[] | null;
+  /**
+   * Lote automático só com o que já foi indexado e mudou: repos com push novo e fontes de documentação (só as
+   * páginas novas ou alteradas são baixadas). Sem pendentes (1ª indexação) nem erros.
+   */
+  onlyChanged?: boolean;
   defaultBatch?: number;
   onFinished: () => void;
   /** Chamado quando o job é criado no servidor (para a lista de jobs aparecer na hora). */
@@ -109,13 +114,15 @@ function plan(repo: Repo | undefined): { label: string; tone: "accent" | "neutra
  * Indexação em duas etapas: prévia sem custo (dry-run) com os detalhes de cada repo,
  * depois confirmação. Só então o job roda em segundo plano, e o diálogo acompanha até o fim.
  */
-export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished, onStarted }: SyncDialogProps) {
+export function SyncDialog({ open, onClose, names, onlyChanged = false, defaultBatch, onFinished, onStarted }: SyncDialogProps) {
   const { push } = useToast();
   const { repos } = useIndex();
   const nav = useNavigation();
   // Fora da página Indexação, o sync disparado aponta para lá (fila, andamento por repo e histórico).
   const followable = nav !== null && nav.current !== "indexing" && nav.can("indexing");
-  const [batch, setBatch] = useState(defaultBatch);
+  // O que mudou costuma ser pouco e barato (só arquivos alterados): o lote padrão é o teto.
+  const initialBatch = defaultBatch ?? (onlyChanged ? MAX_BATCH : 5);
+  const [batch, setBatch] = useState(initialBatch);
   const [preview, setPreview] = useState<SyncResult | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
@@ -134,7 +141,7 @@ export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished,
     setStartError(null);
     setLoadingPreview(true);
     api
-      .syncPreview(names, batch)
+      .syncPreview(names, batch, onlyChanged)
       .then((res) => active && setPreview(res))
       .catch((err: unknown) => active && setPreviewError(describeError(err)))
       .finally(() => active && setLoadingPreview(false));
@@ -143,7 +150,7 @@ export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished,
     };
     // `names` é uma lista nova a cada render: a dependência é o conteúdo (namesKey).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, batch, namesKey]);
+  }, [open, batch, namesKey, onlyChanged]);
 
   // Acompanha o job até terminar.
   useEffect(() => {
@@ -177,7 +184,7 @@ export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished,
     setStarting(true);
     setStartError(null);
     try {
-      const started = await api.syncStart(names, batch);
+      const started = await api.syncStart(names, batch, onlyChanged);
       const status: SyncJob["status"] = started.status === "running" ? "running" : "queued";
       setJob({
         id: started.job_id,
@@ -217,14 +224,20 @@ export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished,
     ? names.length === 1
       ? `Indexar ${names[0]}`
       : `Indexar ${names.length} repositórios`
-    : "Indexar lote automático";
+    : onlyChanged
+      ? "Indexar o que mudou"
+      : "Indexar lote automático";
 
   return (
     <Dialog
       open={open}
       onClose={onClose}
       title={title}
-      description="Confira o que vai ser processado. A prévia não gera custo; a indexação gera custo de embedding na Voyage."
+      description={
+        onlyChanged
+          ? "Repositórios com push depois da última indexação e fontes de documentação (só páginas novas ou alteradas). Pendentes e repositórios com erro ficam de fora. A prévia não gera custo."
+          : "Confira o que vai ser processado. A prévia não gera custo; a indexação gera custo de embedding na Voyage."
+      }
       size="lg"
       footer={
         finished ? (
@@ -292,7 +305,11 @@ export function SyncDialog({ open, onClose, names, defaultBatch = 5, onFinished,
       {preview && !job && (
         <div className="space-y-4">
           {selected.length === 0 ? (
-            <p className="text-sm text-stone-600 dark:text-stone-300">Nada a indexar: não há repositórios pendentes ou alterados.</p>
+            <p className="text-sm text-stone-600 dark:text-stone-300">
+              {onlyChanged
+                ? "Nada mudou: nenhum repositório com push novo e nenhuma fonte de documentação indexada."
+                : "Nada a indexar: não há repositórios pendentes ou alterados."}
+            </p>
           ) : (
             <>
               {!onlyDocs && (

@@ -33,6 +33,8 @@ class SearchIn(BaseModel):
     path_glob: str | None = None
     mode: Literal["hybrid", "semantic", "keyword"] = "hybrid"
     rerank: bool = True
+    candidates: int | None = Field(None, ge=1, le=200,
+                                   description="candidatos enviados ao reranker (padrão RERANK_CANDIDATES)")
     kind: Literal["code", "doc"] | None = None
     include_linked_docs: bool = True
     exclude_repos: list[str] | None = Field(None, max_length=50)
@@ -48,7 +50,8 @@ async def search(body: SearchIn, request: Request,
     svc = get_service(request)
     hits = await audited(request, principal, "search", body.model_dump(exclude={"rerank"}), svc.search(
         body.query, top_k=body.top_k, repos=body.repos, language=body.language, path_glob=body.path_glob,
-        mode=body.mode, rerank=body.rerank, kind=body.kind, include_linked_docs=body.include_linked_docs,
+        mode=body.mode, rerank=body.rerank, candidates=body.candidates, kind=body.kind,
+        include_linked_docs=body.include_linked_docs,
         exclude_repos=body.exclude_repos, exclude_path_glob=body.exclude_path_glob, max_docs=body.max_docs,
         domain=body.domain, service=body.service,
     ))

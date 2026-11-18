@@ -1,0 +1,92 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "code-index.fullname" . }}-api
+  labels:
+    {{- include "code-index.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  {{- if not .Values.api.hpa.enabled }}
+  replicas: {{ .Values.api.replicas }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "code-index.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        {{- include "code-index.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: api
+        {{- include "code-index.dbAccessLabel" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: api
+          image: {{ include "code-index.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["code-index", "serve", "--host", "0.0.0.0", "--port", "{{ .Values.api.port }}",
+                    "--forwarded-allow-ips", {{ .Values.api.forwardedAllowIps | quote }}]
+          ports:
+            - name: http
+              containerPort: {{ .Values.api.port }}
+          env:
+            {{- include "code-index.env" . | nindent 12 }}
+          envFrom:
+            {{- include "code-index.envFrom" . | nindent 12 }}
+          # O TrustedHost recusa o IP do pod: a sonda manda o host público.
+          startupProbe:
+            {{- include "code-index.probe" . | nindent 12 }}
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            {{- include "code-index.probe" . | nindent 12 }}
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            {{- include "code-index.probe" . | nindent 12 }}
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: repos
+              mountPath: /data/repos
+              readOnly: true
+            - name: home
+              mountPath: /data/home
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: repos
+          persistentVolumeClaim:
+            claimName: {{ .Values.repos.existingClaim | default (printf "%s-repos" (include "code-index.fullname" .)) }}
+            readOnly: true
+        - name: home
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.api.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.api.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.api.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

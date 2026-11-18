@@ -12,13 +12,19 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from dotenv import find_dotenv, load_dotenv
 from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 _ENV_FILE = find_dotenv(usecwd=True) or None
+
+
+def _default_credentials_file() -> Path:
+    """Credenciais da CLI remota (`code-index login`): $XDG_CONFIG_HOME/code-index/credentials.toml."""
+    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    return Path(base) / "code-index" / "credentials.toml"
 
 
 class Settings(BaseSettings):
@@ -87,6 +93,11 @@ class Settings(BaseSettings):
 
     # Wiki.js (fontes [[docs]]): API key de leitura, criada em Administração → API Access
     wikijs_token: SecretStr | None = Field(None, validation_alias="WIKIJS_TOKEN")
+    # Hosts (sem porta) para onde o WIKIJS_TOKEN pode ir, ex.: wiki.exemplo.com. Com a lista, o token só vai a eles;
+    # vazia, cadastrar wiki pela API (POST /api/v1/docs/sources) é recusado (a CLI local continua livre).
+    wikijs_allowed_hosts: Annotated[list[str], NoDecode] = Field(
+        default_factory=list, validation_alias="CODE_INDEX_WIKIJS_ALLOWED_HOSTS"
+    )
     openapi_bucket_url: str = Field("https://s3.amazonaws.com/br-com-senior-ecossistema-api", validation_alias="OPENAPI_BUCKET_URL")
     openapi_ref_max_documents: int = Field(32, ge=0, le=256, validation_alias="OPENAPI_REF_MAX_DOCUMENTS")
     openapi_ref_max_bytes: int = Field(4 * 1024 * 1024, ge=1024, validation_alias="OPENAPI_REF_MAX_BYTES")
@@ -99,7 +110,6 @@ class Settings(BaseSettings):
     # Arquivos locais (relativos a `base_dir`)
     repos_dir: Path = Field(Path(".repos"), validation_alias="CODE_INDEX_REPOS_DIR")
     cocoindex_db: Path = Field(Path(".cocoindex"), validation_alias="COCOINDEX_DB")
-    lock_file: Path = Path(".code-index.lock")
 
     # Indexação
     default_batch: int = Field(10, validation_alias="CODE_INDEX_BATCH")
@@ -162,9 +172,21 @@ class Settings(BaseSettings):
     rate_limit_read_per_min: int = Field(120, validation_alias="CODE_INDEX_RATE_READ_PER_MIN")
     rate_limit_search_per_min: int = Field(30, validation_alias="CODE_INDEX_RATE_SEARCH_PER_MIN")
     rate_limit_sync_per_hour: int = Field(6, validation_alias="CODE_INDEX_RATE_SYNC_PER_HOUR")
+    # Tempo máximo da contagem no Postgres (inclui esperar conexão livre no pool). Estourou: a requisição passa
+    # (fail-open), para o rate limit nunca segurar a API quando o banco está lento ou o pool, cheio.
+    rate_limit_db_timeout_s: float = Field(0.5, gt=0, le=10, validation_alias="CODE_INDEX_RATE_DB_TIMEOUT")
+
+    # CLI remota: com uma URL (CODE_INDEX_URL ou `code-index login`), a CLI não abre o banco e fala com /api/v1
+    # usando o token (Bearer). O ambiente vence o arquivo de credenciais. CODE_INDEX_CLI_MODE=local força o banco
+    # (operador no pod, via kubectl exec); remote exige a URL.
+    remote_url: str | None = Field(None, validation_alias="CODE_INDEX_URL")
+    remote_token: SecretStr | None = Field(None, validation_alias="CODE_INDEX_TOKEN")
+    credentials_file: Path = Field(default_factory=_default_credentials_file, validation_alias="CODE_INDEX_CREDENTIALS")
+    cli_mode: Literal["auto", "local", "remote"] = Field("auto", validation_alias="CODE_INDEX_CLI_MODE")
+    remote_timeout_seconds: float = Field(60.0, gt=0, le=3600, validation_alias="CODE_INDEX_REMOTE_TIMEOUT")
 
     @field_validator("admin_emails", "allowed_hosts", "google_allowed_emails", "azure_allowed_emails",
-                     "oauth_redirect_uris", mode="before")
+                     "oauth_redirect_uris", "wikijs_allowed_hosts", mode="before")
     @classmethod
     def _split_csv(cls, v: object) -> object:
         """Aceita lista JSON ou texto separado por vírgula (ex.: `a@x.com,b@x.com`)."""
@@ -178,7 +200,7 @@ class Settings(BaseSettings):
     def _resolve_paths(self) -> "Settings":
         base = self.base_dir.expanduser().resolve()
         object.__setattr__(self, "base_dir", base)
-        for name in ("repos_dir", "cocoindex_db", "lock_file"):
+        for name in ("repos_dir", "cocoindex_db"):
             p = getattr(self, name).expanduser()
             object.__setattr__(self, name, p if p.is_absolute() else (base / p).resolve())
         return self

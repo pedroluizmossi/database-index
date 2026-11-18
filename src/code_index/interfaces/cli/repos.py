@@ -5,13 +5,12 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 
-from ...services import open_service
 from ...settings import Settings
-from .common import Subparsers, print_json
+from .common import Subparsers, open_backend, print_json
 
 
 async def _cmd_repo_add(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         repo = await svc.add_repo(
             a.source,
             name=a.name,
@@ -24,7 +23,7 @@ async def _cmd_repo_add(a: argparse.Namespace, settings: Settings) -> None:
 
 
 async def _cmd_repo_remove(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         result = await svc.remove_repo(a.name, keep_clone=a.keep_clone)
     if result == "removed":
         print(f"removido: {a.name}")
@@ -34,13 +33,13 @@ async def _cmd_repo_remove(a: argparse.Namespace, settings: Settings) -> None:
 
 
 async def _cmd_repo_unignore(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         await svc.unignore_repo(a.name)
     print(f"{a.name} volta à fila de indexação.")
 
 
 async def _cmd_repo_find(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         hits = await svc.find_repos(" ".join(a.query), limit=a.limit)
     if a.json:
         print_json(hits)
@@ -57,7 +56,7 @@ async def _cmd_repo_find(a: argparse.Namespace, settings: Settings) -> None:
 
 
 async def _cmd_repo_list(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         rows = await svc.list_repos(status=a.status, org=a.org, name=a.filter)
     if a.json:
         print_json([r.to_dict() for r in rows])

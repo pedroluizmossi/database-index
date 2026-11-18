@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import argparse
 
-from ...services import open_service
 from ...settings import Settings
-from .common import Subparsers
+from .common import Subparsers, open_backend
 
 
 async def _cmd_org_add(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         stats = await svc.add_org(
             a.name,
             match=a.match or (),
@@ -26,7 +25,7 @@ async def _cmd_org_add(a: argparse.Namespace, settings: Settings) -> None:
 
 
 async def _cmd_org_set(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         st = await svc.set_org(
             a.name,
             languages=a.languages,
@@ -40,20 +39,20 @@ async def _cmd_org_set(a: argparse.Namespace, settings: Settings) -> None:
 
 
 async def _cmd_org_remove(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         n = await svc.remove_org(a.name, keep_clones=a.keep_clones)
     print(f"org {a.name} removida ({n} repos). Os chunks somem no próximo `code-index sync`.")
 
 
 async def _cmd_org_refresh(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         results = await svc.refresh_orgs(a.name)
     for name, st in results.items():
         print(f"{name}: {st['total']} repos ({st['new']} novos, {st['removed']} removidos)")
 
 
 async def _cmd_org_list(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         summary = await svc.org_summary()
     for org in summary:
         st = org["status"]

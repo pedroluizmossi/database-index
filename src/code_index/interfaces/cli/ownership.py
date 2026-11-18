@@ -4,16 +4,15 @@ from __future__ import annotations
 
 import argparse
 
-from ...services import open_service
 from ...settings import Settings
-from .common import Subparsers, print_json
+from .common import Subparsers, open_backend, print_json
 
 _ORIGIN_LABEL = {"manual": "manual", "declared": "SDL", "sibling": "irmão", "api_calls": "chamadas", "usage": "uso",
                  "none": "sem dono"}
 
 
 async def _cmd_owner_catalog(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         res = await svc.ownership_catalog()
     if a.json:
         print_json(res)
@@ -30,7 +29,7 @@ async def _cmd_owner_catalog(a: argparse.Namespace, settings: Settings) -> None:
 
 
 async def _cmd_owner_list(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         rows = await svc.ownership_list(domain=a.domain, service=a.service, origin=a.origin, unowned=a.sem_dono,
                                         repo=a.repo)
     if a.json:
@@ -48,14 +47,14 @@ async def _cmd_owner_list(a: argparse.Namespace, settings: Settings) -> None:
 
 
 async def _cmd_owner_set(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         res = await svc.set_owner(None, a.repos, a.to, path=a.path, create=a.criar, reason=a.motivo or "")
         await svc.audit(None, "owner:set:local", params={"owner": a.to, "path": a.path, "n": res["updated"]})
     print(f"dono manual {res['owner']} gravado em {res['updated']} entidade(s): {', '.join(res['entities'][:10])}")
 
 
 async def _cmd_owner_clear(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         res = await svc.clear_owner(None, a.repos, path=a.path)
         await svc.audit(None, "owner:clear:local", params={"path": a.path, "n": res["cleared"]})
     print(f"dono manual removido de {res['cleared']} entidade(s); valem de novo o SDL e a inferência.")

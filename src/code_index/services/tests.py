@@ -40,7 +40,12 @@ class TestsMixin(ServiceBase):
 
     async def scan_tests(self, repos: Sequence[str] | None = None, *, force: bool = False) -> dict[str, int]:
         """Lê os casos de teste dos repos de código indexados cuja revisão mudou desde a última leitura
-        (ou todos, com `force`). Sem custo de API. Apaga os de repos que saíram."""
+        (ou todos, com `force`). Sem custo de API. Apaga os de repos que saíram. Uma leitura por vez entre
+        processos e pods (ScanBusy, um RuntimeError, se outra já roda)."""
+        async with self._scan_lock("tests"):
+            return await self._scan_tests(repos, force=force)
+
+    async def _scan_tests(self, repos: Sequence[str] | None, *, force: bool) -> dict[str, int]:
         store = self._tests
         wanted = await self._resolve_repos(repos)
         rows = await self._repos.all_rows()

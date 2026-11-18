@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import argparse
 
-from ...services import open_service
 from ...settings import Settings
-from .common import Subparsers, print_json
+from .common import Subparsers, open_backend, print_json
 
 
 def _parse_link(raw: str) -> tuple[str, list[str]]:
@@ -18,7 +17,7 @@ def _parse_link(raw: str) -> tuple[str, list[str]]:
 
 
 async def _cmd_docs_add(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         res = await svc.add_docs(
             a.name, url=a.url, locale=a.locale, include=a.include or (), exclude=a.exclude or (),
             links=[_parse_link(x) for x in (a.link or [])],
@@ -28,7 +27,7 @@ async def _cmd_docs_add(a: argparse.Namespace, settings: Settings) -> None:
 
 
 async def _cmd_docs_list(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         docs = await svc.list_docs()
     if not docs:
         print("nenhuma fonte de documentação.")
@@ -40,7 +39,7 @@ async def _cmd_docs_list(a: argparse.Namespace, settings: Settings) -> None:
 
 
 async def _cmd_docs_preview(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         prev = await svc.docs_preview(a.name, limit=a.limit)
     if a.json:
         print_json(prev)
@@ -56,7 +55,7 @@ async def _cmd_docs_preview(a: argparse.Namespace, settings: Settings) -> None:
 
 
 async def _cmd_docs_link(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         res = await svc.link_doc(a.source, a.page, a.repo, reason=a.reason or "", origin=a.origin)
     estado = ("página indexada: a busca já usa o vínculo." if res["indexed"]
               else "página ainda não indexada: o vínculo vale quando ela entrar no índice.")
@@ -64,25 +63,25 @@ async def _cmd_docs_link(a: argparse.Namespace, settings: Settings) -> None:
 
 
 async def _cmd_docs_ignore(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         res = await svc.ignore_doc(a.source, a.page, reason=a.reason or "")
     print(f"página ignorada: {res['page']} (sai dos resultados da busca; `docs unignore` desfaz).")
 
 
 async def _cmd_docs_unignore(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         removed = await svc.unignore_doc(a.source, a.page)
     print("página voltou para a busca." if removed else "a página não estava ignorada.")
 
 
 async def _cmd_docs_unlink(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         removed = await svc.unlink_doc(a.source, a.page, a.repo)
     print("vínculo removido." if removed else "nenhum vínculo para remover.")
 
 
 async def _cmd_docs_vinculos(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         rows = await svc.doc_links(source=a.source, repo=a.repo)
     if a.json:
         print_json(rows)
@@ -96,7 +95,7 @@ async def _cmd_docs_vinculos(a: argparse.Namespace, settings: Settings) -> None:
 
 
 async def _cmd_docs_links(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         docs = await svc.linked_docs(a.repo, limit=a.limit)
     if a.json:
         print_json(docs)
@@ -109,7 +108,7 @@ async def _cmd_docs_links(a: argparse.Namespace, settings: Settings) -> None:
 
 
 async def _cmd_docs_suggestions(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         rows = await svc.doc_suggestions(status=a.status, source=a.source, confidence=a.confianca,
                                          action=a.acao, limit=a.limit)
     if a.json:
@@ -128,7 +127,7 @@ async def _cmd_docs_suggestions(a: argparse.Namespace, settings: Settings) -> No
 
 async def _cmd_docs_review(a: argparse.Namespace, settings: Settings) -> None:
     approve = a.docs_review == "aprovar"
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         if approve and a.confianca:
             n = await svc.approve_doc_suggestions(confidence=a.confianca, source=a.source, action=a.acao)
             print(f"{n} sugestão(ões) de confiança {a.confianca} aprovada(s).")
@@ -140,7 +139,7 @@ async def _cmd_docs_review(a: argparse.Namespace, settings: Settings) -> None:
 
 
 async def _cmd_docs_remove(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         await svc.remove_docs(a.name, keep_files=a.keep_files)
     print(f"fonte {a.name} removida; os trechos somem no próximo sync.")
 

@@ -6,13 +6,12 @@ import argparse
 import json
 from typing import Any
 
-from ...services import open_service
 from ...settings import Settings
-from .common import Subparsers
+from .common import Subparsers, local_only, open_backend
 
 
 async def _cmd_user_list(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         users = await svc.users_overview(a.days)
     if not users:
         print("nenhum usuário ainda (aparecem no primeiro login ou ao receber um token).")
@@ -26,9 +25,10 @@ async def _cmd_user_list(a: argparse.Namespace, settings: Settings) -> None:
     print(f"(uso nos últimos {a.days} dias)")
 
 
+@local_only("ativar/desativar usuário exige admin logado no navegador: use a interface web (Usuários)")
 async def _cmd_user_access(a: argparse.Namespace, settings: Settings) -> None:
     disable = a.action == "disable"
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         res = await svc.set_user_disabled(None, a.email, disable)
         await svc.audit(None, f"user:{a.action}:local", params={"email": a.email})
     print(f"{res['email']}: {'desativado (nenhuma credencial vale)' if disable else 'reativado'}.")
@@ -45,8 +45,9 @@ def _print_user_settings(info: dict[str, Any]) -> None:
         print(f"  {key:<28} {value:<14} {origin:<9} {item['label']}")
 
 
+@local_only("as configurações de outra pessoa só o operador lê; as suas ficam na interface web")
 async def _cmd_user_settings(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         _print_user_settings(await svc.user_settings(None, email=a.email))
 
 
@@ -61,18 +62,20 @@ def _parse_setting(raw: str) -> tuple[str, Any]:
         return key.strip(), value
 
 
+@local_only("configurações só são gravadas pela própria pessoa, na interface web")
 async def _cmd_user_set(a: argparse.Namespace, settings: Settings) -> None:
     changes = dict(_parse_setting(raw) for raw in a.settings)
     if any(v is None for v in changes.values()):
         raise ValueError("para voltar ao padrão, use 'user unset'")
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         info = await svc.update_user_settings(None, changes, email=a.email)
         await svc.audit(None, "settings:update:local", params={"email": a.email, "keys": sorted(changes)})
     _print_user_settings(info)
 
 
+@local_only("configurações só são gravadas pela própria pessoa, na interface web")
 async def _cmd_user_unset(a: argparse.Namespace, settings: Settings) -> None:
-    async with open_service(settings) as svc:
+    async with open_backend(settings) as svc:
         info = await svc.update_user_settings(None, dict.fromkeys(a.keys), email=a.email)
         await svc.audit(None, "settings:update:local", params={"email": a.email, "keys": sorted(a.keys)})
     _print_user_settings(info)

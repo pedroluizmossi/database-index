@@ -223,6 +223,8 @@ acessível para verificar ambas; uma wiki sem páginas acessíveis precisa de um
 
 ```bash
 # .env: WIKIJS_TOKEN=<API key com read:pages e read:source> (Administração → API Access)
+#       CODE_INDEX_WIKIJS_ALLOWED_HOSTS=wiki.exemplo.com  (hosts para onde o token pode ir; exigido para
+#       cadastrar pela interface/API, e com ele o token não vai para nenhum outro host)
 uv run code-index docs add wiki --url https://wiki.exemplo.com --locale pt-br \
   --include 'Plataforma/**' --exclude 'Rascunhos/**' \
   --link 'Plataforma/Email/**=snr-email-backend,snr-email-frontend'
@@ -564,6 +566,33 @@ uv run code-index serve                      # escuta em 127.0.0.1:8765; ponha u
 O comando `code-index` vive no ambiente do projeto: use `uv run code-index ...` na pasta do projeto, ou
 instale-o globalmente com `uv tool install -e .` (editável: acompanha o código).
 
+### CLI remota (login, logout, whoami)
+
+A mesma CLI fala com um servidor em vez de abrir o banco: os comandos de uso (`search`, `show`, `repo`, `org`,
+`docs`, `sync`, `graph`, `tests`, `vectors`...) viram chamadas a `/api/v1` com o seu token, e valem os scopes
+dele.
+
+```bash
+echo "$TOKEN" | code-index login --url https://code-index.empresa.com   # ou sem pipe: pergunta sem eco
+code-index whoami            # modo (local ou servidor) e dono do token
+code-index sync -b 5         # pede o job e acompanha; --no-wait só enfileira; --job ID acompanha um existente
+code-index --local search x  # força o modo local (abre o banco) só neste comando
+code-index logout            # apaga as credenciais locais (o token continua válido: revogue na interface)
+```
+
+- Token: crie na interface web (Tokens). Evite `--token` (fica no histórico do shell e em `ps`).
+- Credenciais em `~/.config/code-index/credentials.toml` (0600; `CODE_INDEX_CREDENTIALS` muda o caminho).
+  `CODE_INDEX_URL`/`CODE_INDEX_TOKEN` no ambiente valem antes do arquivo; `CODE_INDEX_CLI_MODE=local|remote`
+  força um modo; `CODE_INDEX_REMOTE_TIMEOUT` (s) é o timeout das chamadas.
+- Comandos de operador só rodam no modo local: `serve`, `worker` e `db migrate` (sempre no banco), e `watch`,
+  `eval`, `token create`, `user disable/enable/settings/set/unset` (recusam o modo remoto).
+
+### Kubernetes
+
+Chart Helm em `deploy/helm/code-index` (api sem estado com N réplicas, worker em StatefulSet, Postgres no
+CloudNativePG, migrations como hook do Helm). Passo a passo, segredos e operação em
+[`deploy/README.md`](deploy/README.md). `code-index db migrate` aplica as migrations e sai (é o Job do chart).
+
 ### Interface web (React)
 
 Código em `frontend/` (React 19, Tailwind 4, Vite). O `code-index serve` entrega o build em `/ui`.
@@ -626,7 +655,11 @@ mesma pessoa vê os mesmos tokens entrando por qualquer um dos dois.
   resultado e erro (`queued` → `running` → `done`/`failed`). O worker reserva o job com um lease renovado a cada
   1/3 de `SYNC_JOB_LEASE_SECONDS` (padrão 120). Se o worker ou o servidor cair, o lease vence e o job volta à fila
   para ser retomado (o sync é incremental); só falha de vez depois de `SYNC_JOB_MAX_ATTEMPTS` (padrão 3) tentativas.
-- **Rate limit por token:** leitura 120/min, busca 30/min, sync 6/hora (configurável).
+- **Rate limit por token:** leitura 120/min, busca 30/min, sync 6/hora (configurável). A contagem fica no Postgres
+  (janela fixa, igual em todas as réplicas); se o banco demorar mais que `CODE_INDEX_RATE_DB_TIMEOUT` (0,5 s), a
+  requisição passa.
+- **Lote sem limite e full:** `POST /api/v1/sync` com `all` (lote automático sem teto) ou `full` (ignora os
+  caches) só para admin; com `index:write`, informe um `batch` (até 50).
 - **Auditoria:** fica em `code_index.audit_log`, com quem, ação, parâmetros, status e IP. Nunca grava
   tokens nem o conteúdo retornado. Admins consultam em `GET /api/v1/audit`.
 - **Segredos mascarados:** respostas de busca e de leitura de arquivo saem com a mesma máscara do índice.

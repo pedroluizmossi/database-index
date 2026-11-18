@@ -1,0 +1,91 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "code-index.fullname" . }}-worker
+  labels:
+    {{- include "code-index.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  # Fixo em 1: o LMDB do CocoIndex é de um processo só e a fila é consumida por um worker.
+  replicas: 1
+  serviceName: {{ include "code-index.fullname" . }}-worker
+  podManagementPolicy: OrderedReady
+  selector:
+    matchLabels:
+      {{- include "code-index.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        {{- include "code-index.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+        {{- include "code-index.dbAccessLabel" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.worker.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: worker
+          image: {{ include "code-index.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["code-index", "worker"]
+          env:
+            {{- include "code-index.env" . | nindent 12 }}
+            {{- include "code-index.workerSecretEnv" . | nindent 12 }}
+          envFrom:
+            # Só o ConfigMap: os segredos entram um a um (worker.secretKeys), sem a chave da sessão.
+            - configMapRef:
+                name: {{ include "code-index.fullname" . }}-config
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: repos
+              mountPath: /data/repos
+            - name: state
+              mountPath: /data/state
+            - name: home
+              mountPath: /data/home
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: repos
+          persistentVolumeClaim:
+            claimName: {{ .Values.repos.existingClaim | default (printf "%s-repos" (include "code-index.fullname" .)) }}
+        - name: home
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.worker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  # Estado do CocoIndex (LMDB): disco de bloco RWO, nunca NFS.
+  volumeClaimTemplates:
+    - metadata:
+        name: state
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- with .Values.worker.cocoindex.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.worker.cocoindex.size }}

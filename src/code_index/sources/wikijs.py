@@ -70,6 +70,48 @@ class WikiJsError(RuntimeError):
     pass
 
 
+def _host(url: str) -> str:
+    from urllib.parse import urlsplit
+
+    return (urlsplit(url).hostname or "").lower()
+
+
+def _is_loopback_host(host: str) -> bool:
+    import ipaddress
+
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def check_wiki_url(url: str, settings: Settings, *, remote: bool) -> None:
+    """Regras do endereço de uma wiki nova (o WIKIJS_TOKEN do servidor vai no header dela): https fora de loopback;
+    host na allowlist `CODE_INDEX_WIKIJS_ALLOWED_HOSTS` quando ela existe; pedido remoto (API) exige a allowlist,
+    senão um token admin mandaria o WIKIJS_TOKEN para qualquer host (ou faria pedidos a serviços internos)."""
+    host = _host(url)
+    if not host or not url.startswith(("https://", "http://")):
+        raise ValueError("url da wiki deve começar com https://")
+    if url.startswith("http://") and not _is_loopback_host(host):
+        raise ValueError("url da wiki deve usar https:// (http:// só para localhost)")
+    allowed = {h.lower() for h in settings.wikijs_allowed_hosts}
+    if remote and not allowed:
+        raise PermissionError("cadastro de wiki pela API exige CODE_INDEX_WIKIJS_ALLOWED_HOSTS no servidor "
+                              "(hosts para onde o WIKIJS_TOKEN pode ir); ou cadastre pela CLI no servidor")
+    if allowed and host not in allowed:
+        raise PermissionError(f"host da wiki fora de CODE_INDEX_WIKIJS_ALLOWED_HOSTS: {host}")
+
+
+def wikijs_token(settings: Settings, url: str) -> str | None:
+    """O WIKIJS_TOKEN para falar com `url`. Com a allowlist configurada, só para os hosts dela (WikiJsError fora)."""
+    allowed = {h.lower() for h in settings.wikijs_allowed_hosts}
+    if allowed and _host(url) not in allowed:
+        raise WikiJsError(f"host da wiki fora de CODE_INDEX_WIKIJS_ALLOWED_HOSTS: {_host(url)}; o token não é enviado")
+    return settings.wikijs_token.get_secret_value() if settings.wikijs_token else None
+
+
 class WikiJsClient:
     def __init__(self, base_url: str, token: str | None, *, http: httpx.AsyncClient | None = None) -> None:
         if not token:
@@ -357,7 +399,7 @@ class WikiJsPlugin:
 
     async def fetch(self, source: DocSource, dest: Path, settings: Settings, *,
                     only: frozenset[str] | None = None) -> str:
-        token = settings.wikijs_token.get_secret_value() if settings.wikijs_token else None
+        token = wikijs_token(settings, source.url)
         log.info("sync de documentação %s (%s)", source.repo_name, source.url)
         result = await sync_docs(source, WikiJsClient(source.url, token), dest, only=only)
         log.info("%s: %d páginas, %d baixadas, %d removidas", source.repo_name, result.total, result.changed,
@@ -366,8 +408,7 @@ class WikiJsPlugin:
 
     async def preview(self, source: DocSource, settings: Settings, *, limit: int) -> dict[str, Any]:
         """Páginas que entrariam, agrupadas pela raiz (lista a wiki; não baixa conteúdo)."""
-        token = settings.wikijs_token.get_secret_value() if settings.wikijs_token else None
-        pages = await WikiJsClient(source.url, token).list_pages(source.locale)
+        pages = await WikiJsClient(source.url, wikijs_token(settings, source.url)).list_pages(source.locale)
         selected = sorted(selected_pages(source, pages), key=lambda p: p.path.lower())
         roots: dict[str, int] = {}
         for p in selected:

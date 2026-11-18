@@ -41,7 +41,7 @@ log = logging.getLogger(__name__)
 
 class RegisterRateLimit:
     """Limite por IP no registro de clientes OAuth (/register é aberto, pelo RFC 7591). ASGI puro, para não
-    interferir nas respostas do MCP."""
+    interferir nas respostas do MCP. Contagem compartilhada entre réplicas (RateLimiter, fail-open)."""
 
     def __init__(self, app: ASGIApp, limiter: RateLimiter, per_hour: int = 20) -> None:
         self.app, self.limiter, self.per_hour = app, limiter, per_hour
@@ -49,7 +49,7 @@ class RegisterRateLimit:
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "http" and scope["method"] == "POST" and scope["path"] == "/register":
             ip = (scope.get("client") or ("?",))[0]
-            retry = self.limiter.hit("oauth-register", ip, limit=self.per_hour, window=3600.0)
+            retry = await self.limiter.hit("oauth-register", ip, limit=self.per_hour, window=3600.0)
             if retry is not None:
                 resp = JSONResponse(
                     {"error": "temporarily_unavailable", "error_description": "muitos registros; tente mais tarde"},
@@ -79,13 +79,14 @@ async def _housekeeping_loop(svc: CodeIndexService) -> None:
 
 def create_app(settings: Settings) -> FastAPI:
     secret = settings.require_auth_secret()
-    limiter = RateLimiter()
     holder: dict[str, CodeIndexService] = {}
 
     def service() -> CodeIndexService:
         if "svc" not in holder:
             raise RuntimeError("serviço ainda não iniciado")
         return holder["svc"]
+
+    limiter = RateLimiter(service)  # contagem no Postgres, compartilhada entre réplicas
 
     mcp = build_mcp(settings, service, limiter)
     # Sem estado: as tools são pergunta/resposta, sem notificações do servidor. Com sessão (o padrão do

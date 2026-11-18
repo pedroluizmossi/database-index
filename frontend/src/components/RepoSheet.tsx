@@ -17,8 +17,10 @@ import {
 } from "lucide-react";
 import { api } from "../api/endpoints";
 import { describeError } from "../api/client";
-import type { ApiImpl, CentralFile, Repo, RepoCardInfo, RepoFile, SdlService, SummaryCoverageRepo } from "../api/types";
-import { ORIGIN_HINT, ORIGIN_LABEL } from "../lib/ownership";
+import type { ApiImpl, CentralFile, ContractService, Repo, RepoCardInfo, RepoFile, SummaryCoverageRepo } from "../api/types";
+import { contractFormats, formatsText, operationCount, operationGroups } from "../lib/contracts";
+import { originHint, originLabel } from "../lib/ownership";
+import { useOrigins } from "./docs";
 import { cx, formatDateTime, plural, repoShortName, timeAgo } from "../lib/utils";
 import type { FileTarget } from "./FileDrawer";
 import { CoverageMeter } from "./summaries";
@@ -61,6 +63,7 @@ interface RepoSheetProps {
  * do enriquecimento. Só leitura.
  */
 export function RepoSheet({ repo, knownRepos, onSelectRepo, onOpenFile, docs, docCount, linkedApis, linkedApiCount }: RepoSheetProps) {
+  const originMeta = useOrigins();
   const [info, setInfo] = useState<RepoCardInfo | null>(null);
   const [infoState, setInfoState] = useState<"loading" | "ready" | "missing">("loading");
   const [files, setFiles] = useState<RepoFile[] | null>(null);
@@ -105,7 +108,9 @@ export function RepoSheet({ repo, knownRepos, onSelectRepo, onOpenFile, docs, do
     const stale = withSummary.filter((f) => f.stale).length;
     return { repo: repo.name, files: code.length, fresh: withSummary.length - stale, stale };
   }, [files, repo.name]);
-  const operations = useMemo(() => (info ? info.facts.sdl.reduce((n, s) => n + opCount(s), 0) : 0), [info]);
+  const contracts = useMemo(() => info?.contracts ?? [], [info]);
+  const operations = useMemo(() => contracts.reduce((n, s) => n + operationCount(s), 0), [contracts]);
+  const formats = useMemo(() => contractFormats(info), [info]);
   const open = (path: string, line?: number) =>
     onOpenFile({ repo: repo.name, path, highlight: line ? { start: line, end: line } : undefined });
   const jump = (id: SectionId) => document.getElementById(`ficha-${id}`)?.scrollIntoView({ block: "start", behavior: "smooth" });
@@ -183,8 +188,8 @@ export function RepoSheet({ repo, knownRepos, onSelectRepo, onOpenFile, docs, do
                     </Badge>
                   ))}
                   {repo.owner_origin && (
-                    <span className="text-xs text-stone-500 dark:text-stone-400" title={ORIGIN_HINT[repo.owner_origin]}>
-                      {ORIGIN_LABEL[repo.owner_origin]}
+                    <span className="text-xs text-stone-500 dark:text-stone-400" title={originHint(originMeta, repo.owner_origin) || undefined}>
+                      {originLabel(originMeta, repo.owner_origin)}
                       {repo.owner_confidence ? ` · confiança ${repo.owner_confidence}` : ""}
                     </span>
                   )}
@@ -315,14 +320,21 @@ export function RepoSheet({ repo, knownRepos, onSelectRepo, onOpenFile, docs, do
         icon={Braces}
         title="APIs"
         count={info ? operations : undefined}
-        hint="Operações declaradas no contrato (.sdl) e o handler que implementa cada uma, quando foi encontrado pelo nome."
+        hint={`Operações declaradas no contrato (${formats.length ? formats.join(", ") : "API"}) e a classe que implementa cada uma, quando foi encontrada pelo nome.`}
       >
         {infoState === "loading" && <Skeleton className="m-5 h-16" />}
-        {info && info.facts.sdl.length === 0 && <Empty>Este repo não declara operações (sem arquivo .sdl).</Empty>}
+        {info && contracts.length === 0 && (
+          <Empty>
+            {formats.length > 0
+              ? `Este repo não declara operações (sem ${formatsText(formats)}).`
+              : "Nenhum perfil de organização ativo lê contratos de API."}
+          </Empty>
+        )}
         {infoState === "missing" && <Empty>Os fatos deste repo ainda não foram coletados.</Empty>}
-        {info?.facts.sdl.map((service) => (
-          <SdlServiceBlock key={`${service.path}|${service.service}`} service={service} impls={info.impls} onOpen={open} />
-        ))}
+        {info &&
+          contracts.map((service) => (
+            <ContractBlock key={`${service.path}|${service.service}`} service={service} impls={info.impls} onOpen={open} />
+          ))}
       </Section>
       {linkedApiCount > 0 && linkedApis}
 
@@ -511,44 +523,36 @@ function FileSummaryHint({ file }: { file: RepoFile | undefined }) {
 
 // ---------------------------------------------------------------- APIs
 
-const OP_GROUPS: { key: "queries" | "actions" | "signals" | "events"; label: string }[] = [
-  { key: "queries", label: "Consultas" },
-  { key: "actions", label: "Ações" },
-  { key: "signals", label: "Sinais" },
-  { key: "events", label: "Eventos" },
-];
-
-function opCount(s: SdlService): number {
-  return s.queries.length + s.actions.length + s.signals.length + s.events.length;
-}
-
-function SdlServiceBlock({ service, impls, onOpen }: { service: SdlService; impls: ApiImpl[]; onOpen: (path: string, line?: number) => void }) {
+/** Um serviço de contrato: operações por grupo; as que têm implementação localizada abrem o arquivo dela. */
+function ContractBlock({ service, impls, onOpen }: { service: ContractService; impls: ApiImpl[]; onOpen: (path: string, line?: number) => void }) {
   const byOp = useMemo(() => {
     const map = new Map<string, ApiImpl>();
     for (const i of impls) if (i.service === service.service && i.domain === service.domain) map.set(i.operation.toLowerCase(), i);
     return map;
   }, [impls, service]);
-  const total = opCount(service);
+  const groups = operationGroups(service);
+  const total = operationCount(service);
   return (
     <div className="space-y-4 border-b border-stone-100 px-5 py-4 last:border-b-0 dark:border-stone-800">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <Badge tone="accent">
           {service.domain}/{service.service}
         </Badge>
+        {service.format && <Badge>{service.format}</Badge>}
         <button type="button" onClick={() => onOpen(service.path)} className="font-mono text-xs text-stone-500 underline-offset-2 hover:text-accent-600 hover:underline dark:text-stone-400">
           {service.path}
         </button>
         <span className="ml-auto text-xs text-stone-500 dark:text-stone-400">
-          {byOp.size} de {total} com handler localizado
+          {byOp.size} de {total} com implementação localizada
         </span>
       </div>
-      {OP_GROUPS.filter((g) => service[g.key].length > 0).map((g) => (
-        <div key={g.key}>
+      {groups.map((g) => (
+        <div key={g.group}>
           <p className="mb-1.5 text-xs font-medium text-stone-500 dark:text-stone-400">
-            {g.label} <span className="font-normal tabular-nums">{service[g.key].length}</span>
+            {g.label} <span className="font-normal tabular-nums">{g.names.length}</span>
           </p>
           <ul className="flex flex-wrap gap-1.5">
-            {service[g.key].map((op) => {
+            {g.names.map((op) => {
               const impl = byOp.get(op.toLowerCase());
               return (
                 <li key={op}>

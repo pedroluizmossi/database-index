@@ -49,6 +49,7 @@ async def test_correcoes_de_consulta(int_settings: Settings, tmp_path: Path, fak
         assert (sym.line, sym.signature) == (5, "public class CaptchaValidator {")
 
 
+@pytest.mark.profile("senior")  # SDL/convenções do perfil senior ativos nos Settings
 async def test_indexacao_sdl_minificado_e_acentos(int_settings: Settings, tmp_path: Path, fake_llm: Any) -> None:
     from code_index.services import open_service
 

@@ -68,6 +68,7 @@ async def setup(svc: Any, base: Path) -> None:
     await svc.sync(None, batch=None, do_discover=False)
 
 
+@pytest.mark.profile("senior")  # SDL/convenções do perfil senior ativos nos Settings
 async def test_inferencia_catalogo_e_busca_por_dominio(int_settings: Settings, tmp_path: Path, fake_llm: Any) -> None:
     async with open_service(int_settings) as svc:
         await setup(svc, tmp_path)
@@ -115,6 +116,7 @@ async def test_inferencia_catalogo_e_busca_por_dominio(int_settings: Settings, t
             await svc.search("x", service="audit")
 
 
+@pytest.mark.profile("senior")  # SDL/convenções do perfil senior ativos nos Settings
 async def test_atribuicao_manual(int_settings: Settings, tmp_path: Path, fake_llm: Any) -> None:
     async with open_service(int_settings) as svc:
         await setup(svc, tmp_path)
@@ -152,3 +154,42 @@ async def test_atribuicao_manual(int_settings: Settings, tmp_path: Path, fake_ll
         back = next(r for r in await svc.ownership_list(repo="audit-frontend") if r["path"] is None)
         assert (back["owners"], back["origin"]) == (["platform/audit"], "sibling")
         assert [r["repo"] for r in await svc.ownership_list(unowned=True)] == []
+
+
+@pytest.mark.profile("senior")  # SDL/convenções do perfil senior ativos nos Settings
+async def test_perfil_desligado_limpa_as_origens_dele(int_settings: Settings, tmp_path: Path, fake_llm: Any) -> None:
+    """Sem o perfil que as declarava, as origens derivadas dele (e as desconhecidas) não derrubam a leitura e saem no
+    recálculo completo; a manual fica. Religado, o perfil volta a inferir."""
+    from code_index.profiles.registry import load_profiles
+
+    async with open_service(int_settings) as svc:
+        await setup(svc, tmp_path)
+        await svc.set_owner(None, ["legado"], "financeiro", create=True)
+        pool = svc._chunks.pool
+        table = f'"{int_settings.pg_schema}".relations'
+        await pool.execute(f"INSERT INTO {table} (src, dst, type, origin) "
+                           "VALUES ('repo:trilha', 'dom:velho', 'belongs_to', 'perfil_antigo')")
+
+        svc.profiles = load_profiles(["default"])
+        svc._owner_cache = None
+        owners = {(r["repo"], r["path"]): (r["owners"], r["origin"]) for r in await svc.ownership_list()}
+        assert owners[("audit-backend", None)] == (["platform/audit"], "declared")  # linha velha: ainda legível
+        assert owners[("trilha", None)] == (["platform/audit"], "usage")  # origem desconhecida vale menos
+
+        await svc.rebuild_relations()
+        origins = {r["origin"] for r in await pool.fetch(f"SELECT DISTINCT origin FROM {table} WHERE type = 'belongs_to'")}
+        assert origins == {"manual"}
+        owners = {(r["repo"], r["path"]): (r["owners"], r["origin"]) for r in await svc.ownership_list()}
+        assert owners[("legado", None)] == (["financeiro"], "manual")
+        assert owners[("audit-backend", None)] == ([], None)
+        catalog = await svc.ownership_catalog()
+        assert {d["name"] for d in catalog["domains"]} == {"financeiro", "transversal"}
+
+        svc.profiles = load_profiles(["senior"])
+        await svc.rebuild_relations()
+        owners = {(r["repo"], r["path"]): (r["owners"], r["origin"]) for r in await svc.ownership_list()}
+        assert owners[("audit-backend", None)] == (["platform/audit"], "declared")
+        assert owners[("trilha", None)] == (["platform/audit"], "usage")
+        audit = next(s for d in (await svc.ownership_catalog())["domains"] if d["name"] == "platform"
+                     for s in d["services"] if s["name"] == "audit")
+        assert audit["manual"] is False and audit["declared_in"] == ["audit-backend"]

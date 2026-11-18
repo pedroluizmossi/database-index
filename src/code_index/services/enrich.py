@@ -9,13 +9,14 @@ from pathlib import Path
 from typing import Any
 
 
+from ..domain.contracts import CONTRACTS_SECTION, contracts_payload
 from ..domain.models import RepoState
 from ..domain.api_impl import parse_operation_ref
 from ..domain.doc_task import DOC_BATCH, page_excerpt, page_folder, render_doc_task, search_text, validate_doc_links
 from ..domain.file_summary import FILE_BATCH, batch as summary_batch, excerpt, render_summary_task, validate_summaries
 from ..domain.repo_card import material_hash, parse_payload, related_candidates, render_card_task, validate_card
 from ..indexing import enrich as enrich_collect
-from ..indexing.orchestrator import configured_repos, repo_for_row
+from ..indexing.orchestrator import configured_repos
 from ..infra.summary_store import SummaryStore
 from ..infra.vector_store import VectorStore
 from ..retrieval.redaction import mask_output
@@ -34,21 +35,24 @@ class EnrichMixin(ServiceBase):
         for row in rows.values():
             if row.kind != "code" or row.ignored or not row.indexed:
                 continue
-            root = repo_for_row(row, orgs, manual).local_path(self.settings.repos_dir)
+            root = self._repo_for_row(row, orgs, manual).local_path(self.settings.repos_dir)
             if root.is_dir():
                 out[row.name] = (row, root)
         return out
 
     async def _collect_card_material(self, row: RepoState, root: Path) -> None:
         symbols = await self._symbols.repo_overview(row.name)
-        material = await asyncio.to_thread(enrich_collect.collect_material, root, language=row.language, symbols=symbols)
+        material = await asyncio.to_thread(enrich_collect.collect_material, root, language=row.language, symbols=symbols,
+                                           extractors=self.profiles.fact_extractors,
+                                           ownership=self.profiles.ownership_rules)
         await self._enrich.save_material(row.name, revision=_facts_key(row), commit=row.indexed_commit,
                                          input_hash=material_hash(material), material=material)
 
     async def enrich_facts(self, repos: Sequence[str] | None = None, *, force: bool = False,
                            rebuild: bool = True) -> dict[str, int]:
         """Coleta os fatos/material (sem LLM, sem custo) dos repos cuja revisão mudou desde a última coleta.
-        Com `rebuild`, recalcula as relações que dependem dos fatos (SDL → API, operação → handler)."""
+        Com `rebuild`, recalcula as relações que dependem dos fatos: dono no DDD e os linkers dos perfis ativos
+        (ex.: no `senior`, SDL → API e operação → handler)."""
         wanted = await self._resolve_repos(repos)
         targets = await self._card_targets(await self._repos.all_rows())
         done = await self._enrich.revisions()
@@ -61,14 +65,17 @@ class EnrichMixin(ServiceBase):
             await self._collect_card_material(row, root)
             updated += 1
         if updated and rebuild:
-            await self.rebuild_relations(only=("handler", "openapi-sdl", "ownership"))
+            await self.rebuild_relations(only=("ownership", *(linker.name for linker in self.profiles.linkers)))
         return {"repos": len(targets) if wanted is None else len(wanted), "updated": updated}
 
     async def find_api_impl(self, operation: str, *, service: str | None = None,
                             domain: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
-        """Onde uma operação da API (SDL) é implementada: repo, classe handler, arquivo e linha.
-        Aceita 'op', 'servico.op' ou o título da página da API ('POST /email/queries/op')."""
+        """Onde uma operação de contrato da API é implementada: repo, classe, arquivo e linha (relações
+        `implemented_by`, pela convenção do perfil ativo). Aceita 'op', 'servico.op' ou o título da página da API
+        ('POST /servico/queries/op'). Sem perfil que ofereça implementações (`impl_convention`): lista vazia."""
         parsed_service, op = parse_operation_ref(operation)
+        if self.profiles.impl_convention is None:
+            return []
         return await self._relations.find_impls(op, service=service or parsed_service, domain=domain,
                                                 limit=max(1, min(limit, 100)))
 
@@ -96,11 +103,13 @@ class EnrichMixin(ServiceBase):
         card = await self._enrich.get(task.repo)
         assert card is not None
         targets = await self._card_targets(await self._repos.all_rows())
-        candidates = related_candidates(task.repo, targets.keys(), await self._enrich.all_facts())
+        candidates = related_candidates(task.repo, targets.keys(), await self._enrich.all_facts(),
+                                        naming=self.profiles.naming)
         await self._enrich.set_candidates(task.id, candidates)
         remaining = await self._enrich.pending_count()
         text = render_card_task(task_id=task.id, repo=task.repo, commit=card["commit"], remaining=remaining,
-                                material=card["material"], candidates=candidates)
+                                material=card["material"], candidates=candidates,
+                                extractors=self.profiles.fact_extractors)
         return {"id": task.id, "kind": task.kind, "repo": task.repo, "commit": card["commit"],
                 "lease_until": _iso_local(task.lease_until), "remaining": remaining,
                 "candidates": candidates, "material": card["material"], "text": text}
@@ -197,7 +206,8 @@ class EnrichMixin(ServiceBase):
         for name, files in by_repo.items():
             head = files[:FILE_BATCH]
             code = await store.file_code(name, [f["path"] for f in head])
-            items = [{**f, "code": excerpt(mask_output(code.get(f["path"], ""), f["language"]))} for f in head]
+            items = [{**f, "code": excerpt(mask_output(code.get(f["path"], ""), f["language"], self.profiles.file_types))}
+                     for f in head]
             chosen = [dict(f) for f in summary_batch(items)]
             task = await store.lease_batch(agent=agent, lease_minutes=self.settings.enrich_lease_minutes,
                                            repo=name, files=chosen)
@@ -306,7 +316,7 @@ class EnrichMixin(ServiceBase):
         await self._enrich.expire_leases()
         st = await self._enrich.status()
         st["pending"] = await self._enrich.pending_count()
-        st["impls"] = {"operations": await self._enrich.sdl_operation_count(),
+        st["impls"] = {"operations": await self._enrich.contract_operation_count(),
                        "matched": await self._relations.count("implemented_by")}
         st["docs"] = {**await self._enrich.doc_queue_stats(), **await self._relations.suggestion_stats()}
         st["summaries"] = await self._summaries.stats()
@@ -341,7 +351,9 @@ class EnrichMixin(ServiceBase):
         return n
 
     async def repo_card(self, repo: str) -> dict[str, Any] | None:
-        """Fatos e cartão de um repo (None se ainda não coletado)."""
+        """Fatos e cartão de um repo (None se ainda não coletado). `contracts`: os serviços de contrato dos fatos no
+        formato genérico, com o rótulo do formato (ex.: ".sdl"); `facts.sdl`/`facts.properties` continuam por
+        compatibilidade. `profiles`: os perfis de organização ativos (origens e formatos de contrato de cada um)."""
         name = (await self._resolve_repos([repo]) or [repo])[0]
         row = await self._enrich.get(name)
         if row is None:
@@ -349,12 +361,14 @@ class EnrichMixin(ServiceBase):
         card = row["card"]
         if card and card.get("summary"):
             card = {**card, "summary": mask_output(card["summary"], "markdown")}
-        return {"repo": name, "commit": row["commit"], "facts": row["material"].get("facts", {}),
+        facts = row["material"].get("facts", {})
+        return {"repo": name, "commit": row["commit"], "facts": facts,
+                "contracts": contracts_payload(facts.get(CONTRACTS_SECTION) or [], self.profiles.contract_format),
                 "impls": await self._relations.impls_for_repo(name),
                 "related": await self._relations.related_repos(name),
                 "card": card, "stale": row["card"] is not None and row["card_input_hash"] != row["input_hash"],
                 "card_agent": row["card_agent"] or None, "card_at": _iso_local(row["card_at"]),
-                "facts_at": _iso_local(row["facts_at"])}
+                "facts_at": _iso_local(row["facts_at"]), "profiles": self.profiles.describe()}
 
     # ------------------------------------------------------------ jobs de sync
 

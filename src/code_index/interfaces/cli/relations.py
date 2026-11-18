@@ -52,7 +52,7 @@ def register(sub: Subparsers, settings: Settings) -> None:
     r_.add_argument("--json", action="store_true")
     r_.set_defaults(fn=_cmd_relations_stats)
     r_ = rl.add_parser("show", help="tudo ligado a uma entidade (repo, doc:..., op:..., code:...)")
-    r_.add_argument("entity", help="nome do repo ou chave, ex.: op:platform/email/sendEmail")
+    r_.add_argument("entity", help="nome do repo ou chave, ex.: op:<domínio>/<serviço>/<operação>")
     r_.add_argument("-t", "--type", choices=["documents", "describes", "implemented_by", "related_to", "belongs_to"])
     r_.add_argument("-n", "--limit", type=int, default=200)
     r_.add_argument("--json", action="store_true")

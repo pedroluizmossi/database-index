@@ -10,6 +10,7 @@ from code_index.settings import Settings, use_settings
 pytestmark = pytest.mark.integration
 
 
+@pytest.mark.profile("senior")  # SDL/convenções do perfil senior ativos nos Settings
 async def test_vinculo_por_nome_exato_antes_de_sufixos(int_settings: Settings, fake_llm: Any,
                                                       monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from code_index.sources import openapi_s3
@@ -37,6 +38,43 @@ async def test_vinculo_por_nome_exato_antes_de_sufixos(int_settings: Settings, f
         assert await svc.linked_docs("snr-blob-service-replication") == []
 
 
+async def test_perfil_default_sem_prefixo_nem_bucket_da_organizacao(
+        int_settings: Settings, fake_llm: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Sem perfil de organização: nenhum bucket padrão e nenhum prefixo de repo sai do nome no vínculo."""
+    from code_index.sources import openapi_s3
+    from code_index.services import open_service
+
+    xml = '''<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><IsTruncated>false</IsTruncated>
+      <Contents><Key>platform_blob_service.swagger.yaml</Key><ETag>1</ETag><Size>1</Size></Contents></ListBucketResult>'''
+    swagger = "swagger: '2.0'\ninfo: {title: blob}\npaths: {/blob: {get: {responses: {}}}}\n"
+    seen: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(str(req.url))
+        return httpx.Response(200, text=xml if "list-type" in req.url.params else swagger)
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(openapi_s3.httpx, "AsyncClient", lambda *args, **kwargs: real(transport=httpx.MockTransport(handler)))
+    generic = use_settings(int_settings.model_copy(update={"profiles": ["default"]}))
+    async with open_service(generic) as svc:
+        with pytest.raises(ValueError, match="OPENAPI_BUCKET_URL"):
+            await svc.openapi_catalog()
+    bucket = "https://s3.exemplo.invalid/catalogo"
+    settings = use_settings(int_settings.model_copy(update={"profiles": ["default"], "openapi_bucket_url": bucket}))
+    async with open_service(settings) as svc:
+        for name in ("acme-blob-service", "blob-service"):
+            folder = tmp_path / name
+            folder.mkdir()
+            (folder / "main.py").write_text("def exemplo():\n    return 1\n")
+            await svc.add_repo(str(folder), name=name)
+        name = await svc.register_openapi("platform", ["blob_service"])
+        assert (await svc.sync([name], batch=None, do_discover=False, progress=False)).errors == {}
+        assert seen and all(u.startswith(bucket) for u in seen)
+        assert len(await svc.linked_docs("blob-service")) == 1
+        assert await svc.linked_docs("acme-blob-service") == []  # 'acme-' só sairia com um perfil que o declare
+
+
+@pytest.mark.profile("senior")  # SDL/convenções do perfil senior ativos nos Settings
 async def test_indexacao_seletiva_e_incremental(int_settings: Settings, fake_llm: Any, monkeypatch: pytest.MonkeyPatch,
                                                tmp_path: Path) -> None:
     from code_index.sources import openapi_s3
@@ -113,6 +151,7 @@ async def test_indexacao_seletiva_e_incremental(int_settings: Settings, fake_llm
         assert await svc.linked_docs("snr-scheduler-backend") == []
 
 
+@pytest.mark.profile("senior")  # SDL/convenções do perfil senior ativos nos Settings
 async def test_vinculo_pelo_sdl_do_repo(int_settings: Settings, fake_llm: Any,
                                         monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Repo com nome sem relação com o serviço liga pela declaração `domain`/`service` do .sdl."""

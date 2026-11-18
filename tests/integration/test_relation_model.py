@@ -55,7 +55,7 @@ class FolderPlugin:
     async def preview(self, source: DocSource, settings: Settings, *, limit: int) -> dict[str, Any]:
         return {"name": source.repo_name, "total": len(list(Path(source.url).glob("*.md")))}
 
-    def linkers(self) -> list[Any]:
+    def linkers(self, naming: Any) -> list[Any]:
         return [FolderLinker()]
 
 

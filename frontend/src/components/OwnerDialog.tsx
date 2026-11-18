@@ -3,7 +3,8 @@ import { FolderTree, Undo2 } from "lucide-react";
 import { api } from "../api/endpoints";
 import { describeError } from "../api/client";
 import type { OwnershipCatalog, OwnershipRow, Repo } from "../api/types";
-import { ORIGIN_HINT, ORIGIN_LABEL, normalizeOwner, ownerOptions, validOwner } from "../lib/ownership";
+import { normalizeOwner, originHint, originLabel, ownerOptions, validOwner } from "../lib/ownership";
+import { useOrigins } from "./docs";
 import { plural, repoShortName } from "../lib/utils";
 import { Dialog } from "./Dialog";
 import { OwnerCombobox } from "./OwnerCombobox";
@@ -12,7 +13,7 @@ import { Alert, Badge, Button, Field, inputClass } from "./ui";
 
 /**
  * Atribuição manual do dono (domínio/serviço do DDD) de um ou mais repos, ou de uma pasta de um repo
- * (monorepo). Vale na hora e vence o que a inferência e o .sdl dizem. Domínio/serviço fora do catálogo só
+ * (monorepo). Vale na hora e vence a inferência (inclusive a declarada no próprio repo). Domínio/serviço fora do catálogo só
  * com confirmação explícita, para um erro de digitação não virar um domínio novo.
  */
 export function OwnerDialog({
@@ -64,11 +65,19 @@ export function OwnerDialog({
   const whole = rows?.find((r) => r.path === null) ?? null;
   const folders = rows?.filter((r) => r.path !== null) ?? [];
   const manualCount = repos.filter((r) => r.owner_origin === "manual").length;
-  const declaredCount = repos.filter((r) => r.owner_origin === "declared").length;
+  const originMeta = useOrigins();
+  /**
+   * Repos cujo domínio hoje é declarado pelo próprio repo (origem `authoritative`, ex.: o .sdl do repo no perfil
+   * senior), com o rótulo de cada origem do servidor. Inferências mais fracas (repo irmão, chamadas, uso de lib)
+   * são só sugestão: sobrepor não pede aviso.
+   */
+  const authoritative = new Set([...originMeta.values()].filter((o) => o.authoritative).map((o) => o.name));
+  const inferred = repos.filter((r) => r.owner_origin && authoritative.has(r.owner_origin) && r.owners.length > 0);
+  const inferredLabels = [...new Set(inferred.map((r) => originLabel(originMeta, r.owner_origin ?? "")))];
   /** Pasta digitada (só para um repo): a atribuição vai para ela, não para o repo inteiro. */
   const folder = single && path.trim() ? path.trim() : null;
-  /** Atribuição no repo inteiro sobrepõe um dono declarado no .sdl (pasta, não). */
-  const overwritesDeclared = declaredCount > 0 && folder === null;
+  /** Atribuição no repo inteiro sobrepõe o dono declarado pelo repo (pasta, não). */
+  const overwritesInferred = inferred.length > 0 && folder === null;
   /** Um repo com vários donos manuais: o campo pré-preenche só o primeiro, então avisa. */
   const multiManual = single && single.owner_origin === "manual" && single.owners.length > 1 ? single : null;
 
@@ -124,7 +133,7 @@ export function OwnerDialog({
       push({
         tone: "success",
         title: "Atribuição manual removida",
-        description: res.cleared ? "Volta a valer o SDL ou a inferência." : "Não havia atribuição manual.",
+        description: res.cleared ? "Volta a valer o domínio inferido, se houver." : "Não havia atribuição manual.",
       });
       onDone();
       onClose();
@@ -165,7 +174,7 @@ export function OwnerDialog({
         {single && whole && <CurrentOwner row={whole} onPick={setValue} />}
         {single && rows !== null && !whole && (
           <p className="text-sm text-stone-500 dark:text-stone-400">
-            Sem domínio hoje: nem SDL, nem repositório irmão, nem chamadas de API ou uso que indiquem o domínio.
+            Sem domínio hoje: nenhuma inferência indica o domínio deste repositório.
           </p>
         )}
         {multiManual && (
@@ -175,14 +184,14 @@ export function OwnerDialog({
           </p>
         )}
         {!single && <SelectedRepos repos={repos} manualCount={manualCount} />}
-        {overwritesDeclared && (
+        {overwritesInferred && (
           <p
             role="note"
             className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200"
           >
             {single
-              ? "Este repositório tem domínio declarado no SDL. A atribuição manual vai prevalecer sobre o .sdl."
-              : `${declaredCount} ${plural(declaredCount, "repositório tem", "repositórios têm")} domínio declarado no SDL. A atribuição manual vai prevalecer sobre o .sdl.`}
+              ? `Hoje o domínio deste repositório é declarado por ele mesmo (${inferredLabels.join(", ")}). A atribuição manual vai prevalecer sobre a declaração.`
+              : `${inferred.length} ${plural(inferred.length, "repositório declara", "repositórios declaram")} o próprio domínio (${inferredLabels.join(", ")}). A atribuição manual vai prevalecer sobre a declaração.`}
           </p>
         )}
 
@@ -198,7 +207,7 @@ export function OwnerDialog({
               setCreate(false);
             }}
             options={options}
-            placeholder="ex.: platform/authentication, hcm, transversal"
+            placeholder="ex.: vendas/pedidos, financeiro, transversal"
             autoFocus
           />
         </div>
@@ -216,7 +225,7 @@ export function OwnerDialog({
               className="mt-0.5 size-4 accent-amber-600"
             />
             <span>
-              <span className="font-mono">{normalized}</span> não existe no catálogo (nenhum .sdl declara). Marque
+              <span className="font-mono">{normalized}</span> não existe no catálogo (ninguém o declara). Marque
               para criar.
             </span>
           </label>
@@ -318,10 +327,11 @@ async function undoAssignment(plan: UndoPlan): Promise<void> {
 
 const CONFIDENCE: Record<string, string> = { alta: "alta", media: "média", baixa: "baixa" };
 
-function OriginBadge({ origin }: { origin: keyof typeof ORIGIN_LABEL }) {
+function OriginBadge({ origin }: { origin: string }) {
+  const meta = useOrigins();
   return (
-    <span title={ORIGIN_HINT[origin]}>
-      <Badge tone={origin === "manual" ? "accent" : "neutral"}>{ORIGIN_LABEL[origin]}</Badge>
+    <span title={originHint(meta, origin) || undefined}>
+      <Badge tone={origin === "manual" ? "accent" : "neutral"}>{originLabel(meta, origin)}</Badge>
     </span>
   );
 }
@@ -366,6 +376,7 @@ function SelectedRepos({ repos, manualCount }: { repos: Repo[]; manualCount: num
 
 /** Dono atual do repo inteiro, de onde veio e o que as origens mais fracas sugerem (um clique preenche). */
 function CurrentOwner({ row, onPick }: { row: OwnershipRow; onPick: (value: string) => void }) {
+  const meta = useOrigins();
   return (
     <div className="space-y-2 rounded-lg border border-stone-200 bg-stone-50 px-3.5 py-3 text-sm dark:border-stone-800 dark:bg-stone-950/40">
       <div className="flex flex-wrap items-center gap-2">
@@ -387,7 +398,7 @@ function CurrentOwner({ row, onPick }: { row: OwnershipRow; onPick: (value: stri
               className="rounded-md border border-stone-200 bg-sheet px-2 py-0.5 text-xs outline-none transition hover:border-accent-400 hover:text-accent-700 focus-visible:ring-2 focus-visible:ring-accent-500 dark:border-stone-700 dark:bg-stone-900 dark:hover:text-accent-300"
               title={`Usar ${alt.owner}`}
             >
-              {alt.owner} <span className="text-stone-500 dark:text-stone-400">· {ORIGIN_LABEL[alt.origin]}</span>
+              {alt.owner} <span className="text-stone-500 dark:text-stone-400">· {originLabel(meta, alt.origin)}</span>
             </button>
           ))}
         </div>

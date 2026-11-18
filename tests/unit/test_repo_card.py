@@ -1,4 +1,5 @@
-"""Cartão do repo: parsers (SDL, catalog-info), fatos, README, candidatos, validação e texto da tarefa."""
+"""Cartão do repo: catalog-info, fatos, README, candidatos, validação e texto da tarefa (núcleo, sem perfil; o SDL do
+perfil senior fica em tests/profiles/senior/)."""
 
 from __future__ import annotations
 
@@ -7,62 +8,12 @@ from code_index.domain.repo_card import (
     clean_readme,
     material_hash,
     parse_catalog_info,
-    parse_pdl,
     parse_payload,
-    parse_sdl,
     related_candidates,
     render_card_task,
     top_modules,
     validate_card,
 )
-
-SDL = '''domain platform
-
-service email {
-    // comentário com query falsa { }
-    endpoints {
-        "Query para o SRE: query fake {"
-        private query healthcheck {
-            in {}
-            out { status: upDown }
-        }
-        "Envio do e-mail"
-        private action sendEmail {
-            in { query: string }
-        }
-        public query listBlacklistedEmails { in {} out {} }
-        action testEmail { in {} out {} }
-        signal configChanged { in {} }
-    }
-    events {
-        public event emailSent { payload: string }
-        event emailSentError { }
-    }
-    fixed entity emailLog { id: string }
-    record content { body: string }
-}
-'''
-
-
-def test_parse_sdl_operacoes_eventos_entidades() -> None:
-    [s] = parse_sdl(SDL, "email.sdl")
-    assert (s.domain, s.service, s.path) == ("platform", "email", "email.sdl")
-    assert s.queries == ("healthcheck", "listBlacklistedEmails")
-    assert s.actions == ("sendEmail", "testEmail")
-    assert s.signals == ("configChanged",)
-    assert s.events == ("emailSent", "emailSentError")
-    assert s.entities == ("emailLog",)
-    assert s.private == ("healthcheck", "sendEmail")
-
-
-def test_parse_sdl_sem_domain_ou_service() -> None:
-    assert parse_sdl("service x { query a { } }") == []
-    assert parse_sdl("domain d\nrecord r { }") == []
-
-
-def test_parse_sdl_varios_services() -> None:
-    out = parse_sdl('domain hcm ("RH")\nservice a ( "Rótulo" ) { query q1 { } }\nservice b { action a1 { } }')
-    assert [(s.service, s.queries, s.actions) for s in out] == [("a", ("q1",), ()), ("b", (), ("a1",))]
 
 
 CATALOG = """apiVersion: backstage.io/v1alpha1
@@ -94,7 +45,6 @@ def test_parse_catalog_info() -> None:
 def test_build_facts() -> None:
     files = {
         "catalog-info.yaml": CATALOG,
-        "email.sdl": SDL,
         "pom.xml": "<project><artifactId>email-parent</artifactId></project>",
         "java/impl/pom.xml": "<project><artifactId>email-impl</artifactId></project>",
     }
@@ -104,7 +54,7 @@ def test_build_facts() -> None:
     assert facts["language"] == "java"
     assert facts["catalog"]["owner"] == "arquitetura"
     assert facts["artifacts"] == ["email-parent", "email-impl"] or facts["artifacts"] == ["email-impl", "email-parent"]
-    assert [s["service"] for s in facts["sdl"]] == ["email"]
+    assert facts["sdl"] == []  # sem perfil, nenhum extrator de contrato
     assert set(facts["has"]) >= {"db-migrations", "docker", "ci-github"}
 
 
@@ -199,37 +149,13 @@ def test_parse_payload_aceita_cerca() -> None:
         raise AssertionError("deveria falhar")
 
 
-def test_render_card_task_tem_instrucoes_antes_dos_dados() -> None:
-    facts = build_facts({"email.sdl": SDL}, ["email.sdl"], "java").to_dict()
-    text = render_card_task(task_id="t1", repo="o__snr-email-backend", commit="abcdef123", remaining=3,
-                            material={"facts": facts, "readme": "# Email", "symbols": ["SendEmailHandler"],
-                                      "suggested_files": ["java/A.java"]},
-                            candidates=["o__snr-email-frontend"])
+
+
+def test_render_card_task_sem_perfil_fala_em_contrato_generico() -> None:
+    facts = build_facts({}, ["README.md"], "java").to_dict()
+    text = render_card_task(task_id="t1", repo="o__pedidos-backend", commit="abcdef123", remaining=0,
+                            material={"facts": facts, "readme": "# Pedidos", "symbols": ["PedidoService"],
+                                      "suggested_files": []}, candidates=[])
     assert text.index("INSTRUÇÕES") < text.index(" DADOS ") < text.index("README")
-    assert "enrich submit t1" in text and "commit abcdef1" in text
-    assert "domain=platform service=email" in text and "SendEmailHandler" in text
-    assert "related_repos lista" in text and "grep -E 'Foo|Bar'" in text
-    assert '"properties"' not in text  # schema compacto, não o JSON Schema inteiro
-
-
-PDL = """properties platform.email {
-    property smtp.oauth.provider {
-         type: string
-         label: "x { y }"
-         regEx: "(Google|Microsoft)"
-    }
-    property smtp.throttling.minute { type: integer
-        defaultValue: "0" }
-    property smtp.host { transient: true }
-}
-"""
-
-
-def test_parse_pdl() -> None:
-    assert parse_pdl(PDL, "email.pdl") == {
-        "path": "email.pdl", "group": "platform.email",
-        "properties": ["smtp.oauth.provider:string", "smtp.throttling.minute:integer", "smtp.host"],
-    }
-    assert parse_pdl("nada aqui") is None
-    facts = build_facts({"email.pdl": PDL}, ["email.pdl"], None).to_dict()
-    assert facts["properties"][0]["group"] == "platform.email"
+    assert "enrich submit t1" in text and "commit abcdef1" in text and "PedidoService" in text
+    assert "sem contrato de API, classes de nome genérico" in text and "SDL" not in text

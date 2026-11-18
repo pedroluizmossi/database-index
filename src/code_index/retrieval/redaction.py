@@ -8,9 +8,11 @@ próximo reindex planejado.
 
 from __future__ import annotations
 
+from ..domain.file_types import NO_FILE_TYPES, FileTypes
 from ..indexing.content import redact
 
 
-def mask_output(text: str, language: str) -> str:
-    """Texto com segredos mascarados, pronto para devolver a um cliente."""
-    return redact(text, language)[0]
+def mask_output(text: str, language: str, types: FileTypes = NO_FILE_TYPES) -> str:
+    """Texto com segredos mascarados, pronto para devolver a um cliente. `types`: tipos de arquivo dos perfis
+    ativos (mesma regra da indexação para as linguagens deles)."""
+    return redact(text, language, types)[0]

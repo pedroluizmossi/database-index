@@ -1,12 +1,16 @@
 """Dono do código no DDD: a que domínio e serviço pertence cada repo (ou pasta de monorepo). Puro, sem I/O.
 
-- **Catálogo**: os domínios e serviços declarados nos `.sdl` (`domain x ("Rótulo")`, `service y ("Rótulo")`).
-  Não há lista oficial: o SDL é a referência. Pessoas podem criar outros na atribuição manual.
-- **Inferência** (sem LLM), cada uma uma origem de relação `belongs_to` (domain/relations.py):
-  `declared` (o próprio .sdl), `sibling` (nome-base igual ao de um repo com SDL), `api_calls` (o código chama
-  majoritariamente as rotas de um serviço) e `usage` (lib usada só por repos de um domínio).
-- **Resolução**: por entidade, vale a origem mais forte presente (`manual` vence tudo); as mais fracas ficam
-  como evidência, mas não somam donos.
+O núcleo não conhece a convenção de nenhuma empresa: o catálogo e as inferências próprias vêm dos perfis de
+organização ativos (`OwnershipRules`, ex.: o perfil `senior` lê os `.sdl`). O núcleo mantém:
+
+- **Catálogo** (`Catalog`): domínios e serviços com rótulos. Vem das regras dos perfis (`build_catalog`); pessoas
+  podem criar outros na atribuição manual, e o domínio `transversal` existe sempre.
+- **Inferência** (sem LLM, `infer`), cada uma uma origem de relação `belongs_to` (domain/relations.py): primeiro
+  as dos perfis (`OwnershipRules.assign`, na ordem dos perfis ativos), depois `usage` (lib usada só por repos de
+  um domínio), que usa os donos que as anteriores e as manuais acharam.
+- **Resolução**: por entidade, vale a origem mais forte presente (`manual` vence tudo, `usage` é a mais fraca;
+  as dos perfis ficam no meio, na ordem que declaram: `owner_origins`); as mais fracas ficam como evidência,
+  mas não somam donos.
 - **Escopo**: o que um filtro "domínio/serviço" significa em (repo, caminho) para a busca. Uma pasta com
   dono próprio (monorepo) vale sobre o dono do repo inteiro.
 """
@@ -15,19 +19,25 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
-from .relations import DIR, DOM, REPO, SVC, dir_key, dom_key, repo_key, split_dir_key, svc_key
+from .naming import NameRules
+from .relations import (
+    DIR, DOM, REPO, SVC, dir_key, dom_key, repo_key, split_dir_key, svc_key,
+)
 
 # Domínio reservado para código compartilhado entre domínios (libs, infraestrutura comum).
 TRANSVERSAL = "transversal"
 TRANSVERSAL_LABEL = "Transversal (compartilhado)"
 
-# Da mais forte para a mais fraca. A ordem global das origens fica em domain/relations.ORIGINS.
-OWNER_ORIGINS = ("manual", "declared", "sibling", "api_calls", "usage")
-DERIVED_OWNER_ORIGINS = frozenset(OWNER_ORIGINS[1:])
+# Origens do dono que são do núcleo: a manual (mais forte) e o uso de lib (mais fraca). As dos perfis entram
+# entre as duas (`owner_origins`).
+MANUAL, USAGE = "manual", "usage"
+# Chaves da seção `ownership` do material que são do núcleo (o `usage`): as regras de um perfil não as usam.
+CORE_MATERIAL_KEYS = frozenset({"artifacts", "dependencies"})
 
 _NAME = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
 
@@ -35,6 +45,11 @@ _NAME = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
 def norm(name: str) -> str:
     """Nome de domínio/serviço comparável: minúsculas, '-' e espaço viram '_'."""
     return re.sub(r"[\s-]+", "_", name.strip().lower())
+
+
+def is_name(name: str) -> bool:
+    """Nome técnico válido de domínio ou serviço (já normalizado)."""
+    return bool(_NAME.match(name))
 
 
 # ------------------------------------------------------------------ dono (domínio[/serviço])
@@ -92,7 +107,7 @@ def split_entity(key: str) -> tuple[str, str | None]:
     return key.removeprefix(f"{REPO}:"), None
 
 
-# ------------------------------------------------------------------ catálogo (SDL)
+# ------------------------------------------------------------------ catálogo
 
 
 @dataclass
@@ -126,31 +141,21 @@ class Catalog:
             if repo and repo not in svc.repos:
                 svc.repos.append(repo)
 
+    def merge(self, other: Catalog) -> None:
+        """Acrescenta outro catálogo (outro perfil): rótulo vazio é preenchido, repos somados."""
+        for domain, label in other.domains.items():
+            self.add(Owner(domain), domain_label=label)
+        for svc in other.services.values():
+            self.add(Owner(svc.domain, svc.service), label=svc.label)
+            for repo in svc.repos:
+                self.add(Owner(svc.domain, svc.service), repo=repo)
+
     def service_names(self) -> dict[str, list[Owner]]:
         """Nome do serviço → donos com esse nome (o mesmo nome pode existir em dois domínios)."""
         out: dict[str, list[Owner]] = {}
         for domain, service in self.services:
             out.setdefault(service, []).append(Owner(domain, service))
         return out
-
-
-def build_catalog(sdl_by_repo: Mapping[str, Sequence[Mapping[str, Any]]],
-                  labels_by_repo: Mapping[str, Mapping[str, Any]] | None = None) -> Catalog:
-    """Domínios e serviços dos `.sdl` (fatos `sdl` do cartão) + rótulos (`sdl_labels` da coleta)."""
-    catalog = Catalog()
-    for repo, services in sorted(sdl_by_repo.items()):
-        labels = (labels_by_repo or {}).get(repo, {})
-        for svc in services:
-            domain, service = norm(str(svc.get("domain", ""))), norm(str(svc.get("service", "")))
-            if not (_NAME.match(domain) and _NAME.match(service)):
-                continue
-            catalog.add(Owner(domain, service), repo=repo,
-                        label=str(labels.get("services", {}).get(service, "")),
-                        domain_label=str(labels.get("domains", {}).get(domain, "")))
-    return catalog
-
-
-# ------------------------------------------------------------------ inferência
 
 
 @dataclass(frozen=True)
@@ -164,120 +169,17 @@ class Assignment:
     evidence: Mapping[str, Any] = field(default_factory=dict)
 
 
-def _parent(path: str) -> str:
-    return path.rsplit("/", 1)[0] if "/" in path else ""
-
-
-def declared(sdl_by_repo: Mapping[str, Sequence[Mapping[str, Any]]]) -> list[Assignment]:
-    """O repo pertence aos serviços do seu `.sdl`. Monorepo (serviços diferentes em pastas diferentes):
-    cada pasta também pertence ao seu serviço, para a busca separar os módulos."""
-    out: list[Assignment] = []
-    for repo, services in sorted(sdl_by_repo.items()):
-        found: list[tuple[Owner, str]] = []
-        for svc in services:
-            domain, service = norm(str(svc.get("domain", ""))), norm(str(svc.get("service", "")))
-            if _NAME.match(domain) and _NAME.match(service):
-                found.append((Owner(domain, service), str(svc.get("path", ""))))
-        owners = sorted({o for o, _ in found})
-        for owner in owners:
-            paths = sorted({p for o, p in found if o == owner})
-            out.append(Assignment(repo_key(repo), owner, "declared", "alta", {"sdl": paths[:5]}))
-        dirs = {_parent(p) for _, p in found}
-        if len(owners) > 1 and len(dirs) > 1 and "" not in dirs:
-            for owner, path in found:
-                out.append(Assignment(dir_key(repo, _parent(path)), owner, "declared", "alta", {"sdl": [path]}))
-    return list({(a.entity, a.owner): a for a in out}.values())
-
-
-# Sufixos que não mudam o "assunto" do repo: x-frontend, x-backend e x-service falam do mesmo serviço.
-_ROLE_SUFFIXES = frozenset({
-    "frontend", "front", "backend", "back", "web", "ui", "app", "service", "services", "api", "server", "client",
-    "lib", "library", "sdk", "core", "impl", "bff", "angular", "react", "vue", "java", "node", "go", "py",
-})
-
-
-def base_name(repo: str) -> str:
-    """'org__snr-audit-authorization-frontend' → 'audit_authorization' (sem prefixo curto nem papel)."""
+def base_name(repo: str, naming: NameRules = NameRules()) -> str:
+    """Nome do repo sem org, sem prefixo curto e sem sufixos de papel (regras do perfil, `NameRules`).
+    Ex.: com prefixo curto de até 3 letras e o papel 'frontend', 'org__ms-audit-authorization-frontend' →
+    'audit_authorization'. Sem regras (padrão): 'ms_audit_authorization_frontend'."""
     short = repo.split("__", 1)[-1].lower()
     parts = [p for p in re.split(r"[-_.]+", short) if p]
-    if len(parts) > 1 and len(parts[0]) <= 3:  # prefixo curto: snr-, ms-, lib-
+    if len(parts) > 1 and len(parts[0]) <= naming.short_prefix_max:  # prefixo curto: ms-, lib-...
         parts = parts[1:]
-    while len(parts) > 1 and parts[-1] in _ROLE_SUFFIXES:
+    while len(parts) > 1 and parts[-1] in naming.role_suffixes:  # x-frontend e x-backend: o mesmo assunto
         parts = parts[:-1]
     return "_".join(parts)
-
-
-def siblings(repos: Iterable[str], declared_by_repo: Mapping[str, Sequence[Owner]], catalog: Catalog,
-             skip: Iterable[str] = ()) -> list[Assignment]:
-    """Repo sem SDL com o mesmo nome-base de um repo com SDL herda os serviços dele. Sem repo irmão, um
-    nome-base igual a um serviço do catálogo (só em um domínio) também serve."""
-    skipped = set(skip)
-    by_base: dict[str, dict[Owner, list[str]]] = {}
-    for repo, owners in declared_by_repo.items():
-        for owner in owners:
-            by_base.setdefault(base_name(repo), {}).setdefault(owner, []).append(repo)
-    service_names = catalog.service_names()
-    out: list[Assignment] = []
-    for repo in sorted(set(repos)):
-        if repo in skipped or repo in declared_by_repo:
-            continue
-        base = base_name(repo)
-        matched = by_base.get(base)
-        if matched and len(matched) <= 3:  # nome-base genérico casando com muitos serviços não serve
-            for owner, from_repos in sorted(matched.items()):
-                out.append(Assignment(repo_key(repo), owner, "sibling", "alta", {"repos": sorted(from_repos)[:5]}))
-            continue
-        named = service_names.get(base, [])
-        if len(named) == 1:
-            out.append(Assignment(repo_key(repo), named[0], "sibling", "media", {"service_name": base}))
-    return out
-
-
-# Rotas da plataforma: '<domínio>/<serviço>/{queries|actions|signals|entities|events|apis}/...'
-_API_REF = re.compile(
-    r"(?<=[\"'`/])([a-z][a-z0-9_]*)/([a-z][a-zA-Z0-9_]*)/(?:queries|actions|signals|entities|events|apis)/"
-)
-
-
-def api_refs(text: str) -> Counter[str]:
-    """Quantas vezes o texto cita rotas de cada 'domínio/serviço'."""
-    return Counter(f"{d}/{s.lower()}" for d, s in _API_REF.findall(text))
-
-
-API_MIN_CALLS = 2
-API_MIN_SHARE = 0.5
-UBIQUITOUS_SHARE = 0.3   # serviço chamado por 30%+ dos repos (tradução, usuário...) não define o dono
-UBIQUITOUS_MIN_REPOS = 5
-
-
-def api_call_owners(refs_by_repo: Mapping[str, Mapping[str, int]], catalog: Catalog,
-                    skip: Iterable[str] = ()) -> list[Assignment]:
-    """Repo cujo código chama, na maioria, as rotas de um serviço do catálogo pertence a ele.
-
-    Serviços chamados por quase todo mundo (utilitários) só contam se forem os únicos chamados."""
-    skipped = set(skip)
-    known = {repo: {k: n for k, n in refs.items() if n > 0 and catalog.has(Owner(*k.split("/", 1)))}
-             for repo, refs in refs_by_repo.items()}
-    callers = Counter(k for refs in known.values() for k in refs)
-    with_refs = sum(1 for refs in known.values() if refs)
-    ubiquitous = {k for k, n in callers.items()
-                  if n >= UBIQUITOUS_MIN_REPOS and n / max(with_refs, 1) >= UBIQUITOUS_SHARE}
-    out: list[Assignment] = []
-    for repo, refs in sorted(known.items()):
-        if repo in skipped or not refs:
-            continue
-        specific = {k: n for k, n in refs.items() if k not in ubiquitous} or refs
-        total = sum(specific.values())
-        top, n = max(specific.items(), key=lambda kv: (kv[1], kv[0]))
-        share = n / total
-        if n < API_MIN_CALLS or share < API_MIN_SHARE:
-            continue
-        domain, service = top.split("/", 1)
-        others = sorted(((k, v) for k, v in specific.items() if k != top), key=lambda kv: -kv[1])[:3]
-        confidence = "alta" if share >= 0.8 and n >= 3 else "media"
-        out.append(Assignment(repo_key(repo), Owner(domain, service), "api_calls", confidence,
-                              {"calls": n, "share": round(share, 2), "others": [f"{k} ({v})" for k, v in others]}))
-    return out
 
 
 def usage_owners(deps_by_repo: Mapping[str, Sequence[str]], artifacts_by_repo: Mapping[str, Sequence[str]],
@@ -305,8 +207,65 @@ def usage_owners(deps_by_repo: Mapping[str, Sequence[str]], artifacts_by_repo: M
             continue
         services = {o.service for o in owners}
         owner = Owner(domains.pop(), services.pop() if len(services) == 1 else None)
-        out.append(Assignment(repo_key(lib), owner, "usage", "alta" if len(users) >= 2 else "media",
+        out.append(Assignment(repo_key(lib), owner, USAGE, "alta" if len(users) >= 2 else "media",
                               {"consumers": sorted(users)[:5], "n": len(users)}))
+    return out
+
+
+# ------------------------------------------------------------------ regras dos perfis
+
+
+FactsByRepo = Mapping[str, Mapping[str, Any]]   # repo → seções dos fatos do cartão (só as de `fact_sections`)
+OwnByRepo = Mapping[str, Mapping[str, Any]]     # repo → seção `ownership` do material do cartão
+
+
+@runtime_checkable
+class OwnershipRules(Protocol):
+    """Dono no DDD segundo as convenções de uma organização (gancho `ownership` do perfil). Puro: recebe dados.
+
+    - `origins`: as origens `belongs_to` que `assign` produz, da mais forte para a mais fraca. Ficam entre
+      `manual` e `usage` na resolução; o perfil as registra também na ordem global (`OrgProfile.origins`).
+    - `fact_sections`: seções dos fatos do cartão que `catalog`/`assign` leem (ex.: `sdl`). O catálogo da
+      leitura vem só de repos com alguma delas preenchida (sem seção nenhuma: de todos os repos).
+    - `material_keys`: chaves que `collect` grava na seção `ownership` do material.
+    - `collect(paths, files, read)`: na coleta do material (`enrich facts`): `paths` são os arquivos do clone,
+      `files` os de interesse já lidos (manifestos e os dos extratores de fatos) e `read(rel)` lê outro arquivo
+      do clone (None se não der). Devolve as chaves de `material_keys`.
+    - `catalog(facts, own)`: domínios e serviços que a organização declara (com rótulos).
+    - `assign(repos, facts, own, catalog, naming)`: as atribuições inferidas (só das suas `origins`). `catalog` é o
+      catálogo de todos os perfis ativos; `naming`, as regras de nome combinadas."""
+
+    origins: tuple[str, ...]
+    fact_sections: tuple[str, ...]
+    material_keys: tuple[str, ...]
+
+    def collect(self, paths: Sequence[str], files: Mapping[str, str],
+                read: Callable[[str], str | None]) -> dict[str, Any]: ...
+
+    def catalog(self, facts: FactsByRepo, own: OwnByRepo) -> Catalog: ...
+
+    def assign(self, repos: AbstractSet[str], facts: FactsByRepo, own: OwnByRepo, catalog: Catalog,
+               naming: NameRules) -> list[Assignment]: ...
+
+
+def owner_origins(rules: Sequence[OwnershipRules] = ()) -> tuple[str, ...]:
+    """Origens do dono, da mais forte para a mais fraca: manual, as dos perfis (na ordem deles), usage."""
+    return (MANUAL, *dict.fromkeys(o for r in rules for o in r.origins), USAGE)
+
+
+def derived_owner_origins(rules: Sequence[OwnershipRules] = ()) -> frozenset[str]:
+    """Origens do dono recalculadas no sync (todas menos a manual): as do linker `ownership`."""
+    return frozenset(owner_origins(rules)[1:])
+
+
+def build_catalog(rules: Sequence[OwnershipRules], facts: FactsByRepo, own: OwnByRepo) -> Catalog:
+    """Catálogo dos perfis ativos (um perfil: o dele; vários: somados na ordem). Sem perfil: vazio."""
+    catalogs = [r.catalog(facts, own) for r in rules]
+    if len(catalogs) == 1:
+        return catalogs[0]
+    out = Catalog()
+    for c in catalogs:
+        out.merge(c)
     return out
 
 
@@ -334,17 +293,23 @@ class Resolved:
         }
 
 
-def _origin_rank(origin: str) -> int:
-    return OWNER_ORIGINS.index(origin) if origin in OWNER_ORIGINS else len(OWNER_ORIGINS)
+def _ranker(order: Sequence[str]) -> Callable[[str], int]:
+    """Força de uma origem: posição em `order` (desconhecida: depois de todas). A ordem é sempre explícita (a dos
+    perfis ativos, `ActiveProfiles.owner_origins`): não depende de os perfis já terem sido carregados no processo."""
+    index = {o: i for i, o in enumerate(order)}
+    return lambda origin: index.get(origin, len(index))
 
 
-def resolve(assignments: Iterable[Assignment]) -> dict[str, Resolved]:
+def resolve(assignments: Iterable[Assignment], order: Sequence[str]) -> dict[str, Resolved]:
+    """Donos efetivos por entidade. `order`: origens do dono da mais forte para a mais fraca
+    (`owner_origins` dos perfis ativos). Origem fora dela (perfil desligado) vale menos que todas."""
+    rank_of = _ranker(order)
     by_entity: dict[str, list[Assignment]] = {}
     for a in assignments:
         by_entity.setdefault(a.entity, []).append(a)
     out: dict[str, Resolved] = {}
     for entity, items in by_entity.items():
-        items.sort(key=lambda a: (_origin_rank(a.origin), a.owner))
+        items.sort(key=lambda a: (rank_of(a.origin), a.owner))
         best = items[0].origin
         chosen = [a for a in items if a.origin == best]
         rank = {"alta": 0, "media": 1, "baixa": 2}
@@ -376,30 +341,35 @@ def owners_of(resolved: Mapping[str, Resolved], repo: str, path: str) -> list[Ow
     return whole.owners if whole else []
 
 
-def infer(repos: Iterable[str], sdl_by_repo: Mapping[str, Sequence[Mapping[str, Any]]],
-          own_by_repo: Mapping[str, Mapping[str, Any]], manual: Sequence[Assignment] = ()) -> list[Assignment]:
-    """Todas as relações derivadas (fase 1, sem LLM), na ordem em que cada passo usa os anteriores.
+def infer(repos: Iterable[str], facts: FactsByRepo, own: OwnByRepo, manual: Sequence[Assignment] = (),
+          rules: Sequence[OwnershipRules] = (), naming: NameRules = NameRules()) -> list[Assignment]:
+    """Todas as relações derivadas (fase 1, sem LLM), na ordem em que cada passo usa os anteriores: primeiro as
+    regras dos perfis (`rules`, na ordem), depois `usage`.
 
-    `own_by_repo`: seção `ownership` do material de cada repo (rótulos do SDL, artefatos, dependências e
-    rotas chamadas). `manual`: atribuições gravadas. A inferência roda também para quem tem dono manual (a
-    resolução dá precedência ao manual e mostra o resto como alternativa na revisão); o dono manual conta
-    como dono dos consumidores de uma lib."""
+    `facts`: seções dos fatos de cada repo (as de `fact_sections` das regras). `own`: seção `ownership` do
+    material de cada repo (artefatos e dependências, do núcleo, e as chaves das regras). `manual`: atribuições
+    gravadas. A inferência roda também para quem tem dono manual (a resolução dá precedência ao manual e mostra o
+    resto como alternativa na revisão); o dono manual conta como dono dos consumidores de uma lib. `naming`:
+    regras de nome dos perfis."""
     names = set(repos)
-    catalog = build_catalog(sdl_by_repo, {r: o.get("sdl_labels") or {} for r, o in own_by_repo.items()})
-    decl = declared(sdl_by_repo)
-    decl_owners = repo_owners(resolve(decl))
-    sib = siblings(names, decl_owners, catalog)
-    refs = {r: o.get("api_refs") or {} for r, o in own_by_repo.items() if r in names}
-    api = api_call_owners(refs, catalog, skip=set(decl_owners))
-    owners_now = repo_owners(resolve([*manual, *decl, *sib, *api]))
-    inferred = repo_owners(resolve([*decl, *sib, *api]))
+    order = owner_origins(rules)
+    catalog = build_catalog(rules, facts, own)
+    found: list[Assignment] = []
+    for r in rules:
+        allowed = set(r.origins)
+        for a in r.assign(names, facts, own, catalog, naming):
+            if a.origin not in allowed:
+                raise ValueError(f"regra de dono produziu origem fora das suas: {a.origin!r}")
+            found.append(a)
+    owners_now = repo_owners(resolve([*manual, *found], order))
+    inferred = repo_owners(resolve(found, order))
     use = usage_owners(
-        {r: o.get("dependencies") or [] for r, o in own_by_repo.items() if r in names},
-        {r: o.get("artifacts") or [] for r, o in own_by_repo.items() if r in names},
+        {r: o.get("dependencies") or [] for r, o in own.items() if r in names},
+        {r: o.get("artifacts") or [] for r, o in own.items() if r in names},
         owners_now,
         skip=set(inferred),
     )
-    return [*decl, *sib, *api, *use]
+    return [*found, *use]
 
 
 # ------------------------------------------------------------------ escopo da busca
@@ -478,13 +448,16 @@ def scope_for(resolved: Mapping[str, Resolved], domain: str, service: str | None
 # ------------------------------------------------------------------ cobertura
 
 
-def coverage(repos: Iterable[str], resolved: Mapping[str, Resolved]) -> dict[str, Any]:
-    """Quantos repos têm dono e por qual origem (para a interface acompanhar o mapeamento)."""
+def coverage(repos: Iterable[str], resolved: Mapping[str, Resolved], order: Sequence[str]) -> dict[str, Any]:
+    """Quantos repos têm dono e por qual origem (para a interface acompanhar o mapeamento). `by_origin` na
+    ordem de força (`order`, ver `resolve`), e `none` no fim."""
     names = sorted(set(repos))
     by_origin: Counter[str] = Counter()
     for name in names:
         r = resolved.get(repo_key(name))
         by_origin[r.origin if r else "none"] += 1
     owned = len(names) - by_origin["none"]
+    rank_of = _ranker(order)
+    seen = sorted((o for o in by_origin if o != "none" and by_origin[o]), key=lambda o: (rank_of(o), o))
     return {"repos": len(names), "owned": owned, "percent": round(100 * owned / len(names)) if names else 0,
-            "by_origin": {o: by_origin[o] for o in (*OWNER_ORIGINS, "none") if by_origin[o]}}
+            "by_origin": {o: by_origin[o] for o in (*seen, "none") if by_origin[o]}}

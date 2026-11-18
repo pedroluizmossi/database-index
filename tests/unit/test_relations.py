@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from code_index.domain.relations import (
-    CONTESTABLE, DOCUMENTS, ORIGIN_ORDER, STORED, Relation, code_key, doc_key, key_kind, op_key, origin_rank,
+    DOCUMENTS, STORED, Relation, code_key, contestable_origins, doc_key, key_kind, op_key, origin_order, origin_rank,
     origins_payload, repo_key, sort_origins, split_code_key, split_doc_key, split_repo_key,
 )
 
@@ -21,10 +21,10 @@ def test_chaves_ida_e_volta() -> None:
 
 
 def test_origens() -> None:
-    assert ORIGIN_ORDER[:3] == ("manual", "agent", "llm")
-    assert CONTESTABLE == {"tag", "url", "mention"} and STORED == {"manual", "agent", "llm"}
-    assert sort_origins(["mention", "manual", "sdl", "mention"]) == ["manual", "sdl", "mention"]
-    assert origin_rank("desconhecida") == len(ORIGIN_ORDER)
+    assert origin_order()[:3] == ("manual", "agent", "llm")
+    assert contestable_origins() == {"tag", "url", "mention"} and STORED == {"manual", "agent", "llm"}
+    assert sort_origins(["mention", "manual", "explicit", "mention"]) == ["manual", "explicit", "mention"]
+    assert origin_rank("desconhecida") == len(origin_order())
     payload = origins_payload()
     assert [o["order"] for o in payload] == list(range(len(payload)))
     assert all({"name", "label", "description", "contestable", "stored"} <= set(o) for o in payload)
@@ -36,4 +36,7 @@ def test_relation_valida_tipo_e_origem() -> None:
     with pytest.raises(ValueError, match="tipo"):
         Relation("a", "b", "parecido_com", "manual")
     with pytest.raises(ValueError, match="origem"):
-        Relation("a", "b", DOCUMENTS, "chute")
+        Relation("a", "b", DOCUMENTS, "Chute!")
+    # origem bem formada mas desconhecida (ex.: de um perfil desligado): legível, no fim da ordem, não contestável
+    old = Relation("a", "b", DOCUMENTS, "chute")
+    assert not old.contestable and origin_rank("chute") == len(origin_order())

@@ -1,7 +1,8 @@
 """Cartão do repo (puro, sem I/O).
 
 Duas partes:
-- **fatos**: extraídos por parser (catalog-info.yaml, manifestos, *.sdl, árvore de pastas). Exatos, sem LLM.
+- **fatos**: extraídos por parser (catalog-info.yaml, manifestos, árvore de pastas e as seções dos extratores dos
+  perfis de organização, ex.: contratos de API). Exatos, sem LLM.
 - **cartão**: resumo escrito por um agent (modelo barato) a partir do pacote de dados de uma tarefa
   (`code-index enrich next`) e entregue com `code-index enrich submit`. Aqui ficam o schema, a
   validação da entrega e o texto da tarefa.
@@ -17,107 +18,13 @@ import json
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 import yaml
 
+from .contracts import CONTRACTS_SECTION
 from .doc_links import manifest_aliases
-
-# ------------------------------------------------------------------ SDL (plataforma Senior)
-
-_SDL_STRING = re.compile(r'"(?:[^"\\\n]|\\.)*"')
-_SDL_COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
-_SDL_DOMAIN = re.compile(r"^\s*domain\s+([A-Za-z_][\w-]*)", re.M)
-_SDL_ITEM = re.compile(
-    r"(?<![\w.:])(?:(public|private)\s+)?(?:fixed\s+)?(service|query|action|signal|event|entity)\s+([A-Za-z_]\w*)\s*(?:\([^)]*\)\s*)?\{",
-)
-
-
-@dataclass(frozen=True)
-class SdlService:
-    domain: str
-    service: str
-    path: str
-    queries: tuple[str, ...] = ()
-    actions: tuple[str, ...] = ()
-    signals: tuple[str, ...] = ()
-    events: tuple[str, ...] = ()
-    entities: tuple[str, ...] = ()
-    private: tuple[str, ...] = ()  # operações marcadas como private (uso interno)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {k: list(v) if isinstance(v, tuple) else v for k, v in asdict(self).items()}
-
-
-def parse_sdl(text: str, path: str = "") -> list[SdlService]:
-    """`domain x` + `service y { ... }` → operações, eventos e entidades. Arquivo sem domain/service → []."""
-    clean = _SDL_COMMENT.sub("", _SDL_STRING.sub('""', text))
-    dm = _SDL_DOMAIN.search(clean)
-    if not dm:
-        return []
-    domain = dm.group(1)
-    out: list[SdlService] = []
-    cur: dict[str, Any] | None = None
-
-    def close() -> None:
-        if cur is not None:
-            out.append(SdlService(
-                domain=domain, service=cur["service"], path=path, queries=tuple(cur["queries"]),
-                actions=tuple(cur["actions"]), signals=tuple(cur["signals"]), events=tuple(cur["events"]),
-                entities=tuple(cur["entities"]), private=tuple(cur["private"]),
-            ))
-
-    for m in _SDL_ITEM.finditer(clean):
-        visibility, kind, name = m.groups()
-        if kind == "service":
-            close()
-            cur = {"service": name, "queries": [], "actions": [], "signals": [], "events": [],
-                   "entities": [], "private": []}
-            continue
-        if cur is None:
-            continue
-        bucket = {"query": "queries", "action": "actions", "signal": "signals", "event": "events",
-                  "entity": "entities"}[kind]
-        if name not in cur[bucket]:
-            cur[bucket].append(name)
-        if visibility == "private" and kind in ("query", "action", "signal"):
-            cur["private"].append(name)
-    close()
-    return out
-
-
-_SDL_DOMAIN_LABEL = re.compile(r'^\s*domain\s+([A-Za-z_][\w-]*)\s*\(\s*"([^"\n]*)"', re.M)
-_SDL_SERVICE_LABEL = re.compile(r'(?<![\w.:])service\s+([A-Za-z_]\w*)\s*\(\s*"([^"\n]*)"')
-
-
-def parse_sdl_labels(text: str) -> dict[str, dict[str, str]]:
-    """Rótulos legíveis do `.sdl`: `domain platform ("Plataforma")`, `service blob ("Arquivos")`."""
-    clean = _SDL_COMMENT.sub("", text)
-    return {
-        "domains": {m.group(1).lower(): m.group(2).strip() for m in _SDL_DOMAIN_LABEL.finditer(clean) if m.group(2).strip()},
-        "services": {m.group(1).lower(): m.group(2).strip() for m in _SDL_SERVICE_LABEL.finditer(clean) if m.group(2).strip()},
-    }
-
-
-_PDL_GROUP = re.compile(r"(?<![\w.])properties\s+([\w.-]+)\s*\{")
-_PDL_PROP = re.compile(r"(?<![\w.])property\s+([\w.-]+)\s*\{([^{}]*)\}")
-_PDL_TYPE = re.compile(r"^\s*type\s*:\s*(\w+)", re.M)
-PDL_MAX_PROPS = 60
-
-
-def parse_pdl(text: str, path: str = "") -> dict[str, Any] | None:
-    """Propriedades configuráveis (`properties grupo { property nome { type: ... } }`). Sem nada → None."""
-    clean = _SDL_COMMENT.sub("", _SDL_STRING.sub('""', text))
-    props = []
-    for m in _PDL_PROP.finditer(clean):
-        t = _PDL_TYPE.search(m.group(2))
-        props.append(f"{m.group(1)}:{t.group(1)}" if t else m.group(1))
-    if not props:
-        return None
-    group = _PDL_GROUP.search(clean)
-    return {"path": path, "group": group.group(1) if group else "",
-            "properties": list(dict.fromkeys(props))[:PDL_MAX_PROPS]}
-
+from .naming import NameRules
 
 # ------------------------------------------------------------------ catalog-info (Backstage)
 
@@ -179,37 +86,80 @@ README_MAX_CHARS = 3000
 FACTS_VERSION = 5
 
 
+@runtime_checkable
+class FactExtractor(Protocol):
+    """Extrator de fatos de um perfil de organização: lê os arquivos de interesse do repo (ex.: o contrato de API
+    da empresa) e preenche uma seção dos fatos. Puro: recebe o texto, não lê disco.
+
+    - `section`: chave nos fatos. `sdl` (`contracts.CONTRACTS_SECTION`: serviços de contrato no formato de
+      `contracts.ContractService.to_dict`) e `properties` (propriedades configuráveis) são as seções que o
+      núcleo conhece; outra chave entra no JSON dos fatos como está.
+    - `matches(name)`/`max_depth`: quais arquivos (pelo nome) a coleta lê, até que profundidade de pasta.
+    - `extract(text, path)`: os itens da seção que o arquivo traz.
+    - `card_lines(items)`: as linhas da seção no texto da tarefa do cartão (já indentadas).
+    - `label` (opcional, fora do protocolo): rótulo do formato na interface (ex.: ".sdl"); sem ele, a extensão."""
+
+    section: str
+    max_depth: int
+
+    def matches(self, name: str) -> bool: ...
+
+    def extract(self, text: str, path: str) -> list[dict[str, Any]]: ...
+
+    def card_lines(self, items: Sequence[Mapping[str, Any]]) -> list[str]: ...
+
+
+# Chaves dos fatos que são do núcleo: um extrator não pode usá-las como seção.
+CORE_FACT_KEYS = frozenset({"language", "catalog", "artifacts", "modules", "has"})
+
+
 @dataclass
 class RepoFacts:
-    """Fatos determinísticos de um repo (vão para o pacote da tarefa e para o vínculo SDL → OpenAPI)."""
+    """Fatos determinísticos de um repo (vão para o pacote da tarefa e para o vínculo contrato → OpenAPI).
+
+    `sdl` (serviços de contrato) e `properties` (propriedades configuráveis) sempre aparecem no JSON, mesmo vazias:
+    compatibilidade com o material já gravado e com a interface. Outras seções de extratores vão em `extra` e
+    entram no JSON no nível de cima."""
 
     language: str | None = None
     catalog: dict[str, Any] = field(default_factory=dict)
     artifacts: list[str] = field(default_factory=list)
     sdl: list[dict[str, Any]] = field(default_factory=list)
-    properties: list[dict[str, Any]] = field(default_factory=list)  # *.pdl (configuração do serviço)
+    properties: list[dict[str, Any]] = field(default_factory=list)
     modules: list[str] = field(default_factory=list)
     has: list[str] = field(default_factory=list)
+    extra: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+
+    def section(self, name: str) -> list[dict[str, Any]]:
+        """A lista de uma seção de extrator (criada vazia se ainda não existe)."""
+        if name in CORE_FACT_KEYS:
+            raise ValueError(f"seção de fatos reservada ao núcleo: {name!r}")
+        if name == CONTRACTS_SECTION:
+            return self.sdl
+        if name == "properties":
+            return self.properties
+        return self.extra.setdefault(name, [])
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        out = asdict(self)
+        out.update(out.pop("extra"))
+        return out
 
 
-def build_facts(files: Mapping[str, str], paths: Sequence[str], language: str | None) -> RepoFacts:
-    """`files`: caminho → texto dos arquivos de interesse (manifestos, catalog-info, *.sdl).
-    `paths`: todos os caminhos de arquivo do repo (relativos), para módulos e "has"."""
+def build_facts(files: Mapping[str, str], paths: Sequence[str], language: str | None,
+                extractors: Sequence[FactExtractor] = ()) -> RepoFacts:
+    """`files`: caminho → texto dos arquivos de interesse (manifestos, catalog-info e os dos `extractors`).
+    `paths`: todos os caminhos de arquivo do repo (relativos), para módulos e "has".
+    Um arquivo vai para o primeiro extrator que o aceita (`matches` pelo nome)."""
     facts = RepoFacts(language=language)
     for path in sorted(files):
         text = files[path]
         name = path.rsplit("/", 1)[-1]
+        extractor = next((x for x in extractors if x.matches(name)), None)
         if name in ("catalog-info.yaml", "catalog-info.yml") and not facts.catalog:
             facts.catalog = parse_catalog_info(text)
-        elif name.endswith(".sdl"):
-            facts.sdl += [s.to_dict() for s in parse_sdl(text, path)]
-        elif name.endswith(".pdl"):
-            parsed = parse_pdl(text, path)
-            if parsed:
-                facts.properties.append(parsed)
+        elif extractor is not None:
+            facts.section(extractor.section).extend(extractor.extract(text, path))
         else:
             for alias, _origin in manifest_aliases(name, text):
                 if alias not in facts.artifacts:
@@ -256,31 +206,34 @@ def is_test_path(path: str) -> bool:
 
 # ------------------------------------------------------------------ candidatos a relacionados
 
+# Tokens sem assunto em qualquer organização; os da empresa (nome, sigla) vêm do perfil (NameRules.generic_tokens).
 _GENERIC = frozenset({
     "backend", "frontend", "service", "services", "server", "client", "clients", "lib", "library", "api", "app",
     "core", "common", "commons", "web", "ui", "sdk", "go", "java", "node", "python", "platform", "plataforma",
-    "senior", "snr", "manifests", "config", "configuration", "parent", "module", "base", "utils", "util",
+    "manifests", "config", "configuration", "parent", "module", "base", "utils", "util",
 })
 
 
-def name_tokens(repo: str) -> set[str]:
+def name_tokens(repo: str, naming: NameRules = NameRules()) -> set[str]:
     short = repo.split("__", 1)[-1].lower()
-    return {t for t in re.split(r"[-_.]+", short) if len(t) >= 4 and t not in _GENERIC}
+    return {t for t in re.split(r"[-_.]+", short)
+            if len(t) >= 4 and t not in _GENERIC and t not in naming.generic_tokens}
 
 
 def related_candidates(repo: str, others: Iterable[str], facts: Mapping[str, Mapping[str, Any]],
-                       limit: int = 15) -> list[str]:
-    """Repos com nome parecido (tokens em comum) ou que declaram o mesmo serviço SDL."""
-    mine = name_tokens(repo)
-    my_services = {s.get("service", "").lower() for s in facts.get(repo, {}).get("sdl", [])} - {""}
+                       limit: int = 15, naming: NameRules = NameRules()) -> list[str]:
+    """Repos com nome parecido (tokens em comum) ou que declaram o mesmo serviço de contrato (fatos `sdl`)."""
+    mine = name_tokens(repo, naming)
+    my_services = {s.get("service", "").lower() for s in facts.get(repo, {}).get(CONTRACTS_SECTION, [])} - {""}
     scored: list[tuple[int, str]] = []
     for other in others:
         if other == repo:
             continue
-        score = 2 * len(mine & name_tokens(other))
-        theirs = {s.get("service", "").lower() for s in facts.get(other, {}).get("sdl", [])}
+        their_tokens = name_tokens(other, naming)
+        score = 2 * len(mine & their_tokens)
+        theirs = {s.get("service", "").lower() for s in facts.get(other, {}).get(CONTRACTS_SECTION, [])}
         score += 3 * len(my_services & theirs)
-        if my_services & name_tokens(other):
+        if my_services & their_tokens:
             score += 1
         if score:
             scored.append((score, other))
@@ -451,11 +404,20 @@ def validate_card(
 MAX_READS = 8
 
 
+def _missing_contract(extractors: Sequence[FactExtractor]) -> str:
+    """Como a tarefa chama o contrato que falta: o formato dos extratores de contrato dos perfis ativos (o `label`
+    opcional, ex.: ".sdl" → "SDL"); sem nenhum, "contrato de API"."""
+    labels = [getattr(x, "label", "") for x in extractors if x.section == CONTRACTS_SECTION]
+    names = list(dict.fromkeys(lb.lstrip(".").upper() for lb in labels if isinstance(lb, str) and lb.strip(".")))
+    return "/".join(names) or "contrato de API"
+
+
 def render_card_task(
     *, task_id: str, repo: str, commit: str | None, remaining: int, material: Mapping[str, Any],
-    candidates: Sequence[str], cli: str = "uv run code-index",
+    candidates: Sequence[str], cli: str = "uv run code-index", extractors: Sequence[FactExtractor] = (),
 ) -> str:
-    """Texto que o agent recebe no `enrich next`. Instruções primeiro; dados (não confiáveis) depois."""
+    """Texto que o agent recebe no `enrich next`. Instruções primeiro; dados (não confiáveis) depois.
+    `extractors`: os dos perfis ativos; cada um escreve as linhas da sua seção dos fatos, na ordem."""
     facts = material.get("facts", {})
     lines = [
         f"TAREFA {task_id}  (cartão do repo; {remaining} pendente(s) além desta)",
@@ -464,7 +426,8 @@ def render_card_task(
         "INSTRUÇÕES",
         "- Escreva o cartão deste repo em português, a partir dos DADOS abaixo.",
         "- Comece pelos dados. Se já bastam, entregue direto.",
-        f"- Se faltar algo (README vazio, sem SDL, classes de nome genérico), investigue com no máximo {MAX_READS} leituras:",
+        f"- Se faltar algo (README vazio, sem {_missing_contract(extractors)}, classes de nome genérico), investigue com "
+        f"no máximo {MAX_READS} leituras:",
         f"    {cli} show {repo}/<caminho>[:inicio-fim]",
         f"    {cli} symbol <Nome> -r {repo}",
         f"    {cli} grep <texto> -r {repo}            (texto exato)",
@@ -493,17 +456,8 @@ def render_card_task(
         lines.append("  catalog-info.yaml: " + json.dumps(facts["catalog"], ensure_ascii=False))
     if facts.get("artifacts"):
         lines.append("  artefatos/pacotes: " + ", ".join(facts["artifacts"]))
-    for s in facts.get("sdl", []):
-        lines.append(f"  {s['path']}: domain={s['domain']} service={s['service']}")
-        for label, key in (("queries", "queries"), ("actions", "actions"), ("signals", "signals"),
-                           ("eventos", "events"), ("entidades", "entities")):
-            if s.get(key):
-                lines.append(f"     {label}: " + ", ".join(s[key]))
-        if s.get("private"):
-            lines.append("     (uso interno/private: " + ", ".join(s["private"]) + ")")
-    for pr in facts.get("properties", []):
-        lines.append(f"  {pr['path']}: propriedades configuráveis de {pr['group'] or '?'}")
-        lines.append("     " + ", ".join(pr["properties"]))
+    for extractor in extractors:
+        lines += extractor.card_lines(facts.get(extractor.section) or [])
     if facts.get("modules"):
         lines.append("  pastas: " + ", ".join(facts["modules"]))
     if facts.get("has"):

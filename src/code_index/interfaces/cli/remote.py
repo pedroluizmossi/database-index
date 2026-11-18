@@ -705,6 +705,9 @@ class RemoteService:
         return await self.call("POST", "/relations/rebuild",
                                timeout=max(self._timeout, 1800.0))
 
+    async def relation_origins(self) -> list[dict[str, Any]]:
+        return await self._get("/relations/origins")
+
     async def relation_stats(self) -> dict[str, Any]:
         return await self._get("/relations/stats")
 

@@ -49,15 +49,19 @@ class RelationStore:
     # ------------------------------------------------------------ linkers derivados
 
     async def replace_derived(self, conn: asyncpg.Connection, origins: Iterable[str],
-                              relations: Sequence[Relation]) -> int:
-        """Troca todas as relações destas origens derivadas pelas novas (dentro da transação de `conn`)."""
+                              relations: Sequence[Relation], *, keep_only: Iterable[str] | None = None) -> int:
+        """Troca todas as relações destas origens derivadas pelas novas (dentro da transação de `conn`).
+        `keep_only`: apaga também toda origem fora deste conjunto e de `origins` (recálculo completo: as de um
+        perfil desligado ou desconhecidas). As gravadas (manual, agent, llm) nunca saem."""
         names = sorted(set(origins))
         if set(names) & STORED:
             raise ValueError("origens gravadas por pessoas/agents não são recalculadas")
+        keep = None if keep_only is None else sorted(set(keep_only) | set(names) | STORED)
         # Dois rebuilds ao mesmo tempo (fim de sync, owner set, enrich submit): sem a trava, o DELETE de um não vê
         # as linhas que o outro está inserindo e o INSERT bate na chave primária.
         await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", f"code_index.relations.{self.table}")
-        await conn.execute(f"DELETE FROM {self.table} WHERE origin = ANY($1::text[])", names)
+        await conn.execute(f"DELETE FROM {self.table} WHERE origin = ANY($1::text[])"
+                           " OR ($2::text[] IS NOT NULL AND NOT (origin = ANY($2::text[])))", names, keep)
         rows = list({(r.src, r.dst, r.type, r.origin): r for r in relations}.values())
         if rows:
             await conn.executemany(

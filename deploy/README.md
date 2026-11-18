@@ -94,6 +94,30 @@ O Ingress principal tem `proxy-read-timeout` de 30 min: `POST /api/v1/scans/{kin
 `code-index graph|tests scan` em modo remoto) e `POST /api/v1/enrich/facts` esperam o trabalho na própria
 requisição.
 
+### Perfis de organização
+
+As convenções de uma empresa (nomes dos repos, formatos de contrato, dono no DDD, bucket do OpenAPI) vêm de
+perfis de organização, ligados por `config.CODE_INDEX_PROFILES` (CSV, na ordem; `default` = nenhum). Sem a
+chave vale o padrão do `settings.py` (hoje `senior`, que vai virar `default`): defina o valor no deploy.
+
+- **Mesmo valor em todos os pods.** api, worker e Job de migrations leem o mesmo ConfigMap. O worker roda os
+  linkers no fim de cada sync e o recálculo completo apaga as relações de origens que nenhum perfil ativo produz:
+  um pod com outro valor apagaria (ou recriaria) as relações do perfil. A api usa os perfis na busca (filtro
+  `domain`/`service`), no MCP (`find_api_impl` só existe com perfil que ofereça a convenção) e no cartão.
+- Trocar o valor muda o que entra nos trechos (globs, linguagem e declarações dos formatos do perfil): o próximo
+  sync reprocessa os arquivos afetados (sem custo de Voyage para texto já embedado, que fica no cache).
+- `config.OPENAPI_BUCKET_URL`: vazio = o bucket padrão do perfil ativo.
+- **Perfil de fora do repositório** (pacote com entry point no grupo `code_index.profiles`): instale-o na imagem
+  da aplicação, por exemplo numa imagem derivada:
+
+  ```dockerfile
+  FROM registry.example.com/code-index:0.1.0
+  RUN uv pip install --python /app/.venv/bin/python "meu-perfil==1.0.0"   # ou um wheel copiado para a imagem
+  ```
+
+  e use essa imagem em `image.repository`/`image.tag` (api, worker, migrations e CronJob usam a mesma). O nome
+  do entry point é o nome em `CODE_INDEX_PROFILES`; um entry point com o nome de um perfil embutido o substitui.
+
 ## 5. Primeiro acesso e primeiro token
 
 1. Abra `https://<publicHost>` e entre com um e-mail de `CODE_INDEX_ADMIN_EMAILS`.

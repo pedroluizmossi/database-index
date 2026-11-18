@@ -9,13 +9,21 @@ from .base import ServiceBase, _iso_local
 
 
 class ApisMixin(ServiceBase):
+    def _openapi_bucket_url(self) -> str:
+        """OPENAPI_BUCKET_URL, ou o padrão do perfil de organização ativo."""
+        url = self.profiles.setting(self.settings, "openapi_bucket_url")
+        if not url:
+            raise ValueError("catálogo OpenAPI não configurado: defina OPENAPI_BUCKET_URL "
+                             "(nenhum perfil de organização ativo traz um padrão)")
+        return str(url)
+
     async def openapi_catalog(self) -> list[dict[str, Any]]:
         """Lista o catálogo público sem baixar especificações nem gerar embeddings."""
         import httpx
         from ..sources.openapi_s3 import list_objects
 
         async with httpx.AsyncClient(timeout=60) as client:
-            items = await list_objects(client, self.settings.openapi_bucket_url)
+            items = await list_objects(client, self._openapi_bucket_url())
         return [{"domain": x.domain, "service": x.service, "key": x.key, "url": x.url,
                  "size": x.size, "modified": x.modified} for x in items]
 
@@ -63,7 +71,7 @@ class ApisMixin(ServiceBase):
             selected = tuple(sorted(set(existing.include) | set(selected)))
         elif existing and not existing.include:
             selected = ()
-        source = DocSource(name=name, url=self.settings.openapi_bucket_url, type="openapi_s3",
+        source = DocSource(name=name, url=self._openapi_bucket_url(), type="openapi_s3",
                            locale=domain, include=selected)
         await self._config.put(source)
         return source.repo_name

@@ -30,7 +30,8 @@ import { RepoDocsDialog } from "../components/RepoDocsDialog";
 import { RepoCardDialog } from "../components/RepoCardDialog";
 import { RepoSummariesLink } from "../components/summaries";
 import { OwnerDialog } from "../components/OwnerDialog";
-import { ORIGIN_HINT, ORIGIN_LABEL, ownerMatches } from "../lib/ownership";
+import { originHint, originLabel, ownerMatches } from "../lib/ownership";
+import { useOrigins } from "../components/docs";
 import {
   ALL_OWNERS,
   CONFIDENCE_LABEL,
@@ -640,12 +641,13 @@ function ActiveFilters({
   onClear: (key: FilterKey) => void;
   onClearAll: () => void;
 }) {
+  const meta = useOrigins();
   const chips: { key: FilterKey; label: string }[] = [];
   if (filters.status !== "all") chips.push({ key: "status", label: `Status: ${STATUS_LABEL[filters.status]}` });
   if (filters.domain !== ALL_OWNERS) {
     chips.push({ key: "domain", label: `Domínio: ${filters.domain === NO_OWNER ? "sem domínio" : filters.domain}` });
   }
-  if (filters.origin) chips.push({ key: "origin", label: `Origem: ${ORIGIN_LABEL[filters.origin]}` });
+  if (filters.origin) chips.push({ key: "origin", label: `Origem: ${originLabel(meta, filters.origin)}` });
   if (filters.confidence) chips.push({ key: "confidence", label: `Confiança: ${CONFIDENCE_LABEL[filters.confidence]}` });
   if (filters.outdated) chips.push({ key: "outdated", label: "Com push novo" });
   if (filters.search.trim()) chips.push({ key: "search", label: `Busca: "${filters.search.trim()}"` });
@@ -975,8 +977,9 @@ function NoOwnerChip({ repoName, onOwn }: { repoName: string; onOwn?: () => void
   );
 }
 
-/** Domínio/serviço dono do repo e de onde veio (SDL, irmão, chamadas, uso, manual). */
+/** Domínio/serviço dono do repo e de onde veio (manual, inferências dos perfis, uso; rótulos do servidor). */
 function OwnerCell({ repo: r, onOwn }: { repo: Repo; onOwn?: () => void }) {
+  const meta = useOrigins();
   if (r.owners.length === 0) {
     return <NoOwnerChip repoName={repoShortName(r.name, r.org)} onOwn={onOwn} />;
   }
@@ -987,8 +990,8 @@ function OwnerCell({ repo: r, onOwn }: { repo: Repo; onOwn?: () => void }) {
         {label}
       </p>
       {r.owner_origin && (
-        <p className="truncate text-xs text-stone-500 dark:text-stone-400" title={ORIGIN_HINT[r.owner_origin]}>
-          {ORIGIN_LABEL[r.owner_origin]}
+        <p className="truncate text-xs text-stone-500 dark:text-stone-400" title={originHint(meta, r.owner_origin) || undefined}>
+          {originLabel(meta, r.owner_origin)}
           <ConfidenceNote value={r.owner_confidence} />
         </p>
       )}
@@ -1034,6 +1037,7 @@ function RepoStatus({ repo: r, live }: { repo: Repo; live?: RepoProgress["status
 /** Cartão para telas pequenas: mostra o essencial e as ações com texto. */
 function RepoCard({ repo: r, live, actions, selection, onXray }: { repo: Repo; live?: RepoProgress["status"]; actions: RowActions | null; selection: Selection | null; onXray: (target: XrayTarget) => void }) {
   const checked = selection?.isSelected(r) ?? false;
+  const meta = useOrigins();
   return (
     <li className={cx("space-y-3 p-4", checked && "bg-accent-50/60 dark:bg-accent-500/10")}>
       <div className="flex items-start justify-between gap-3">
@@ -1089,7 +1093,7 @@ function RepoCard({ repo: r, live, actions, selection, onXray }: { repo: Repo; l
         )}
         {r.owner_origin && (
           <span className="text-stone-500 dark:text-stone-400">
-            {" "}· {ORIGIN_LABEL[r.owner_origin]}
+            {" "}· {originLabel(meta, r.owner_origin)}
             <ConfidenceNote value={r.owner_confidence} />
           </span>
         )}
@@ -1158,7 +1162,7 @@ function RepoSummary({ repo }: { repo: Repo }) {
   );
 }
 
-/** Abre o cartão do repo (resumo, capacidades, relacionados, fatos do SDL). */
+/** Abre o cartão do repo (resumo, capacidades, relacionados, contratos e outros fatos). */
 function RepoCardButton({ repo }: { repo: Repo }) {
   const [open, setOpen] = useState(false);
   if (repo.kind === "docs") return null;

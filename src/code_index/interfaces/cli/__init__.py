@@ -14,6 +14,7 @@ import asyncio
 import logging
 import sys
 
+from ...services.base import prepare_profiles
 from ...settings import Settings, bootstrap
 from . import (
     apis,
@@ -69,6 +70,12 @@ def build_parser(settings: Settings) -> argparse.ArgumentParser:
 def main() -> None:
     settings = bootstrap()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    try:
+        # Perfis de organização carregados na borda: as origens deles entram na ordem global antes de qualquer
+        # leitura de relações. Perfil desconhecido não impede montar a CLI (o erro sai no comando que abre o banco).
+        prepare_profiles(settings)
+    except ValueError:
+        pass
     logging.getLogger("httpx").setLevel(logging.WARNING)  # cada requisição em INFO: ruído na CLI remota
     a = build_parser(settings).parse_args()
     if a.local:

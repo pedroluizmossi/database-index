@@ -16,6 +16,8 @@ import re
 import cocoindex as coco
 from cocoindex.ops.text import detect_code_language
 
+from ..domain.file_types import NO_FILE_TYPES, FileTypes
+
 # Qualquer edição deste arquivo muda o hash e invalida o memo do process_file
 # (e dos index_repo acima), forçando reaplicar as regras aos repos já indexados.
 # Só os trechos cujo texto mudou são reembedados.
@@ -23,10 +25,9 @@ CONTENT_LOGIC = coco.LogicDep(hashlib.sha256(pathlib.Path(__file__).read_bytes()
 
 MASK = "***"
 
-# Linguagens de config: `chave: valor` sem aspas é comum e o valor costuma ser literal.
-_CONFIG_LANGS = {"yaml", "json", "xml", "toml", "ini", "properties", "dotenv", "bash", "shell", "sh", "hcl", "sdl", "pdl", ""}
-# Extensões que o detector do CocoIndex não conhece, mas que têm regras próprias aqui e em context.py.
-_EXTRA_LANGS = {"sdl": "sdl", "pdl": "pdl"}
+# Linguagens de config: `chave: valor` sem aspas é comum e o valor costuma ser literal. Os tipos de arquivo dos
+# perfis de organização (`FileTypes`, ex.: formatos de contrato) somam as linguagens marcadas como config.
+_CONFIG_LANGS = {"yaml", "json", "xml", "toml", "ini", "properties", "dotenv", "bash", "shell", "sh", "hcl", ""}
 _DATA_LANGS = {"yaml", "json", "xml"}
 MAX_DATA_FILE_BYTES = 100 * 1024
 
@@ -80,7 +81,9 @@ def _is_placeholder(value: str) -> bool:
             or re.fullmatch(r"(?i)(string|integer|int|long|double|boolean|bool|binary|date|datetime|object|number|uuid|blob|any)(\?|\[\])*", v) is not None)  # tipo (SDL)
 
 
-def redact(text: str, language: str) -> tuple[str, int]:
+def redact(text: str, language: str, types: FileTypes = NO_FILE_TYPES) -> tuple[str, int]:
+    """Texto com segredos mascarados e quantos foram. `types`: tipos de arquivo dos perfis ativos (as linguagens
+    de configuração deles recebem a máscara de `chave: valor` sem aspas)."""
     count = 0
 
     def sub(pattern: re.Pattern, repl, s: str) -> str:
@@ -123,7 +126,7 @@ def redact(text: str, language: str) -> tuple[str, int]:
         return f"{m.group(1)}{m.group(2)}{MASK}{m.group(2)}"
 
     text = _CODE_ASSIGN.sub(assign, text)
-    if language in _CONFIG_LANGS:
+    if language in _CONFIG_LANGS or language in types.config_languages:
         text = _CONFIG_ASSIGN.sub(assign, text)
     elif language == "markdown":  # só dentro dos blocos de código: na prosa, "token: obrigatório" não é segredo
         text = _MD_FENCE.sub(lambda m: _CONFIG_ASSIGN.sub(assign, m.group(0)), text)
@@ -167,10 +170,10 @@ def looks_minified(text: str) -> bool:
     return longest >= _MINIFIED_LONGEST and len(text) / len(lines) >= _MINIFIED_AVG_LINE
 
 
-def file_language(filename: str) -> str:
-    """Linguagem pelo nome do arquivo ("" se desconhecida). Mesma regra na indexação, na leitura e no grep."""
-    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    return detect_code_language(filename=filename) or _EXTRA_LANGS.get(ext, "")
+def file_language(filename: str, types: FileTypes = NO_FILE_TYPES) -> str:
+    """Linguagem pelo nome do arquivo ("" se desconhecida). Mesma regra na indexação, na leitura e no grep.
+    O detector do CocoIndex vem primeiro; depois, as extensões dos tipos de arquivo dos perfis ativos (`types`)."""
+    return detect_code_language(filename=filename) or types.language(filename)
 
 
 def skip_reason(path: str, language: str, text: str) -> str | None:

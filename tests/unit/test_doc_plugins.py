@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from code_index.domain.contracts import ContractRoutes
 from code_index.domain.documents import API_OPERATION, API_OVERVIEW, WIKI_PAGE
 from code_index.domain.models import DocSource
 from code_index.sources.openapi_s3 import OpenApiPlugin, _operation_attrs
@@ -36,27 +37,48 @@ def test_wiki_documents(tmp_path: Path) -> None:
     assert doc.attrs == {"page_id": 7, "folder": "pt-br/Plataforma"}
 
 
+ROUTES = ContractRoutes((("queries", "query"), ("actions", "action"), ("signals", "signal")))
+
+
 def test_openapi_documents(tmp_path: Path) -> None:
-    (tmp_path / "platform" / "email").mkdir(parents=True)
-    op = tmp_path / "platform" / "email" / "a1.md"
-    op.write_text('---\ntitle: "POST /email/queries/listBlacklistedEmails"\nurl: "https://s3/x"\n'
-                  'tags: ["email"]\n---\n# POST /email/queries/listBlacklistedEmails\n', encoding="utf-8")
-    entity = tmp_path / "platform" / "email" / "b2.md"
-    entity.write_text('---\ntitle: "GET /email/entities/log/{id}"\nurl: "https://s3/x"\ntags: []\n---\n', encoding="utf-8")
-    (tmp_path / "platform" / "email" / "__overview.md").write_text('---\ntitle: "Visão geral"\n---\n', encoding="utf-8")
-    (tmp_path / ".openapi-manifest.json").write_text(json.dumps({"platform_email.swagger.yaml": {
-        "etag": "e1", "files": ["platform/email/a1.md", "platform/email/b2.md", "platform/email/__overview.md"]}}))
-    source = DocSource(name="openapi-platform", url="https://s3", type="openapi_s3", locale="platform")
-    docs = {d.path: d for d in OpenApiPlugin().documents(source, tmp_path)}
-    assert docs["platform/email/a1.md"].type == API_OPERATION
-    assert docs["platform/email/a1.md"].attrs == {"domain": "platform", "service": "email", "method": "POST",
-                                                  "http_path": "/email/queries/listBlacklistedEmails",
-                                                  "kind": "query", "operation": "listBlacklistedEmails"}
-    assert "operation" not in docs["platform/email/b2.md"].attrs  # entidade: sem operação
-    assert docs["platform/email/__overview.md"].type == API_OVERVIEW
-    assert docs["platform/email/__overview.md"].attrs == {"domain": "platform", "service": "email"}
+    (tmp_path / "vendas" / "pedidos").mkdir(parents=True)
+    op = tmp_path / "vendas" / "pedidos" / "a1.md"
+    op.write_text('---\ntitle: "POST /pedidos/queries/listarPedidos"\nurl: "https://s3/x"\n'
+                  'tags: ["pedidos"]\n---\n# POST /pedidos/queries/listarPedidos\n', encoding="utf-8")
+    entity = tmp_path / "vendas" / "pedidos" / "b2.md"
+    entity.write_text('---\ntitle: "GET /pedidos/entities/item/{id}"\nurl: "https://s3/x"\ntags: []\n---\n',
+                      encoding="utf-8")
+    (tmp_path / "vendas" / "pedidos" / "__overview.md").write_text('---\ntitle: "Visão geral"\n---\n', encoding="utf-8")
+    (tmp_path / ".openapi-manifest.json").write_text(json.dumps({"vendas_pedidos.swagger.yaml": {
+        "etag": "e1", "files": ["vendas/pedidos/a1.md", "vendas/pedidos/b2.md", "vendas/pedidos/__overview.md"]}}))
+    source = DocSource(name="openapi-vendas", url="https://s3", type="openapi_s3", locale="vendas")
+    docs = {d.path: d for d in OpenApiPlugin().documents(source, tmp_path, routes=ROUTES)}
+    assert docs["vendas/pedidos/a1.md"].type == API_OPERATION
+    assert docs["vendas/pedidos/a1.md"].attrs == {"domain": "vendas", "service": "pedidos", "method": "POST",
+                                                  "http_path": "/pedidos/queries/listarPedidos",
+                                                  "kind": "query", "operation": "listarPedidos"}
+    assert "operation" not in docs["vendas/pedidos/b2.md"].attrs  # entidade: sem operação
+    assert docs["vendas/pedidos/__overview.md"].type == API_OVERVIEW
+    assert docs["vendas/pedidos/__overview.md"].attrs == {"domain": "vendas", "service": "pedidos"}
+    # sem rotas de contrato (nenhum perfil): a página fica só com método e caminho
+    plain = {d.path: d for d in OpenApiPlugin().documents(source, tmp_path)}
+    assert plain["vendas/pedidos/a1.md"].attrs == {"domain": "vendas", "service": "pedidos", "method": "POST",
+                                                   "http_path": "/pedidos/queries/listarPedidos"}
 
 
 def test_operation_attrs_so_do_proprio_servico() -> None:
-    assert "operation" not in _operation_attrs("POST /outro/actions/x", "email")
-    assert _operation_attrs("POST /email/signals/changed", "email")["kind"] == "signal"
+    assert "operation" not in _operation_attrs("POST /outro/actions/x", "pedidos", ROUTES)
+    assert _operation_attrs("POST /pedidos/signals/mudou", "pedidos", ROUTES)["kind"] == "signal"
+    assert "operation" not in _operation_attrs("POST /pedidos/signals/mudou", "pedidos")
+
+
+def test_rotas_de_contrato() -> None:
+    assert not ContractRoutes() and ContractRoutes().operation("/a/queries/b", "a") is None
+    assert ROUTES.operation("/Pedidos/queries/listar", "pedidos") == ("query", "listar")
+    assert ROUTES.operation("/pedidos/queries/listar/x", "pedidos") is None
+    both = ContractRoutes.combine([ContractRoutes((("q", "query"),)), ContractRoutes((("q", "action"), ("a", "action")))])
+    assert both.segments == (("q", "query"), ("a", "action"))  # repetido: vale o do primeiro
+    with pytest.raises(ValueError):
+        ContractRoutes((("eventos", "event"),))  # só grupos chamáveis
+    with pytest.raises(ValueError):
+        ContractRoutes((("a|b", "query"),))

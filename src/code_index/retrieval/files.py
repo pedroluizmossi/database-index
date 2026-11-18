@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from ..domain.file_types import NO_FILE_TYPES, FileTypes
 from ..indexing.content import file_language
 from .redaction import mask_output
 
@@ -39,6 +40,7 @@ def read_file(
     path: str,
     start_line: int | None = None,
     end_line: int | None = None,
+    types: FileTypes = NO_FILE_TYPES,
 ) -> str:
     """Lê um arquivo (ou intervalo de linhas) do clone local, com números de linha.
 
@@ -60,7 +62,7 @@ def read_file(
         text = target.read_text(errors="replace")
     except OSError as e:
         raise ValueError(f"não foi possível ler {repo}/{path}: {e}") from None
-    text = mask_output(text, file_language(target.name))
+    text = mask_output(text, file_language(target.name, types), types)
     lines = text.splitlines()
     total = len(lines)
     first = max(1, start_line or 1)

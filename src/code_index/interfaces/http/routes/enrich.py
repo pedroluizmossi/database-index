@@ -62,7 +62,7 @@ async def enrich_release(task_id: str, request: Request,
 
 
 @router.post("/api/v1/enrich/facts", tags=["enrich"],
-             summary="Recoleta os fatos dos repos (SDL, PDL, catalog-info...) dos clones, sem LLM e sem custo")
+             summary="Recoleta os fatos dos repos (catalog-info, contratos dos perfis...) dos clones, sem LLM e sem custo")
 async def enrich_facts(request: Request, body: EnrichFactsIn | None = Body(None),
                        principal: Principal = Depends(require(INDEX_WRITE))) -> dict[str, int]:
     """Mesmo efeito de `code-index enrich facts`: {repos, updated}. O sync já faz isso para os repos que mudam."""

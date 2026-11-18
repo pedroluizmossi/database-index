@@ -11,6 +11,8 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
+from ..domain.file_types import NO_FILE_TYPES, DeclRule, FileTypes
+
 DeclKind = Literal["container", "member", "section"]
 _MAX_NAMES = 10
 _KEYWORDS = {
@@ -59,7 +61,6 @@ _SQL_OBJECT = re.compile(
     re.MULTILINE | re.IGNORECASE,
 )
 _HCL_BLOCK = _rx(r'^(resource|data|module|variable|output|provider)\s*(?:"([^"\n]+)")?\s*(?:"([^"\n]+)")?')
-_SDL_DECL = _rx(r"^[ \t]*(query|action|signal|event|record|entity|enumeration|enum|service)\s+([A-Za-z_]\w*)")
 _PROTO_CONTAINER = _rx(r"^[ \t]*(?:message|service|enum)\s+([A-Za-z_]\w*)")
 _PROTO_RPC = _rx(r"^[ \t]*rpc\s+([A-Za-z_]\w*)")
 _GRAPHQL = _rx(r"^[ \t]*(?:type|input|interface|enum|union|scalar|schema|extend\s+type)\s+([A-Za-z_]\w*)")
@@ -82,8 +83,18 @@ def _line_of(text: str, offset: int, starts: list[int]) -> int:
     return lo + 1
 
 
-def declarations(text: str, language: str, filename: str = "") -> list[Decl]:
-    """Declarações do arquivo, em ordem de linha."""
+def _rule_declarations(rule: DeclRule, text: str, starts: list[int]) -> list[Decl]:
+    """Declarações pela regra de um tipo de arquivo de perfil: `"<palavra> <nome>"` na linha do casamento."""
+    out: list[Decl] = []
+    for m in rule.pattern.finditer(text):
+        kind: DeclKind = "container" if m.group(1) in rule.containers else "member"
+        out.append(Decl(_line_of(text, m.start(), starts), kind, f"{m.group(1)} {m.group(2)}"))
+    return out
+
+
+def declarations(text: str, language: str, filename: str = "", types: FileTypes = NO_FILE_TYPES) -> list[Decl]:
+    """Declarações do arquivo, em ordem de linha. `types`: tipos de arquivo dos perfis ativos; o tipo da extensão,
+    se tem regra de declarações, vence a linguagem."""
     starts = [0] + [m.end() for m in re.finditer("\n", text)]
     out: list[Decl] = []
 
@@ -97,10 +108,9 @@ def declarations(text: str, language: str, filename: str = "") -> list[Decl]:
     lang = (language or "").lower()
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else filename.lower()
 
-    if ext in ("sdl", "pdl"):
-        for m in _SDL_DECL.finditer(text):
-            kind: DeclKind = "container" if m.group(1) == "service" else "member"
-            out.append(Decl(_line_of(text, m.start(), starts), kind, f"{m.group(1)} {m.group(2)}"))
+    file_type = types.for_extension(ext)
+    if file_type is not None and file_type.declarations is not None:
+        out += _rule_declarations(file_type.declarations, text, starts)
     elif lang == "python":
         add(_PY_CLASS, "container")
         add(_PY_DEF, "member")

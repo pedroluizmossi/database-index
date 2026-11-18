@@ -27,7 +27,7 @@ from itsdangerous import URLSafeTimedSerializer
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from ...services import CodeIndexService, open_service
+from ...services import CodeIndexService, open_service, prepare_profiles
 from ...settings import Settings
 from .mcp import build_mcp, transport_security
 from .mcp_oauth import pending_signer
@@ -88,7 +88,10 @@ def create_app(settings: Settings) -> FastAPI:
 
     limiter = RateLimiter(service)  # contagem no Postgres, compartilhada entre réplicas
 
-    mcp = build_mcp(settings, service, limiter)
+    # Perfis de organização carregados uma vez, aqui na borda: as origens deles entram na ordem global antes de
+    # qualquer leitura, e o MCP e o serviço usam o mesmo objeto.
+    profiles = prepare_profiles(settings)
+    mcp = build_mcp(settings, service, limiter, profiles)
     # Sem estado: as tools são pergunta/resposta, sem notificações do servidor. Com sessão (o padrão do
     # SDK), cada cliente mantinha um stream SSE aberto para sempre: o desligamento ficava esperando por
     # ele, e após um restart os clientes precisavam reconectar (o id de sessão antigo deixava de existir).
@@ -100,7 +103,7 @@ def create_app(settings: Settings) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         async with AsyncExitStack() as stack:
-            svc = await stack.enter_async_context(open_service(settings))
+            svc = await stack.enter_async_context(open_service(settings, profiles=profiles))
             holder["svc"] = app.state.service = svc
             await svc.recover_interrupted_jobs()  # lease vencido (servidor/worker caiu): volta à fila
             if settings.sync_worker_embedded:

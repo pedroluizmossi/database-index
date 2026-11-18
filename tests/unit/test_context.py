@@ -61,15 +61,6 @@ module "clients" {
 }
 '''
 
-SDL = """service email {
-    query healthcheck {
-    }
-    action sendEmail {
-    }
-    record emailLog {
-    }
-}
-"""
 
 YAML = """apiVersion: apps/v1
 kind: Deployment
@@ -117,12 +108,6 @@ def test_python() -> None:
 def test_terraform_hcl() -> None:
     d = declarations(HCL, "hcl", "main.tf")
     assert names(d) == ["resource keycloak_realm senior", "module clients"]
-
-
-def test_sdl_pela_extensao() -> None:
-    d = declarations(SDL, "", "email.sdl")
-    assert names(d) == ["service email", "query healthcheck", "action sendEmail", "record emailLog"]
-    assert d[0].kind == "container"
 
 
 def test_yaml_kubernetes_kind_e_nome() -> None:

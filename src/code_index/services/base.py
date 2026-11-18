@@ -12,11 +12,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..domain.auth import Principal
-from ..domain.models import DocSource, RepoState, RepoStatus, validate_name
+from ..domain.models import DocSource, Org, Repo, RepoState, RepoStatus, validate_name
 from ..domain.policies import resolve_name
 from ..domain.repo_card import FACTS_VERSION
 from ..indexing.linkers import rebuild_relations
-from ..indexing.orchestrator import Indexer, configured_repos
+from ..indexing.orchestrator import Indexer, configured_repos, repo_for_row
 from ..infra.auth_store import AuditStore, TokenStore
 from ..infra.chunk_store import ChunkStore
 from ..infra.config_store import ConfigStore
@@ -33,10 +33,20 @@ from ..infra.repo_store import RepoStore
 from ..infra.symbol_store import SymbolStore
 from ..infra.usage_store import UsageStore
 from ..infra.user_store import UserStore
+from ..profiles.base import ActiveProfiles
+from ..profiles.registry import active_profiles
 from ..retrieval.search import Searcher
 from ..settings import Settings
 
 log = logging.getLogger(__name__)
+
+
+def prepare_profiles(settings: Settings) -> ActiveProfiles:
+    """Carrega os perfis de organização ativos (`CODE_INDEX_PROFILES`) e registra as origens deles na ordem global
+    (domain/relations). Chamada uma vez na borda de cada processo (CLI, app HTTP), antes de qualquer leitura de
+    relações; o resultado é o mesmo objeto que o serviço usa (`open_service(profiles=...)`), para as interfaces
+    montarem tools e textos com a mesma fonte. Perfil desconhecido → ValueError."""
+    return active_profiles(settings)
 
 
 class ScanBusy(RuntimeError):
@@ -73,8 +83,11 @@ class ServiceBase:
         users: UserStore,
         usage: UsageStore,
         rate_limits: RateLimitStore | None = None,
+        profiles: ActiveProfiles | None = None,
     ) -> None:
         self.settings = settings
+        # Perfis de organização ativos (profiles/): convenções da empresa. None = os de settings.profiles.
+        self.profiles = profiles if profiles is not None else active_profiles(settings)
         self._repos = repos
         self._chunks = chunks
         self._config = config
@@ -147,6 +160,11 @@ class ServiceBase:
             out.append(resolved)
         return out
 
+    def _repo_for_row(self, row: RepoState, orgs: list[Org], manual: dict[str, Repo]) -> Repo:
+        """Repo (pasta e filtros de arquivo) de uma linha da tabela de estado, com os padrões dos perfis ativos."""
+        return repo_for_row(row, orgs, manual, default_include=self.profiles.default_include,
+                            default_exclude=self.profiles.default_exclude)
+
     @staticmethod
     def _code_repo_names(rows: dict[str, RepoState]) -> list[str]:
         return [r.name for r in rows.values() if r.kind == "code" and not r.ignored]
@@ -171,7 +189,8 @@ class ServiceBase:
         `only`: nomes de linkers a rodar (sem recalcular o catálogo de documentos)."""
         self._owner_cache = None
         try:
-            return await rebuild_relations(self._chunks.pool, self.settings, await self._config.docs(), only=only)
+            return await rebuild_relations(self._chunks.pool, self.settings, await self._config.docs(), only=only,
+                                           profiles=self.profiles)
         finally:
             self._owner_cache = None  # uma requisição concorrente pode ter repovoado o cache durante o rebuild
 
@@ -187,6 +206,14 @@ class ServiceBase:
         log.info("calculando relações pela primeira vez")
         await self.rebuild_relations()
 
+    async def relation_origins(self) -> list[dict[str, Any]]:
+        """Origens de relação registradas (núcleo + perfis ativos): rótulo, descrição, ordem, se é contestável ou
+        gravada; `profile`: o perfil que a registrou, None = núcleo). A CLI e a interface tiram daqui o rótulo das
+        origens dos perfis (nunca fixas no núcleo)."""
+        from ..domain.relations import origin_profile, origins_payload
+
+        return [{**o, "profile": origin_profile(o["name"])} for o in origins_payload()]
+
     async def relation_stats(self) -> dict[str, Any]:
         return await self._relations.stats()
 
@@ -197,7 +224,7 @@ class ServiceBase:
 
         raw = entity.strip()
         if not raw:
-            raise ValueError("informe a entidade (nome do repo ou chave como 'op:platform/email/sendEmail')")
+            raise ValueError("informe a entidade (nome do repo ou chave como 'op:<domínio>/<serviço>/<operação>')")
         if type_ is not None and type_ not in RELATION_TYPES:
             raise ValueError(f"tipo inválido: {type_} (use {', '.join(RELATION_TYPES)})")
         if ":" in raw and key_kind(raw) in ("repo", "doc", "op", "code", "dir", "svc", "dom"):

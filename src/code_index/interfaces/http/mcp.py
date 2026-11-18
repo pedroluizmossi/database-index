@@ -27,10 +27,13 @@ from mcp.server.transport_security import TransportSecuritySettings
 from ...domain.auth import SEARCH_READ, Principal
 from ...domain.oauth import OAUTH_SCOPES
 from ...domain.usage import client_from_user_agent, status_for
+from ...domain.api_impl import ImplConvention
 from ...services import CodeIndexService
+from ...profiles.base import ActiveProfiles
+from ...services.base import prepare_profiles
 from ...settings import Settings
 from .mcp_oauth import CodeIndexOAuthProvider
-from .mcp_guide import GUIDE, INSTRUCTIONS, investigation_prompt
+from .mcp_guide import GUIDE, INSTRUCTIONS, investigation_prompt, with_examples, without_tools
 from .security import RateLimiter, enforce_rate_limit, origin_of
 
 ServiceGetter = Callable[[], CodeIndexService]
@@ -42,6 +45,10 @@ MCP_CODE_MAX_CHARS = 4000  # trecho maior (ex.: JSON minificado) é cortado; o r
 _REPO_DROP = ("source", "pushed_at", "size_kb", "skipped", "card_stale", "owner_confidence", "commit", "chunks")
 LIST_REPOS_LIMIT = 50   # padrão do list_repos no MCP: a lista inteira (centenas de repos) estoura o contexto
 LIST_REPOS_MAX = 200
+# repo_card no MCP: o formato genérico dos contratos repete `facts.sdl` e os perfis ativos são da interface web;
+# ficam de fora para não dobrar o consumo de contexto do agent.
+_CARD_DROP = ("contracts", "profiles")
+DOC_WIDTH = 120   # largura das descrições das tools (linha com exemplo do perfil que passar disso é quebrada)
 
 
 def _compact_repo(repo: dict) -> dict:
@@ -125,11 +132,49 @@ def transport_security(settings: Settings) -> TransportSecuritySettings:
     )
 
 
-def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimiter) -> MCPServer[Any]:
+def impl_tool_description(c: ImplConvention) -> str:
+    """Descrição da tool `find_api_impl` com a convenção do perfil ativo (o perfil dá o complemento: o que
+    implementa, a regra de nomes e os exemplos). Mesmo recuo de uma docstring: é o texto que o cliente recebe."""
+    scope = f" {c.scope}" if c.scope else ""
+    svc, op = c.example_service, c.example_operation
+    indent = " " * 8
+    lines = [
+        f"Onde uma operação da API{scope} é implementada: repo, {c.symbol}, arquivo e linha.",
+        "",
+        "Use com resultados de documentação de API (título 'POST /servico/queries/operacao') ou quando",
+        f"souber o nome da operação. Casamento pela {c.rule}, sem LLM.",
+        'Devolve {"results": [...]}.',
+        "",
+        "Args:",
+        f"    operation: '{op}', '{svc}.{op}' ou 'POST /{svc}/queries/{op}'.",
+        f"    service: filtra pelo serviço (ex.: '{svc}').",
+        "",
+    ]
+    return lines[0] + "\n" + "\n".join(indent + line if line else "" for line in lines[1:]) + indent
+
+
+def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimiter,
+              profiles: ActiveProfiles | None = None) -> MCPServer[Any]:
+    """`profiles`: os perfis carregados na borda (`prepare_profiles`), os mesmos passados ao `open_service`: as tools
+    registradas e os textos seguem exatamente o que o serviço responde."""
+    profiles = profiles if profiles is not None else prepare_profiles(settings)
     base = settings.public_url.rstrip("/")
+    impl = profiles.impl_convention
+    # Tools que dependem de um perfil de organização: sem ele, saem também das instruções e do guia.
+    off = () if impl is not None else ("find_api_impl",)
+    # Exemplos (repo, domínio, operação...) do perfil ativo, ou os genéricos do núcleo: guia e descrições das tools.
+    examples = profiles.guide_examples.as_dict()
+    instructions = without_tools(with_examples(INSTRUCTIONS, examples), off)
+    guide = without_tools(with_examples(GUIDE, examples), off)
+
+    def doc(fn: Callable[..., Any]) -> Callable[..., Any]:
+        """Preenche os exemplos `{ex:...}` da docstring (a descrição que o cliente recebe) antes de registrar."""
+        fn.__doc__ = with_examples(fn.__doc__ or "", examples, width=DOC_WIDTH)
+        return fn
+
     server: MCPServer[Any] = MCPServer(
         name="code-index",
-        instructions=INSTRUCTIONS,
+        instructions=instructions,
         # Servidor de autorização OAuth: valida também os tokens `cix_` colados (load_access_token).
         auth_server_provider=CodeIndexOAuthProvider(settings, get_service),
         auth=AuthSettings(
@@ -185,6 +230,7 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
         return result
 
     @server.tool()
+    @doc
     async def search_code(
         query: str,
         top_k: int = 8,
@@ -221,8 +267,8 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
             exclude_repos: repos que NÃO podem aparecer no resultado (nomes de list_repos).
             exclude_path_glob: globs de caminho que NÃO podem aparecer, ex.: ["**/old/**", "**/*.generated.*"].
             max_docs: máximo de páginas de documentação quando kind é vazio (padrão: top_k/4, mín. 2).
-            domain: só o código deste domínio do DDD (nome técnico de list_domains, ex.: "platform").
-            service: com domain, só este serviço (ex.: "authentication"). Inclui pastas de monorepos.
+            domain: só o código deste domínio do DDD (nome técnico de list_domains, ex.: "{ex:domain}").
+            service: com domain, só este serviço (ex.: "{ex:service}"). Inclui pastas de monorepos.
 
         Devolve {"results": [...]}. Cada resultado traz `owners` (domínio/serviço dono do arquivo), quando conhecido,
         e `tests` (quantos casos de teste cobrem o arquivo; liste-os com find_tests), quando houver.
@@ -266,6 +312,7 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
         )
 
     @server.tool()
+    @doc
     async def list_repos(status: str | None = None, org: str | None = None, name: str | None = None,
                          domain: str | None = None, limit: int = LIST_REPOS_LIMIT, offset: int = 0,
                          ctx: Context | None = None) -> dict:
@@ -278,7 +325,7 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
             status: "indexed", "pending", "error" ou "ignored".
             org: filtra por org do GitHub.
             name: trecho do nome do repo.
-            domain: só repos deste domínio ("platform") ou serviço ("platform/authentication").
+            domain: só repos deste domínio ("{ex:domain}") ou serviço ("{ex:domain}/{ex:service}").
             limit: máximo de repos nesta página (padrão 50, até 200).
             offset: quantos pular (use o `next_offset` da página anterior).
 
@@ -297,8 +344,9 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
                               "read", None, fn)
 
     @server.tool()
+    @doc
     async def list_domains(ctx: Context | None = None) -> dict:
-        """Domínios e serviços do DDD (do SDL e os definidos pela equipe), com rótulo e quantos repos cada
+        """Domínios e serviços do DDD ({ex:catalog_source} e os definidos pela equipe), com rótulo e quantos repos cada
         um tem. Use os nomes técnicos em `search_code(domain=..., service=...)` e `list_repos(domain=...)`."""
 
         async def fn(svc: CodeIndexService) -> dict:
@@ -319,8 +367,9 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
         return await run_tool(ctx, "list_domains", {}, "read", None, fn)
 
     @server.tool()
+    @doc
     async def find_repos(query: str, limit: int = 10, ctx: Context | None = None) -> dict:
-        """Descobre QUAL repo cuida de um assunto, pelo cartão do repo (resumo, capacidades, tags, operações SDL).
+        """Descobre QUAL repo cuida de um assunto, pelo cartão do repo (resumo, capacidades, tags, operações {ex:contract}).
 
         Use antes de search_code quando não souber o repo: "quem envia e-mail", "serviço de tenants".
         Devolve {"results": [...]}, cada um com repo, score, summary, kind e tags; filtre search_code por esses repos em seguida.
@@ -337,31 +386,23 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
 
         return await run_tool(ctx, "find_repos", {"query": query, "limit": limit}, "read", None, fn)
 
-    @server.tool()
     async def find_api_impl(operation: str, service: str | None = None, ctx: Context | None = None) -> dict:
-        """Onde uma operação da API da plataforma é implementada: repo, classe handler, arquivo e linha.
-
-        Use com resultados de documentação de API (título 'POST /servico/queries/operacao') ou quando
-        souber o nome da operação. Casamento pela convenção do SDK (`<operacao>Handler`), sem LLM.
-        Devolve {"results": [...]}.
-
-        Args:
-            operation: 'listBlacklistedEmails', 'email.listBlacklistedEmails' ou 'POST /email/queries/listBlacklistedEmails'.
-            service: filtra pelo serviço (ex.: 'email').
-        """
         async def fn(svc: CodeIndexService) -> dict:
             return {"results": await svc.find_api_impl(operation, service=service)}
 
         return await run_tool(ctx, "find_api_impl", {"operation": operation, "service": service}, "read", None, fn)
 
+    if impl is not None:  # só com perfil que ofereça a convenção operação → implementação
+        server.tool(description=impl_tool_description(impl))(find_api_impl)
+
     @server.tool()
+    @doc
     async def related(entity: str, type: str | None = None, ctx: Context | None = None) -> dict:
         """Tudo ligado a uma entidade: páginas que documentam um repo, repos relacionados, operação ↔ handler,
-        página de API → operação, dono no DDD (repo → serviço/domínio). Cada relação traz a origem (manual, sdl,
-        handler, tag, menção, repo irmão...).
+        página de API → operação, dono no DDD (repo → serviço/domínio). Cada relação traz a origem ({ex:origins}...).
 
         Args:
-            entity: nome do repo ('snr-email-backend') ou chave: 'repo:<nome>', 'doc:<fonte>/<caminho>',
+            entity: nome do repo ('{ex:repo}') ou chave: 'repo:<nome>', 'doc:<fonte>/<caminho>',
                 'op:<domínio>/<serviço>/<operação>', 'code:<repo>/<caminho>:<linha>', 'svc:<domínio>/<serviço>',
                 'dom:<domínio>'.
             type: filtra o tipo: documents | describes | implemented_by | related_to | belongs_to.
@@ -370,10 +411,11 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
                               lambda svc: svc.related(entity, type_=type, limit=200))
 
     @server.tool()
+    @doc
     async def repo_card(repo: str, ctx: Context | None = None) -> dict:
         """Cartão completo de um repo: resumo, capacidades, glossário, repos relacionados (com a base:
         "codigo" = referência vista no código, "nome" = só pelo nome), por onde começar a ler e os fatos
-        extraídos sem LLM (catalog-info, operações e eventos do .sdl, propriedades do .pdl, pastas).
+        extraídos sem LLM ({ex:facts}).
 
         Args:
             repo: nome como em list_repos ('org__repo') ou só 'repo'.
@@ -383,7 +425,7 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
             info = await svc.repo_card(repo)
             if info is None:
                 raise ValueError(f"sem cartão nem fatos para {repo}")
-            return info
+            return {k: v for k, v in info.items() if k not in _CARD_DROP}
 
         return await run_tool(ctx, "repo_card", {"repo": repo}, "read", None, fn)
 
@@ -530,16 +572,16 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
     @server.prompt(name="guia_de_uso", title="Guia de uso do code-index",
                    description="Como escolher e combinar as tools do code-index sem desperdício.")
     def guia_de_uso() -> str:
-        return GUIDE
+        return guide
 
     @server.prompt(name="investigar", title="Investigar com o code-index",
                    description="Responde uma pergunta sobre o código seguindo o guia de uso.")
     def investigar(pergunta: str) -> str:
-        return investigation_prompt(pergunta)
+        return investigation_prompt(pergunta, guide)
 
     @server.resource("code-index://guia", name="guia", title="Guia de uso do code-index",
                      description="Como escolher e combinar as tools do code-index.", mime_type="text/markdown")
     def guia() -> str:
-        return GUIDE
+        return guide
 
     return server

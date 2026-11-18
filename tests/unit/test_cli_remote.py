@@ -344,6 +344,28 @@ def test_repo_list_remoto(api: FakeApi, remote_settings: Settings, monkeypatch: 
     assert api.requests[0].url.params["status"] == "indexed"
 
 
+def test_owner_list_remoto_usa_rotulos_das_origens_do_servidor(api: FakeApi, remote_settings: Settings,
+                                                               monkeypatch: pytest.MonkeyPatch,
+                                                               capsys: pytest.CaptureFixture[str]) -> None:
+    # Origem de um perfil que a CLI não conhece: o rótulo vem do servidor (GET /relations/origins), nunca fixo.
+    api.on("GET", "/api/v1/ownership", [
+        {"repo": "org__a", "path": None, "owners": ["vendas/pedidos"], "origin": "owners_file", "confidence": None,
+         "evidence": {}, "alternatives": [{"owner": "vendas", "origin": "usage", "confidence": "baixa"}]},
+        {"repo": "org__b", "path": None, "owners": ["vendas"], "origin": "desconhecida", "confidence": "media",
+         "evidence": {}, "alternatives": []},
+    ])
+    api.on("GET", "/api/v1/relations/origins", [
+        {"name": "manual", "label": "manual", "description": "", "contestable": False, "stored": True, "order": 0},
+        {"name": "owners_file", "label": "arquivo OWNERS", "description": "", "contestable": False, "stored": False,
+         "order": 1},
+    ])
+    assert run_cli(remote_settings, monkeypatch, "owner", "list", "--origin", "owners_file") == 0
+    out = capsys.readouterr().out
+    assert "[arquivo OWNERS]  (alternativas: vendas)" in out
+    assert "[desconhecida, media]" in out  # origem sem registro: o nome cru
+    assert api.requests[0].url.params["origin"] == "owners_file"
+
+
 def test_sync_remoto_acompanha_e_sai_com_erro(api: FakeApi, remote_settings: Settings,
                                               monkeypatch: pytest.MonkeyPatch,
                                               capsys: pytest.CaptureFixture[str]) -> None:

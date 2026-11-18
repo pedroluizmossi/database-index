@@ -4,8 +4,11 @@ import pytest
 from code_index.sources.openapi_s3 import SwaggerObject, list_objects, render_operations, select_objects
 
 
+BUCKET = "https://s3.exemplo.invalid/catalogo-api"
+
+
 def item(domain: str, service: str) -> SwaggerObject:
-    return SwaggerObject(f"{domain}_{service}.swagger.yaml", domain, service, "e", "date", 10)
+    return SwaggerObject(f"{domain}_{service}.swagger.yaml", domain, service, "e", "date", 10, BUCKET)
 
 
 @pytest.mark.asyncio
@@ -23,7 +26,7 @@ async def test_listagem_paginada() -> None:
             </ListBucketResult>''')
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
-        objects = await list_objects(client)
+        objects = await list_objects(client, BUCKET)
     assert [(o.domain, o.service) for o in objects] == [("platform", "scheduler"), ("agro", "agro_events")]
     assert calls[1].url.params["continuation-token"] == "next"
 

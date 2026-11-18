@@ -66,11 +66,12 @@ def _drop_test_schema(url: str) -> None:
 
 
 @pytest.fixture
-def int_settings(tmp_path, monkeypatch, pg_url, clean_env) -> Iterator[Settings]:
+def int_settings(tmp_path, monkeypatch, pg_url, clean_env, profiles_option) -> Iterator[Settings]:
     """Settings isolado + use_settings + bootstrap, antes de qualquer execução do CocoIndex."""
     base = tmp_path / "estado-do-indice"
     base.mkdir()
     settings = Settings(
+        **({"profiles": profiles_option} if profiles_option is not None else {}),
         _env_file=None,
         base_dir=base,
         database_url=pg_url,

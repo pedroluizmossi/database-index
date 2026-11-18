@@ -17,6 +17,7 @@ from code_index.domain.file_patterns import (
     DEFAULT_INCLUDE,
     NOISE_EXCLUDE,
     TEST_EXCLUDE,
+    default_exclude,
 )
 
 
@@ -93,12 +94,23 @@ def test_arquivos_que_devem_ficar_no_indice(matcher, rel: str) -> None:
     "rel",
     [
         "openapi.json", "api/openapi.yaml", "api/swagger.yml", "CHANGELOG.md", "docs/HISTORY.md",
-        "RELEASE_NOTES.md", "db/migration/H2/V1.sql", "src/migration/a/Oracle/x.sql",
-        "db/migrations/mysql/a.sql", "db/migration/SqlServer/V2.sql",
+        "RELEASE_NOTES.md",
     ],
 )
-def test_ruido_de_versoes_openapi_e_migrations_de_outros_bancos_e_excluido(matcher, rel: str) -> None:
+def test_ruido_de_versoes_e_openapi_e_excluido(matcher, rel: str) -> None:
     assert not indexed(matcher, rel)
+
+
+def test_nucleo_nao_tem_ruido_de_organizacao(matcher) -> None:
+    # Migrations por banco são convenção de uma organização (perfil), não do núcleo.
+    assert indexed(matcher, "db/migration/H2/V1.sql")
+
+
+def test_exclude_padrao_soma_o_ruido_do_perfil_sem_repetir() -> None:
+    out = default_exclude(["**/gerado/**", "**/node_modules", "**/gerado/**"])
+    assert out[: len(DEFAULT_EXCLUDE)] == DEFAULT_EXCLUDE
+    assert out[len(DEFAULT_EXCLUDE):] == ["**/gerado/**"]
+    assert default_exclude() == DEFAULT_EXCLUDE
 
 
 def test_extra_exclude_do_repo_entra_no_filtro(matcher) -> None:

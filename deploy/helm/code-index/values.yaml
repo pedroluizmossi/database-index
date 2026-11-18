@@ -31,6 +31,13 @@ config:
   AZURE_ALLOWED_DOMAIN: ""
   EMBED_MODEL: voyage/voyage-code-4
   RERANK_MODEL: voyage/rerank-2.5
+  # Perfis de organização (CSV, na ordem; "default" = sem convenções de empresa). Vazio = padrão do settings.py
+  # (hoje "senior"; vai virar "default"): fixe o valor no deploy. Vale para api, worker e Job de migrations (todos
+  # leem este mapa): linkers e origens dependem dele, e o recálculo das relações apaga as de perfis desligados.
+  # Perfil de fora do repositório precisa estar instalado na imagem (deploy/README.md, "Perfis de organização").
+  CODE_INDEX_PROFILES: ""
+  # Bucket do catálogo OpenAPI (fonte openapi_s3). Vazio = padrão do perfil ativo.
+  OPENAPI_BUCKET_URL: ""
 # Chaves vazias em "config" não são exportadas (o padrão do settings.py vale).
 
 # Segredos (os que hoje ficam no .env). Use existingSecret em produção (Secret criado fora do Helm,

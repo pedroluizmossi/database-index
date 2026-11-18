@@ -47,6 +47,7 @@ export function RepoCardDialog({ repo, open, onClose }: { repo: string; open: bo
   const card = info?.card ?? null;
   const implByOp = new Map((info?.impls ?? []).map((i) => [`${i.service}|${i.operation}`, i]));
   const facts = info?.facts;
+  const contracts = info?.contracts ?? [];
   const catalog = facts?.catalog ?? {};
   const catalogBits = ["owner", "lifecycle", "type", "system"]
     .filter((k) => typeof catalog[k] === "string")
@@ -142,39 +143,47 @@ export function RepoCardDialog({ repo, open, onClose }: { repo: string; open: bo
 
           </div>
 
-          {facts && (facts.sdl.length > 0 || catalogBits.length > 0 || facts.properties.length > 0) && (
+          {facts && (contracts.length > 0 || catalogBits.length > 0 || facts.properties.length > 0) && (
             <Block title="Fatos (extraídos sem LLM)">
               <div className="space-y-2">
                 {catalogBits.length > 0 && <p className="text-sm text-stone-600 dark:text-stone-300">catalog-info · {catalogBits.join(" · ")}</p>}
-                {facts.sdl.map((s) => (
-                  <div key={`${s.path}|${s.service}`} className="text-sm">
-                    <p className="font-medium">
-                      {s.domain}/{s.service} <span className="font-mono font-normal text-stone-500">({s.path})</span>
-                    </p>
-                    {[...s.queries, ...s.actions].length > 0 && (
-                      <p className="font-mono text-xs leading-relaxed text-stone-600 dark:text-stone-300">
-                        {[...s.queries, ...s.actions].map((op, i) => {
-                          const impl = implByOp.get(`${s.service}|${op}`);
-                          return (
-                            <span key={op}>
-                              {i > 0 && ", "}
-                              <span
-                                title={impl ? `${impl.symbol} — ${impl.path}:${impl.line}` : "handler não encontrado pelo nome"}
-                                className={impl ? "text-emerald-700 dark:text-emerald-400" : undefined}
-                              >
-                                {op}
-                              </span>
-                            </span>
-                          );
-                        })}
+                {contracts.map((s) => {
+                  const ops = [...(s.groups.query ?? []), ...(s.groups.action ?? [])];
+                  const events = s.groups.event ?? [];
+                  return (
+                    <div key={`${s.path}|${s.service}`} className="text-sm">
+                      <p className="font-medium">
+                        {s.domain}/{s.service}{" "}
+                        <span className="font-mono font-normal text-stone-500">
+                          ({s.format ? `${s.format} · ` : ""}
+                          {s.path})
+                        </span>
                       </p>
-                    )}
-                    {s.events.length > 0 && <p className="text-stone-500">eventos: {s.events.join(", ")}</p>}
-                  </div>
-                ))}
-                {facts.sdl.length > 0 && (
+                      {ops.length > 0 && (
+                        <p className="font-mono text-xs leading-relaxed text-stone-600 dark:text-stone-300">
+                          {ops.map((op, i) => {
+                            const impl = implByOp.get(`${s.service}|${op}`);
+                            return (
+                              <span key={op}>
+                                {i > 0 && ", "}
+                                <span
+                                  title={impl ? `${impl.symbol} — ${impl.path}:${impl.line}` : "implementação não encontrada pelo nome"}
+                                  className={impl ? "text-emerald-700 dark:text-emerald-400" : undefined}
+                                >
+                                  {op}
+                                </span>
+                              </span>
+                            );
+                          })}
+                        </p>
+                      )}
+                      {events.length > 0 && <p className="text-stone-500">eventos: {events.join(", ")}</p>}
+                    </div>
+                  );
+                })}
+                {contracts.length > 0 && (
                   <p className="text-xs text-stone-500 dark:text-stone-400">
-                    Em verde: operação com handler encontrado ({info.impls.length}); passe o mouse para ver o arquivo.
+                    Em verde: operação com implementação encontrada ({info.impls.length}); passe o mouse para ver o arquivo.
                   </p>
                 )}
                 {facts.properties.map((p) => (

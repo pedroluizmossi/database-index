@@ -1,9 +1,17 @@
 """Textos de orientação servidos pelo MCP: instruções do servidor (curtas, entram no contexto de
 todo agent), o guia completo (prompt `guia_de_uso` e recurso `code-index://guia`) e o prompt
 `investigar`. Só texto: o comportamento descrito aqui precisa acompanhar o das tools.
+
+Os exemplos com nomes (repo, domínio, operação...) são marcadores `{ex:<campo>}`, preenchidos por
+`with_examples` com os exemplos do perfil de organização ativo (`profiles/base.GuideExamples`; sem perfil, os
+genéricos do núcleo). O mesmo vale para as descrições das tools em `mcp.py`.
 """
 
 from __future__ import annotations
+
+import re
+import textwrap
+from collections.abc import Mapping, Sequence
 
 INSTRUCTIONS = """\
 Índice de código e documentação (wiki) de vários repositórios. Só leitura.
@@ -18,8 +26,8 @@ Escolha a tool pelo tipo de pergunta:
   chamadas (import, tipo, herança; só dentro do repo). Mais preciso que grep_code para seguir chamadas.
 - read_file_lines: ler o contexto de um resultado antes de concluir.
 - find_repos: não sabe o repo? descubra quem cuida do assunto ("quem envia e-mail") pelo cartão do repo.
-- repo_card: o que um repo faz, operações SDL, relacionados e por onde começar a ler.
-- find_api_impl: onde uma operação da API é implementada (handler, arquivo:linha).
+- repo_card: o que um repo faz, operações {ex:contract}, relacionados e por onde começar a ler.
+- find_api_impl: onde uma operação da API é implementada ({ex:impl_symbol}, arquivo:linha).
 - related: tudo ligado a uma entidade (repo, página, operação, código), com a origem de cada relação.
 - list_repos: descobrir nomes de repos (com resumo, dono domínio/serviço) e se estão indexados; filtre por
   `name` ou `domain` (a lista vem paginada: `total` e `next_offset`).
@@ -48,16 +56,16 @@ preferência, conforme o que você já sabe.
 | Uma pergunta sobre comportamento | `search_code` | "onde o token expirado é rejeitado" |
 | O nome de uma classe, função ou método | `find_symbol` | `CaptchaValidator`, `AuthService.login` |
 | Os membros de uma classe | `find_symbol` com `Classe.*` | `RolesService.*` |
-| Um texto exato: erro, chave de config ou i18n, URL | `grep_code` | `"platform.authorization.error_summary"` |
+| Um texto exato: erro, chave de config ou i18n, URL | `grep_code` | `"{ex:text_key}"` |
 | O comportamento esperado de um código (casos de teste) | `find_tests` | `AuthService.lockAccount`, `src/auth/token.ts` |
 | Quem chama um método (impacto de uma mudança) | `find_callers` | `Sender.send`, `src/mail/Sender.java:42` |
 | O que um método chama (seguir o fluxo) | `find_callees` | `BillingService.charge` |
 | Um resultado e precisa do contexto | `read_file_lines` | o arquivo do resultado, com intervalo de linhas |
 | Um assunto, mas não sabe qual repo cuida dele | `find_repos` | "blocklist de e-mail", "push firebase" |
-| Um repo e quer saber o que ele faz e por onde começar | `repo_card` | `snr-email-backend` |
-| Uma operação da API e quer o código que a implementa | `find_api_impl` | `email.listBlacklistedEmails` |
-| Tudo o que está ligado a um repo, página ou operação | `related` | `snr-email-backend`, `op:platform/email/sendEmail` |
-| Dúvida sobre o nome do repo ou se ele está indexado | `list_repos` | `name="email"` |
+| Um repo e quer saber o que ele faz e por onde começar | `repo_card` | `{ex:repo}` |
+| Uma operação da API e quer o código que a implementa | `find_api_impl` | `{ex:api_operation}` |
+| Tudo o que está ligado a um repo, página ou operação | `related` | `{ex:repo}`, `{ex:operation_key}` |
+| Dúvida sobre o nome do repo ou se ele está indexado | `list_repos` | `name="{ex:repo_filter}"` |
 
 Fluxo típico:
 0. Não sabe o repo? `find_repos` com o assunto; `repo_card` no mais provável.
@@ -73,7 +81,7 @@ Fluxo típico:
   funcionam melhor que listas de palavras-chave.
 - `repos`: limite assim que souber o repo. Aceita `org__repo`, `org/repo` ou só `repo`.
 - `domain` / `service`: limite à área do negócio (DDD), com os nomes técnicos de `list_domains`
-  (ex.: `domain="platform", service="authentication"`). Vale também para pastas de monorepos. Cada
+  (ex.: `domain="{ex:domain}", service="{ex:service}"`). Vale também para pastas de monorepos. Cada
   resultado traz `owners` (domínio/serviço dono do arquivo). Repos ainda sem dono não entram nesse filtro.
 - `kind`: `"code"` para só código, `"doc"` para só documentação (README, docs/, wiki). Vazio traz os dois,
   com no máximo `max_docs` páginas (padrão: um quarto do top_k, mínimo 2).
@@ -173,9 +181,46 @@ O que vem no resultado:
 """
 
 
-def investigation_prompt(question: str) -> str:
+_EXAMPLE = re.compile(r"\{ex:([a-z_]+)\}")
+
+
+def with_examples(text: str, examples: Mapping[str, str], width: int | None = None) -> str:
+    """O texto com os marcadores `{ex:<campo>}` trocados pelos exemplos (`GuideExamples.as_dict()`). Marcador
+    sem exemplo → KeyError (erro de montagem, não texto quebrado para o agent). `width` (docstrings das tools):
+    a linha com marcador que passar da largura depois da troca é quebrada, com o mesmo recuo."""
+    def sub(m: re.Match[str]) -> str:
+        if m.group(1) not in examples:
+            raise KeyError(f"exemplo do guia sem valor: {m.group(1)}")
+        return examples[m.group(1)]
+
+    if width is None:
+        return _EXAMPLE.sub(sub, text)
+    out: list[str] = []
+    for line in text.split("\n"):
+        new = _EXAMPLE.sub(sub, line)
+        if new != line and len(new) > width:
+            indent = new[:len(new) - len(new.lstrip())]
+            out.extend(textwrap.wrap(new.strip(), width, initial_indent=indent, subsequent_indent=indent,
+                                     break_long_words=False, break_on_hyphens=False))
+        else:
+            out.append(new)
+    return "\n".join(out)
+
+
+def without_tools(text: str, tools: Sequence[str]) -> str:
+    """O texto sem as linhas que recomendam tools não registradas (item `- tool:` e linha de tabela com
+    `` `tool` ``), ex.: `find_api_impl` sem perfil de organização que ofereça implementações."""
+    if not tools:
+        return text
+    lines = text.split("\n")
+    return "\n".join(line for line in lines if not any(
+        line.startswith(f"- {t}:") or (line.startswith("|") and f"`{t}`" in line) for t in tools))
+
+
+def investigation_prompt(question: str, guide: str) -> str:
+    """`guide`: o guia já montado (`with_examples`/`without_tools`)."""
     return (
-        f"{GUIDE}\n---\n\n"
+        f"{guide}\n---\n\n"
         "Use as tools do code-index seguindo o guia acima para responder à pergunta abaixo. Comece pela "
         "tool mais específica para o que a pergunta já informa, confirme lendo os arquivos e responda "
         "citando repo/caminho:linha. Se não encontrar, diga o que tentou.\n\n"

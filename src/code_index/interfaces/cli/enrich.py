@@ -71,7 +71,7 @@ async def _cmd_enrich_status(a: argparse.Namespace, settings: Settings) -> None:
     if a.json:
         print_json(st, default=str)
         return
-    print(f"repos indexados: {st['repos']} | com fatos: {st['with_facts']} (com SDL: {st['with_sdl']})")
+    print(f"repos indexados: {st['repos']} | com fatos: {st['with_facts']} (com contratos: {st.get('with_contracts', st.get('with_sdl'))})")
     print(f"cartões: {st['cards_ok']} em dia | {st['cards_stale']} desatualizados | {st['cards_missing']} sem cartão")
     print(f"pendentes (sem reserva): {st['pending']} | tarefas: "
           + (", ".join(f"{k} {v}" for k, v in sorted(st["tasks"].items())) or "nenhuma")
@@ -88,7 +88,7 @@ async def _cmd_enrich_status(a: argparse.Namespace, settings: Settings) -> None:
               f"(de {sm['files']} arquivos de código)")
     imp = st.get("impls")
     if imp:
-        print(f"handlers de API (SDL, por nome): {imp['matched']} de {imp['operations']} operações")
+        print(f"implementações de API (por nome): {imp['matched']} de {imp['operations']} operações")
     for t in st["leased"]:
         print(f"  reservada {t['id']}  {t['repo']}{(' ' + t['subject']) if t.get('subject') else ''}"
               f"  agent={t['agent'] or '-'}  até {t['lease_until']}")
@@ -106,7 +106,7 @@ async def _cmd_enrich_show(a: argparse.Namespace, settings: Settings) -> None:
 def register(sub: Subparsers, settings: Settings) -> None:
     en = sub.add_parser("enrich", help="enriquecimento offline: cartão do repo feito por agents (next/submit)") \
         .add_subparsers(required=True)
-    e = en.add_parser("facts", help="coleta fatos (catalog-info, manifestos, SDL, pastas) sem LLM e sem custo")
+    e = en.add_parser("facts", help="coleta fatos (catalog-info, manifestos, contratos, pastas) sem LLM e sem custo")
     e.add_argument("repo", nargs="*", help="repos (padrão: todos os indexados cuja revisão mudou)")
     e.add_argument("--force", action="store_true", help="recoleta mesmo sem mudança")
     e.set_defaults(fn=_cmd_enrich_facts)

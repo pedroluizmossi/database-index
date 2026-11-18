@@ -32,11 +32,12 @@ from ..infra import llm
 from ..settings import Settings, get_settings
 from .content import CONTENT_LOGIC, file_language, redact, skip_reason
 from .context import Decl, chunk_header, chunk_spans, declarations, full_lines, symbol_names
+from ..domain import doc_links
 from ..domain.doc_content import strip_embedded_blobs
 from ..domain.doc_links import (
     MANIFESTS, alias_is_strong, blank_lines, manifest_aliases, page_mentions, page_path, parse_front_matter,
-    repo_name_aliases,
 )
+from ..profiles.registry import active_profiles
 from ..domain.search_text import code_terms
 from ..sources.wikijs import page_matches
 from ..infra.chunk_store import FTS_DOCUMENT
@@ -206,13 +207,15 @@ async def process_file(
     if size > get_settings().max_file_bytes:
         doc_targets.skipped.declare_row(row=SkippedFile(repo=repo, path=path, reason="tamanho", size_bytes=size))
         return
-    language = file_language(file.file_path.path.name)  # inclui sdl/pdl, que o detector não conhece
+    # tipos de arquivo dos perfis ativos (formatos que o detector não conhece); mesma exceção do get_settings acima
+    file_types = active_profiles(get_settings()).file_types
+    language = file_language(file.file_path.path.name, file_types)
     splitter_language = detect_code_language(filename=file.file_path.path.name)  # só o que o tree-sitter entende
     reason = skip_reason(path, language, text)
     if reason:
         doc_targets.skipped.declare_row(row=SkippedFile(repo=repo, path=path, reason=reason, size_bytes=size))
         return
-    text, _ = redact(text, language)  # segredos/certificados nunca vão para a Voyage nem para o banco
+    text, _ = redact(text, language, file_types)  # segredos/certificados nunca vão para a Voyage nem para o banco
     filename = file.file_path.path.name
     page_title = ""
     if kind == "docs":
@@ -239,7 +242,7 @@ async def process_file(
         language=splitter_language,
     )
     lines = text.split("\n")
-    decls = declarations(text, language, file.file_path.path.name)
+    decls = declarations(text, language, file.file_path.path.name, file_types)
     _declare_symbols(symbols_table, repo, path, language, decls, lines)
     items = []
     for start, end in chunk_spans([(c.start.line, c.end.line, c.end.column) for c in chunks], lines):
@@ -294,6 +297,16 @@ class _RepoMatcher(FilePathMatcher):
 
     def is_file_included(self, path: PurePath) -> bool:
         return self._patterns.is_file_included(path) and not (self._root / path).is_symlink()
+
+
+def repo_name_aliases(repo: str) -> list[tuple[str, str]]:
+    """Apelidos do nome do repo com as regras de nome dos perfis ativos (`doc_links.repo_name_aliases`).
+
+    O perfil vem de `get_settings()`, como o resto deste módulo (o CocoIndex chama estas funções fora da injeção
+    do serviço; mesma exceção do lifespan). Fica fora do `index_repo` memoizado de propósito: o corpo dele não
+    muda. Trocar de perfil não revarre os repos: os apelidos do nome mudam no próximo commit de cada repo (ou
+    com `sync --full`)."""
+    return doc_links.repo_name_aliases(repo, active_profiles(get_settings()).naming)
 
 
 def _walk_repo(repo: Repo) -> Any:

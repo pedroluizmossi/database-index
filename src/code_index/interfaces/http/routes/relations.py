@@ -7,7 +7,6 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from ....domain.auth import INDEX_WRITE, SEARCH_READ, Principal
-from ....domain.relations import origins_payload
 from ..deps import audited
 from ..security import get_service, require
 
@@ -16,8 +15,8 @@ router = APIRouter()
 
 @router.get("/api/v1/relations/origins", tags=["relações"],
             summary="Origens de relação: rótulo, ordem, se é contestável ou gravada por pessoa/agent")
-async def relation_origins(_: Principal = Depends(require(SEARCH_READ))) -> list[dict[str, Any]]:
-    return origins_payload()
+async def relation_origins(request: Request, _: Principal = Depends(require(SEARCH_READ))) -> list[dict[str, Any]]:
+    return await get_service(request).relation_origins()
 
 
 @router.get("/api/v1/relations/stats", tags=["relações"],

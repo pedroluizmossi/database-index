@@ -222,15 +222,6 @@ def test_mascara_token_do_npmrc_na_indexacao() -> None:
     assert redact("//h/:_authToken=${NPM_TOKEN}", "")[0] == "//h/:_authToken=${NPM_TOKEN}"
 
 
-def test_linguagem_de_sdl_e_pdl() -> None:
-    from code_index.indexing.content import file_language
-
-    assert file_language("authentication.sdl") == "sdl"
-    assert file_language("authentication.pdl") == "pdl"
-    assert file_language("App.java") == "java"
-    assert file_language("LICENSE") == ""
-
-
 def test_mascara_token_npm_citado_no_meio_do_texto() -> None:
     from code_index.indexing.content import redact
 

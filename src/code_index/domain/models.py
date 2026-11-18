@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import re
-from dataclasses import asdict, dataclass, field
+from collections.abc import Sequence
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -88,6 +89,22 @@ class Repo:
     @property
     def all_excludes(self) -> list[str]:
         return list(self.exclude) + list(self.extra_exclude)
+
+    def with_default_include(self, include: Sequence[str]) -> Repo:
+        """Troca o include padrão do núcleo pelo padrão dos perfis ativos (`file_patterns.default_include`: núcleo +
+        globs dos tipos de arquivo do perfil). Um include próprio (gravado na configuração, ou o das fontes de
+        documentação) fica como está."""
+        if self.include != tuple(DEFAULT_INCLUDE) or self.include == tuple(include):
+            return self
+        return replace(self, include=tuple(include))
+
+    def with_default_exclude(self, exclude: Sequence[str]) -> Repo:
+        """Troca o exclude padrão do núcleo pelo padrão dos perfis ativos (`file_patterns.default_exclude`: núcleo +
+        ruído do perfil). Um exclude próprio (gravado na configuração) fica como está. Os campos do repo fazem parte
+        da chave de memo do CocoIndex: com o mesmo perfil, o resultado é sempre o mesmo."""
+        if self.exclude != tuple(DEFAULT_EXCLUDE) or self.exclude == tuple(exclude):
+            return self
+        return replace(self, exclude=tuple(exclude))
 
     def local_path(self, repos_dir: Path) -> Path:
         if self.path is not None:

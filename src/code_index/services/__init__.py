@@ -33,11 +33,13 @@ from ..infra.repo_store import RepoStore
 from ..infra.symbol_store import SymbolStore
 from ..infra.usage_store import UsageStore
 from ..infra.user_store import UserStore
+from ..profiles.base import ActiveProfiles
+from ..profiles.registry import active_profiles
 from ..retrieval.search import Searcher
 from ..settings import Settings, get_settings
 from .apis import ApisMixin
 from .auth import AuthMixin
-from .base import ServiceBase
+from .base import ServiceBase, prepare_profiles
 from .docs import DocsMixin
 from .enrich import EnrichMixin
 from .oauth import OAuthMixin
@@ -61,9 +63,13 @@ class CodeIndexService(SyncMixin, VectorsMixin, ReposMixin, DocsMixin, WikiMixin
 
 
 @asynccontextmanager
-async def open_service(settings: Settings | None = None) -> AsyncIterator[CodeIndexService]:
-    """Abre o pool do Postgres, monta os componentes e fecha tudo na saída (inclusive clientes LiteLLM)."""
+async def open_service(settings: Settings | None = None, *,
+                       profiles: ActiveProfiles | None = None) -> AsyncIterator[CodeIndexService]:
+    """Abre o pool do Postgres, monta os componentes e fecha tudo na saída (inclusive clientes LiteLLM).
+    `profiles`: os perfis já carregados na borda (`prepare_profiles`); sem eles, carrega aqui."""
     settings = settings if settings is not None else get_settings()
+    if profiles is None:
+        profiles = active_profiles(settings)  # perfil desconhecido falha aqui, antes de abrir o banco
     try:
         token = resolve_github_token(settings)
         async with open_pool(settings) as pool:
@@ -81,6 +87,7 @@ async def open_service(settings: Settings | None = None) -> AsyncIterator[CodeIn
                 git=git,
                 github=GitHubClient(token),
                 pool=pool,
+                profiles=profiles,
             )
             symbols = SymbolStore(pool, settings)
             searcher = Searcher(settings, chunks=chunks, symbols=symbols)
@@ -104,6 +111,7 @@ async def open_service(settings: Settings | None = None) -> AsyncIterator[CodeIn
                 users=UserStore(pool, settings),
                 usage=UsageStore(pool, settings),
                 rate_limits=RateLimitStore(pool, settings),
+                profiles=profiles,
             )
             await svc._ensure_search_indexes()
             await svc.ensure_relations()

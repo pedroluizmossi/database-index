@@ -1,16 +1,19 @@
-"""APIs da plataforma: onde uma operação é implementada e o catálogo/indexação das specs OpenAPI."""
+"""APIs: onde uma operação de contrato é implementada e o catálogo/indexação das specs OpenAPI."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, Field
 
+from ....domain.api_impl import NO_IMPL_CONVENTION
 from ....domain.auth import ADMIN, SEARCH_READ, Principal
 from ..security import enforce_rate_limit, get_service, get_settings_dep, require
 
 router = APIRouter()
+NOTICE_HEADER = "X-Code-Index-Notice"   # código ASCII estável quando a resposta vem vazia por configuração
+NO_IMPL_NOTICE = "no-impl-convention"   # nenhum perfil ativo oferece a convenção operação → implementação
 
 
 class OpenApiSelection(BaseModel):
@@ -19,20 +22,30 @@ class OpenApiSelection(BaseModel):
 
 
 @router.get("/api/v1/api-impls", tags=["openapi"],
-            summary="Onde uma operação da API é implementada (handler do .sdl; sem custo)")
-async def api_impls(request: Request, operation: str = Query(..., min_length=1, max_length=300),
+            summary="Onde uma operação da API é implementada (convenção de nomes do perfil ativo; sem custo)",
+            description="Lista vazia, com o código `no-impl-convention` no cabeçalho X-Code-Index-Notice, quando "
+                        "nenhum perfil de organização ativo oferece implementações de operações ("
+                        + NO_IMPL_CONVENTION + ").")
+async def api_impls(request: Request, response: Response, operation: str = Query(..., min_length=1, max_length=300),
                     service: str | None = None, domain: str | None = None,
                     limit: int = Query(20, ge=1, le=100),
                     _: Principal = Depends(require(SEARCH_READ))) -> list[dict[str, Any]]:
+    svc = get_service(request)
     try:
-        return await get_service(request).find_api_impl(operation, service=service, domain=domain, limit=limit)
+        rows = await svc.find_api_impl(operation, service=service, domain=domain, limit=limit)
     except ValueError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from None
+    if svc.profiles.impl_convention is None:
+        response.headers[NOTICE_HEADER] = NO_IMPL_NOTICE
+    return rows
 
 
 @router.get("/api/v1/openapi/catalog", tags=["openapi"])
 async def openapi_catalog(request: Request, _: Principal = Depends(require(SEARCH_READ))) -> list[dict[str, Any]]:
-    return await get_service(request).openapi_catalog()
+    try:
+        return await get_service(request).openapi_catalog()
+    except ValueError as e:  # catálogo não configurado (sem OPENAPI_BUCKET_URL e sem perfil que traga o padrão)
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from None
 
 
 @router.get("/api/v1/openapi/status", tags=["openapi"])

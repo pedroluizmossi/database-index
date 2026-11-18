@@ -1,8 +1,8 @@
 import { Boxes } from "lucide-react";
 import type { OwnerOrigin, OwnershipCatalog } from "../api/types";
-import { ORIGIN_HINT, ORIGIN_LABEL } from "../lib/ownership";
-import { ORIGIN_VALUES } from "../lib/repoFilters";
+import { originHint, originLabel, originRank } from "../lib/ownership";
 import { cx } from "../lib/utils";
+import { useOrigins } from "./docs";
 import { Skeleton } from "./ui";
 
 const numberFormat = new Intl.NumberFormat("pt-BR");
@@ -24,8 +24,13 @@ export function OwnershipStrip({
   onOrigin: (origin: OwnerOrigin) => void;
   onShowUnowned: () => void;
 }) {
+  const meta = useOrigins();
   if (loading && !coverage) return <Skeleton className="h-12 w-full rounded-xl" />;
   if (!coverage || coverage.repos === 0) return null;
+  // Origens com repos, na ordem de força do servidor (as dos perfis ativos entram entre manual e uso).
+  const shown = Object.keys(coverage.by_origin)
+    .filter((o) => o !== "none" && (coverage.by_origin[o] ?? 0) > 0)
+    .sort((a, b) => originRank(meta, a) - originRank(meta, b));
   return (
     <section
       aria-label="Domínio (DDD)"
@@ -39,7 +44,8 @@ export function OwnershipStrip({
         </span>
       </span>
       <ul className="flex flex-wrap items-center gap-x-0.5 gap-y-1 text-xs" aria-label="Repositórios por origem do domínio">
-        {ORIGIN_VALUES.filter((o) => (coverage.by_origin[o] ?? 0) > 0).map((o) => {
+        {shown.map((o) => {
+          const hint = originHint(meta, o);
           const pressed = originFilter === o;
           return (
             <li key={o}>
@@ -47,7 +53,7 @@ export function OwnershipStrip({
                 type="button"
                 aria-pressed={pressed}
                 onClick={() => onOrigin(o)}
-                title={`${ORIGIN_HINT[o]}. ${pressed ? "Clique para tirar o filtro." : "Clique para ver só estes."}`}
+                title={`${hint ? `${hint}. ` : ""}${pressed ? "Clique para tirar o filtro." : "Clique para ver só estes."}`}
                 className={cx(
                   "inline-flex items-center gap-1.5 rounded-md px-2 py-1 outline-none transition focus-visible:ring-2 focus-visible:ring-accent-500",
                   pressed
@@ -55,7 +61,7 @@ export function OwnershipStrip({
                     : "text-stone-600 hover:bg-stone-900/5 hover:text-stone-900 dark:text-stone-300 dark:hover:bg-white/5 dark:hover:text-white",
                 )}
               >
-                {ORIGIN_LABEL[o]}
+                {originLabel(meta, o)}
                 <span className="font-medium text-stone-900 tabular-nums dark:text-white">{numberFormat.format(coverage.by_origin[o] ?? 0)}</span>
               </button>
             </li>

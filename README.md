@@ -90,7 +90,8 @@ Por padrão ficam de fora (`domain/file_patterns.py`: `DEFAULT_EXCLUDE`, `TEST_E
 - **testes de todas as linguagens** (`src/test`, `tests/`, `__tests__`, `*Test.java`, `*.spec.ts`,
   `test_*.py`, `*_test.go`, `*Tests.cs`, `*_spec.rb`...);
 - `CHANGELOG*`/`CHANGES*`/`HISTORY*`, **`openapi.*`/`swagger.*`** (OpenAPI é indexado por outra fonte)
-  e migrations de outros bancos (`migration/**/H2|Oracle|SqlServer|MySql`). Fica só a de PostgreSql;
+  e o ruído do perfil de organização ativo (`noise_exclude`; no `senior`, migrations de outros bancos,
+  `migration/**/H2|Oracle|SqlServer|MySql`: fica só a de PostgreSql);
 - conteúdo (`indexing/content.py`): binários com extensão de texto (byte nulo ou >10% de caracteres
   inválidos, ex.: vídeo `.ts`), CRDs do Kubernetes e yaml/json/xml acima de 100 KB.
 
@@ -104,7 +105,8 @@ Além de código, entram Terraform (`.tf`, `.tfvars`, `.hcl`; o `terraform.tfsta
 - o texto embedado leva um cabeçalho de contexto, com caminho, linguagem, a classe ou seção que envolve o
   trecho e o que ele declara. Exemplo: `# org__repo/src/HmacServiceImpl.java (java)` seguido de
   `# em: HmacServiceImpl · declara: sign`. A extração usa expressões regulares por linguagem e cobre
-  Java/Kotlin/C#, TS/JS, Python, Go, Rust, Ruby, PHP, SQL, Terraform, `.sdl`, Kubernetes YAML e Markdown.
+  Java/Kotlin/C#, TS/JS, Python, Go, Rust, Ruby, PHP, SQL, Terraform, Kubernetes YAML, Markdown e os formatos
+  dos perfis de organização (ex.: `.sdl`/`.pdl` com o perfil `senior`).
 
 **Segredos são mascarados antes do embedding.** O texto que vai para a Voyage e para o Postgres já
 sai com `***` no lugar de:
@@ -173,7 +175,7 @@ rerank, MRR de 0,74 para 0,80). Os 40
 melhores (`RERANK_CANDIDATES`) vão para o reranker (`RERANK_MODEL=voyage/rerank-2.5`), que devolve os top-k.
 Se o rerank falhar, a resposta usa a ordem da fusão.
 
-O reranker é genérico e tende a preferir prosa (wiki, descrições do `.sdl`) ao código que implementa a
+O reranker é genérico e tende a preferir prosa (wiki, descrições dos contratos de API) ao código que implementa a
 função. Por isso a consulta vai a ele com uma instrução pedindo código (`RERANK_INSTRUCTION=true`, padrão;
 desligada quando a busca é `kind=doc`). Medido com `code-index eval --rerank-variants`: MRR de 0,76 para 0,88
 e hit@3 de 0,81 para 1,00. Mandar o cabeçalho de contexto (`RERANK_HEADER`) ou reordenar só o código
@@ -227,21 +229,21 @@ acessível para verificar ambas; uma wiki sem páginas acessíveis precisa de um
 #       cadastrar pela interface/API, e com ele o token não vai para nenhum outro host)
 uv run code-index docs add wiki --url https://wiki.exemplo.com --locale pt-br \
   --include 'Plataforma/**' --exclude 'Rascunhos/**' \
-  --link 'Plataforma/Email/**=snr-email-backend,snr-email-frontend'
+  --link 'Vendas/Pedidos/**=pedidos-backend,pedidos-frontend'
 uv run code-index docs list
 uv run code-index docs preview docs__wiki        # páginas que entrariam, por raiz (sem baixar conteúdo)
 uv run code-index sync --dry-run                 # mostra o que entraria (custo zero)
 uv run code-index index docs__wiki               # baixa as páginas e indexa
-uv run code-index docs links snr-email-backend   # páginas ligadas ao repo, e por quê
+uv run code-index docs links pedidos-backend     # páginas ligadas ao repo, e por quê
 uv run code-index docs remove wiki
 ```
 
 Vínculos gravados à mão (sem reindexar) e páginas fora da busca:
 
 ```bash
-uv run code-index docs link wiki Plataforma/Email snr-email-backend --reason "descreve o serviço"
-uv run code-index docs unlink wiki Plataforma/Email snr-email-backend
-uv run code-index docs vinculos [--source wiki] [--repo snr-email-backend]   # vínculos gravados
+uv run code-index docs link wiki Vendas/Pedidos pedidos-backend --reason "descreve o serviço"
+uv run code-index docs unlink wiki Vendas/Pedidos pedidos-backend
+uv run code-index docs vinculos [--source wiki] [--repo pedidos-backend]   # vínculos gravados
 uv run code-index docs ignore wiki Rascunhos/Velho --reason "obsoleta"      # some dos resultados
 uv run code-index docs unignore wiki Rascunhos/Velho
 ```
@@ -272,7 +274,8 @@ Valem para qualquer stack:
 | `url` | link `github.com/<org>/<repo>` na página |
 | `mention` | termo do texto igual a um apelido **forte** do repo |
 
-Apelidos de um repo saem do nome (`org__repo`, `org/repo`, `repo` e `repo` sem prefixo curto como `snr-`) e
+Apelidos de um repo saem do nome (`org__repo`, `org/repo`, `repo` e, com um perfil de organização que define
+prefixo curto, `repo` sem ele: `ms-pedidos` → `pedidos`) e
 dos manifestos: `package.json`, `pom.xml`, `pyproject.toml`, `setup.cfg`, `go.mod`, `Cargo.toml`,
 `settings.gradle(.kts)` e `catalog-info.yaml` (Backstage). Um apelido é **forte** quando é específico:
 8+ caracteres com `-`, `_`, `.`, `/` ou `@` (ex.: `email-backend`), ou 14+ caracteres. Nomes genéricos
@@ -290,18 +293,20 @@ A listagem e a prévia não geram embeddings. Pela CLI:
 
 ```bash
 uv run code-index api domains
-uv run code-index api services --domain platform
-uv run code-index api index --domain platform --service scheduler --dry-run
-uv run code-index api index --domain platform --service scheduler
-uv run code-index api index --domain platform --dry-run
-uv run code-index api index --domain platform
+uv run code-index api services --domain vendas
+uv run code-index api index --domain vendas --service pedidos --dry-run
+uv run code-index api index --domain vendas --service pedidos
+uv run code-index api index --domain vendas --dry-run
+uv run code-index api index --domain vendas
 ```
 
 Repita `--service` para selecionar vários serviços. Sem `--service`, seleciona o domínio inteiro,
 incluindo serviços adicionados no futuro, quando a fonte for sincronizada novamente. A seleção é
 persistida como fonte `docs__openapi-<domínio>`; seleções individuais são cumulativas. Uma execução
 com serviços específicos atualiza somente esses serviços e preserva os demais já indexados.
-Para atualizar a seleção persistida inteira use `code-index index docs__openapi-platform`.
+Para atualizar a seleção persistida inteira use `code-index index docs__openapi-vendas`.
+O bucket é `OPENAPI_BUCKET_URL` (vazio: o padrão do perfil de organização ativo; o `senior` traz o catálogo
+público da plataforma), com objetos `<domínio>_<serviço>.swagger.(yaml|yml|json)` na raiz.
 O download e a conversão são incrementais por ETag; cada operação vira um documento pesquisável.
 As operações preservam todos os campos e as referências locais alcançáveis são incluídas, com detecção
 de ciclos. Referências externas só são buscadas via HTTPS dentro do mesmo bucket configurado, sem
@@ -310,25 +315,30 @@ referências externas são verificadas novamente a cada sync. A indexação gera
 
 A descrição completa do serviço fica em uma página de visão geral; cada operação recebe somente a
 primeira linha. Operações e visão geral são ligadas por nome ao repo do serviço quando existe um único
-repo compatível (ignorando o prefixo `snr-`, separadores e o sufixo `-service` ou `-backend`).
-Quando há ambiguidade, nenhuma ligação automática é feita; vínculos manuais continuam disponíveis.
-Repos com arquivo `.sdl` (plataforma Senior) também são ligados pela declaração `domain`/`service`
-(origem **SDL**), mesmo com nome diferente do serviço. Isso vem dos fatos do `code-index enrich facts`.
+repo compatível (ignorando separadores e, com um perfil de organização, o prefixo dos repos e os sufixos de serviço;
+no `senior`: `snr-` e `-service`/`-backend`). Quando há ambiguidade, nenhuma ligação automática é feita;
+vínculos manuais continuam disponíveis. Uma página vira operação (`op:<domínio>/<serviço>/<operação>`) quando
+a rota segue as rotas de contrato do perfil (no `senior`: `/<serviço>/{queries,actions,signals}/<operação>`);
+sem perfil, a página fica só com método e caminho. Com o perfil `senior`, repos com arquivo `.sdl` também são
+ligados pela declaração `domain`/`service` (origem **SDL**), mesmo com nome diferente do serviço. Isso vem dos
+fatos do `code-index enrich facts`.
 
-**Onde cada operação é implementada.** Pela convenção do SDK, a operação `listBlacklistedEmails` do `.sdl`
-é tratada pela classe `ListBlacklistedEmailsHandler` (`login__9` → `LoginV9Handler`). O `enrich facts`
-casa operação e classe sem LLM (cerca de 80% das operações) e grava o resultado. Nos resultados de busca
-de uma página de API aparece `implemented_in` (repo/arquivo:linha); na interface, "implementado em".
+**Onde cada operação é implementada.** Vem da convenção de nomes de um perfil de organização. Com o perfil
+`senior` (convenção do SDK), a operação `listBlacklistedEmails` do `.sdl` é tratada pela classe
+`ListBlacklistedEmailsHandler` (`login__9` → `LoginV9Handler`). O `enrich facts` casa operação e classe
+sem LLM e grava o resultado. Nos resultados de busca de uma página de API aparece `implemented_in`
+(repo/arquivo:linha); na interface, "implementado em". Sem perfil com convenção, a tool MCP não é registrada e a
+rota responde vazio.
 
 ```bash
-uv run code-index api impl email.listBlacklistedEmails     # ou só a operação, ou 'POST /email/queries/...'
+uv run code-index api impl pedidos.listarPedidos     # ou só a operação, ou 'POST /pedidos/queries/...'
 ```
 
 API: `GET /api/v1/api-impls?operation=...`. MCP: `find_api_impl`.
 
 No **Raio X**, escolher um repositório abre a **ficha do repo**: tudo o que o índice sabe sobre ele numa
 página só. São sete seções: o que é (cartão, capacidades, dono, assuntos), por onde começar (entrypoints do
-cartão), APIs (operações do `.sdl` com o handler localizado), arquivos (a árvore indexada com o resumo de cada
+cartão), APIs (operações dos contratos lidos pelos perfis, com a implementação localizada), arquivos (a árvore indexada com o resumo de cada
 arquivo de código, filtro por caminho, resumo ou palavra-chave), documentação ligada, repos relacionados e o
 estado do enriquecimento (cartão, cobertura dos resumos, índice), com o comando para completar o que falta.
 A árvore vem de `GET /api/v1/repos/{nome}/files`.
@@ -345,7 +355,7 @@ barato (Claude Code com Haiku, opencode, kiro-cli...). O `code-index` não chama
 entrega uma tarefa por vez e valida o que volta. Detalhes e próximos passos em `ENRIQUECIMENTO.md`.
 
 ```bash
-uv run code-index enrich facts            # fatos sem LLM: catalog-info, manifestos, .sdl, pastas (custo zero)
+uv run code-index enrich facts            # fatos sem LLM: catalog-info, manifestos, contratos, pastas (custo zero)
 uv run code-index enrich next             # reserva um repo e imprime instruções + dados para o agent
 uv run code-index enrich submit <id> -f cartao.json   # valida e grava (erros legíveis se recusar)
 uv run code-index enrich status           # progresso e reservas ativas
@@ -358,7 +368,7 @@ tarefas (no máximo 20)."* Vários agents em paralelo não pegam o mesmo repo (r
 `ENRICH_LEASE_MINUTES`, padrão 20). Libere para o agent só `uv run code-index enrich|show|symbol|grep`:
 o conteúdo dos repos não é confiável. O cartão volta para a fila quando o material do repo muda.
 
-Onde o cartão aparece (sem custo de API: full-text do Postgres sobre os cartões e os fatos do SDL):
+Onde o cartão aparece (sem custo de API: full-text do Postgres sobre os cartões e os contratos de API dos fatos):
 
 ```bash
 uv run code-index repo find "quem cuida da blocklist de e-mail"   # qual repo trata do assunto
@@ -781,12 +791,15 @@ contas convidadas (guest) são recusadas.
 src/code_index/
   settings.py        Settings (pydantic-settings: env/.env) + bootstrap() de runtime
   domain/            puro, sem I/O: models, file_patterns, policies, auth, search_text, doc_links,
-                     relations (chaves, tipos, origens), documents (tipos), repo_card, api_impl, doc_task
+                     relations (chaves, tipos, origens), documents (tipos), repo_card, contracts, file_types,
+                     naming, ownership, api_impl, doc_task
   infra/             mundo externo: db (pool + migrations sql/NNN_*.sql), repo_store, chunk_store (busca),
                      relation_store (relações), document_store (catálogo de documentos), enrich_store,
                      symbol_store, auth_store, config_store (configuração das fontes), git, github, grep, llm
   sources/           base.py (contratos RepoSource, DocSourcePlugin, Linker), registry.py (plugins),
                      github_org, wikijs, openapi_s3
+  profiles/          perfis de organização: base.py (contrato OrgProfile), registry.py (embutidos + entry points),
+                     api.py (o que um perfil importa), default.py, senior/ (convenções da Senior)
   indexing/          content (máscara/skip), code_flow (app CocoIndex), orchestrator (sync em etapas),
                      linkers (núcleo + rebuild_relations), enrich (material do cartão)
   retrieval/         search (híbrida + rerank), files (leitura com máscara)
@@ -802,9 +815,9 @@ busca). Cada fonte de documentação é um plugin que também descreve o que mat
 
 | Relação | De → para | Origens |
 |---|---|---|
-| `documents` | `doc:<fonte>/<caminho>` → `repo:<nome>` | manual, agent, llm, regra, SDL, nome do serviço, tag, link, menção |
+| `documents` | `doc:<fonte>/<caminho>` → `repo:<nome>` | manual, agent, llm, regra, nome do serviço, tag, link, menção (e as dos perfis: SDL no `senior`) |
 | `describes` | página de API → `op:<domínio>/<serviço>/<operação>` | fonte |
-| `implemented_by` | operação → `code:<repo>/<caminho>:<linha>` | handler (`<op>Handler`) |
+| `implemented_by` | operação → `code:<repo>/<caminho>:<linha>` | a do perfil (no `senior`: handler, `<op>Handler`) |
 | `related_to` | `repo:` → `repo:` | cartão do repo |
 
 Linkers recalculam as relações derivadas no fim de cada sync (menos de 1 s, sem custo). A view
@@ -812,8 +825,8 @@ Linkers recalculam as relações derivadas no fim de cada sync (menos de 1 s, se
 páginas que saíram.
 
 ```bash
-uv run code-index relations show snr-email-backend               # tudo ligado ao repo
-uv run code-index relations show op:platform/email/sendEmail     # página da API, handler
+uv run code-index relations show pedidos-backend                  # tudo ligado ao repo
+uv run code-index relations show op:vendas/pedidos/listarPedidos  # página da API, implementação
 uv run code-index relations stats                                # por tipo e origem
 uv run code-index relations rebuild                              # recalcula (o sync já faz)
 ```
@@ -822,7 +835,7 @@ API: `GET /api/v1/relations?entity=...`, `GET /api/v1/relations/origins`, `POST 
 MCP: `related`.
 
 Regras:
-- **Direção das dependências:** `interfaces → services → indexing/retrieval/sources → infra → domain/settings`.
+- **Direção das dependências:** `interfaces → services → indexing/retrieval/sources/profiles → infra → domain/settings`.
   O `domain` não importa nada do projeto.
 - **Configuração:** sempre via `Settings` injetado. A única exceção é o lifespan do CocoIndex, que usa
   `get_settings()`.
@@ -831,34 +844,86 @@ Regras:
   migration nova em `infra/sql/` (`NNN_descricao.sql`, placeholder `{schema}`). `code_chunks`,
   `code_symbols`, `doc_pages`, `repo_aliases` e `doc_mentions` são do CocoIndex.
 - **Nova fonte de documentação:** um plugin `DocSourcePlugin` em `sources/`, registrado em
-  `sources/registry.py`. **Ligação nova:** um `Linker` (núcleo ou do plugin) e, se for uma origem nova, uma
-  entrada em `domain/relations.ORIGINS`.
+  `sources/registry.py`. **Ligação nova:** um `Linker` (núcleo, do plugin ou do perfil) e, se for uma origem
+  nova, uma entrada em `domain/relations.CORE_ORIGINS` (núcleo) ou no `origins()` do perfil.
+- **Convenção de uma empresa:** um perfil de organização (ver abaixo), nunca uma constante no núcleo.
 - Mudar `indexing/code_flow.py` faz o CocoIndex revarrer e re-chunkar, mas os embeddings ficam no cache
   pelo texto: só textos novos vão para a Voyage. Mantenha estáveis o nome do app, as ContextKeys, o
   subpath `("repo", nome)` e o schema da tabela.
+
+### Perfis de organização
+
+As convenções de uma empresa (como os repos se chamam, formatos próprios de contrato, de onde vem o dono no DDD,
+como uma operação vira classe, o bucket do OpenAPI) ficam fora do núcleo, em **perfis de organização**
+(`src/code_index/profiles/`). O núcleo funciona sem nenhum: o perfil `default` é vazio (comportamento genérico).
+
+```bash
+# .env (ou config.CODE_INDEX_PROFILES no chart): CSV, na ordem; "default" ou vazio = nenhum perfil
+CODE_INDEX_PROFILES=senior
+OPENAPI_BUCKET_URL=              # vazio: o padrão do perfil ativo
+```
+
+O padrão, por enquanto, é `senior` (as convenções da Senior Sistemas, em `profiles/senior/`), para o índice
+existente não mudar; quando esse perfil sair do repositório, o padrão vira `default`. Fixe o valor no `.env`.
+Com vários perfis, as listas se somam na ordem e, nos valores únicos, vale o primeiro perfil.
+
+O que cada gancho do contrato (`OrgProfile`, em `profiles/base.py`) muda:
+
+| Gancho | Efeito | Sem perfil |
+|---|---|---|
+| `naming` | prefixos dos repos, prefixo curto, tokens sem assunto, sufixos de papel e de serviço (nome-base do dono, apelidos, linker de serviço do OpenAPI) | nome inteiro |
+| `noise_exclude` | globs de ruído somados ao exclude padrão | só o exclude padrão |
+| `file_types` | formatos próprios: globs no include, linguagem, máscara de config e declarações no cabeçalho dos trechos | não indexados |
+| `fact_extractors` | seções dos fatos do cartão (ex.: contratos de API) e as linhas delas na tarefa | catalog-info, manifestos, pastas |
+| `ownership` + `origins` | catálogo do DDD e as inferências do dono, com as origens na ordem global | só `manual` e `usage` |
+| `impl_convention` | operação de contrato → classe que a implementa | `find_api_impl` não registrada; `/api/v1/api-impls` vazio |
+| `contract_routes` | rota HTTP → operação de contrato (páginas do OpenAPI) | página só com método e caminho |
+| `linkers` | relações próprias (no `senior`: `handler` e `openapi-sdl`) | nenhuma |
+| `settings_defaults` | padrões de configuração (`openapi_bucket_url`) | sem bucket padrão |
+| `guide_examples` | exemplos do guia do MCP e das tools | nomes genéricos |
+
+Sem o perfil `senior`, somem as origens `sdl`, `declared`, `sibling`, `api_calls` e `handler`: o recálculo das
+relações no fim do sync apaga as derivadas delas (as gravadas por pessoas ficam). Trocar o perfil muda o que entra
+nos trechos (formatos do perfil): o próximo sync reprocessa os arquivos afetados (texto já embedado não volta à
+Voyage). `GET /api/v1/repos/{nome}/card` lista os perfis ativos (`profiles`).
+
+**Perfil de fora do repositório.** Um pacote Python com uma subclasse de `BaseProfile` (importando só de
+`code_index.profiles.api`) e um entry point no grupo `code_index.profiles`; o nome do entry point é o nome em
+`CODE_INDEX_PROFILES` (e substitui um embutido de mesmo nome):
+
+```toml
+[project.entry-points."code_index.profiles"]
+acme = "code_index_acme:AcmeProfile"
+```
+
+Instale o pacote no mesmo ambiente (`uv pip install ...`; no Kubernetes, na imagem: `deploy/README.md`). Passo a
+passo e o que o registro valida: `AGENTS.md`, "Perfil novo". Testes do núcleo sem perfil:
+`uv run pytest -q -m "not integration" --profiles default`.
 
 ### Domínio e serviço (DDD)
 
 Cada repo (ou pasta de um monorepo) pode ter um dono: um domínio (`hcm`) ou serviço (`hcm/payroll`). Ele
 filtra a busca (`--domain`/`--service` na CLI, `domain`/`service` na API e no MCP) e aparece em cada
-resultado (`owners`). O catálogo vem dos `.sdl` (nome técnico e rótulo); não há lista oficial.
+resultado (`owners`). O catálogo (domínios e serviços com rótulo) vem das regras de dono dos perfis de organização
+ativos (no `senior`: os `.sdl`) e do que as pessoas criam; não há lista oficial.
 
-De onde vem o dono, do mais forte para o mais fraco (sem LLM e sem custo, recalculado em cada sync):
+De onde vem o dono, do mais forte para o mais fraco (sem LLM e sem custo, recalculado em cada sync). Entre
+`manual` e `usage` entram as origens dos perfis, na ordem que eles declaram; sem perfil, só as do núcleo:
 
 | Origem | Regra |
 |---|---|
 | `manual` | definido por uma pessoa (interface, API ou CLI); vence todas as outras |
-| `declared` | `.sdl` do próprio repo; monorepo com um serviço por pasta ganha dono por pasta |
-| `sibling` | mesmo nome-base de um repo com SDL (`x-frontend` herda de `x-backend`) |
-| `api_calls` | o código chama, na maioria, as rotas `dominio/servico/{queries,actions,...}` de um serviço |
+| `declared` | perfil `senior`: `.sdl` do próprio repo; monorepo com um serviço por pasta ganha dono por pasta |
+| `sibling` | perfil `senior`: mesmo nome-base de um repo com SDL (`x-frontend` herda de `x-backend`) |
+| `api_calls` | perfil `senior`: o código chama, na maioria, as rotas `dominio/servico/{queries,actions,...}` de um serviço |
 | `usage` | biblioteca usada só por repos de um domínio |
 
 ```bash
 uv run code-index owner catalog                       # domínios, serviços e cobertura
 uv run code-index owner list --sem-dono               # o que falta mapear
-uv run code-index owner set snr-erp-legado --to financeiro --criar --motivo "ERP antigo"
-uv run code-index owner set snr-erp --to hcm/payroll --path modulos/folha   # pasta de monorepo
-uv run code-index owner clear snr-erp-legado          # volta ao inferido
+uv run code-index owner set erp-legado --to financeiro --criar --motivo "ERP antigo"
+uv run code-index owner set erp --to hcm/payroll --path modulos/folha   # pasta de monorepo
+uv run code-index owner clear erp-legado              # volta ao inferido
 uv run code-index search "cálculo de férias" --domain hcm --service vacation
 ```
 

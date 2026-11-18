@@ -28,7 +28,7 @@ class OwnerClearIn(BaseModel):
 
 
 @router.get("/api/v1/ownership/catalog", tags=["dono"],
-            summary="Domínios e serviços (do SDL e criados à mão), repos por serviço e cobertura")
+            summary="Domínios e serviços (do catálogo dos perfis e criados à mão), repos por serviço e cobertura")
 async def ownership_catalog(request: Request, _: Principal = Depends(require(SEARCH_READ))) -> dict[str, Any]:
     return await get_service(request).ownership_catalog()
 

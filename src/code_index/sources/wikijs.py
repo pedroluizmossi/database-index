@@ -24,10 +24,12 @@ from typing import Any
 import httpx
 from markdownify import markdownify
 
+from ..domain.contracts import ContractRoutes
 from ..domain.doc_content import strip_embedded_blobs
 from ..domain.doc_links import parse_front_matter
 from ..domain.documents import WIKI_PAGE, DocumentMeta
 from ..domain.models import DocSource
+from ..domain.naming import NameRules
 from ..settings import Settings
 from .base import OWNER_MARKER, Linker  # noqa: F401  (OWNER_MARKER: compatibilidade de import)
 
@@ -424,7 +426,8 @@ class WikiJsPlugin:
             "truncated": len(selected) > cap,
         }
 
-    def documents(self, source: DocSource, dest: Path) -> list[DocumentMeta]:
+    def documents(self, source: DocSource, dest: Path, *,
+                  routes: ContractRoutes = ContractRoutes()) -> list[DocumentMeta]:
         out: list[DocumentMeta] = []
         for entry in _load_manifest(dest).values():
             rel = entry.get("file", "")
@@ -439,5 +442,5 @@ class WikiJsPlugin:
             ))
         return out
 
-    def linkers(self) -> list[Linker]:
+    def linkers(self, naming: NameRules) -> list[Linker]:
         return []  # menções, tags e regras valem para qualquer fonte de texto (linkers do núcleo)

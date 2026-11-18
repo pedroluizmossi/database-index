@@ -53,6 +53,7 @@ def _card(**extra: Any) -> str:
     })
 
 
+@pytest.mark.profile("senior")  # SDL/convenções do perfil senior ativos nos Settings
 async def test_fila_de_cartoes(int_settings: Settings, tmp_path: Path, fake_llm: Any) -> None:
     from code_index.services import open_service
 
@@ -106,7 +107,7 @@ async def test_fila_de_cartoes(int_settings: Settings, tmp_path: Path, fake_llm:
         assert await svc.enrich_release(t2["id"]) is True
         status = await svc.enrich_status()
         assert status["cards_ok"] == 1 and status["cards_missing"] == 1 and status["pending"] == 1
-        assert status["with_sdl"] == 1 and status["rejections"] == 1
+        assert status["with_contracts"] == status["with_sdl"] == 1 and status["rejections"] == 1
         assert status["tasks"] == {"done": 1, "released": 1}
 
         repos = {r.name: r for r in await svc.list_repos()}

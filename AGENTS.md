@@ -26,6 +26,7 @@ uv run code-index db migrate              # só aplica as migrations e sai (Job 
 uv run code-index --help                  # CLI: org, repo, sync|index, watch, worker, vectors, tests, graph, search, show, enrich, token, user, usage, serve, db, login|logout|whoami
 uv run pytest -q -m "not integration"     # testes unitários (~2s, sem rede e sem banco)
 uv run pytest -q tests/unit/test_X.py     # só o que você mexeu
+uv run pytest -q -m "not integration" --profiles default   # núcleo sem perfil de organização (CODE_INDEX_TEST_PROFILES)
 uv run pytest -q -m integration           # integração (Postgres; schema isolado; LLM falso)
 uv run mypy src
 uv run code-index eval -v                 # qualidade da busca (evals/queries.json); custa centavos (consultas)
@@ -38,9 +39,10 @@ O executável `code-index` só existe no ambiente do projeto: use `uv run`.
 | Pasta/arquivo | Responsabilidade |
 |---|---|
 | `settings.py` | `Settings` (env/.env). `get_settings()`, `use_settings()` (testes), `bootstrap()` (efeitos de runtime) |
-| `domain/` | **Puro, sem I/O**: `models`, `file_patterns` (o que indexar/excluir), `policies` (lote, nomes), `auth` (scopes), `search_text` (tokenização de código para busca, pesos da fusão), `doc_links` (apelidos de repos via manifestos, menções das páginas), `repo_card` (fatos: SDL/PDL/catalog-info; schema, validação e texto da tarefa do cartão), `api_impl` (operação SDL → `<op>Handler`), `doc_task` (tarefa páginas da wiki → repos), `file_summary` (tarefa de resumo de arquivos de código: texto, validação e termos para a busca), `test_cases` (o que é teste, extração dos casos por linguagem e ligação ao código testado; sem embedding), `code_graph` (grafo de chamadas: fatos de cada arquivo e a resolução quem chama quem por arquivo/pacote/import/tipo/herança; só `nome` é inferida), `search_vectors` (vetores extras da busca: texto e perguntas dos resumos e cartões; texto, hash e o plano do que está pendente/obsoleto), `relations` (chaves de entidade, tipos de relação, **registro único de origens**), `documents` (tipos de documento), `ownership` (dono no DDD: catálogo do SDL, inferência sem LLM, resolução por origem, escopo da busca), `preferences` (**registro único** das configs por pessoa: padrão, validação, resolução), `usage` (evento de uso, canal, limpeza de parâmetros, contagem/tamanho da resposta) |
+| `domain/` | **Puro, sem I/O**: `models`, `file_patterns` (o que indexar/excluir), `policies` (lote, nomes), `auth` (scopes), `search_text` (tokenização de código para busca, pesos da fusão), `doc_links` (apelidos de repos via manifestos, menções das páginas), `repo_card` (fatos: catalog-info, manifestos e as seções dos extratores dos perfis, `FactExtractor`; schema, validação e texto da tarefa do cartão), `contracts` (contrato genérico: operações domínio/serviço/grupo/nome; fatos na chave `sdl` por compatibilidade), `file_types` (tipos de arquivo dos perfis: globs, linguagem, máscara de config, declarações), `api_impl` (operação de contrato → classe que a implementa: `match_handlers` com os nomes da `ImplConvention` do perfil; leitura de referências), `doc_task` (tarefa páginas da wiki → repos), `file_summary` (tarefa de resumo de arquivos de código: texto, validação e termos para a busca), `test_cases` (o que é teste, extração dos casos por linguagem e ligação ao código testado; sem embedding), `code_graph` (grafo de chamadas: fatos de cada arquivo e a resolução quem chama quem por arquivo/pacote/import/tipo/herança; só `nome` é inferida), `search_vectors` (vetores extras da busca: texto e perguntas dos resumos e cartões; texto, hash e o plano do que está pendente/obsoleto), `relations` (chaves de entidade, tipos de relação, **registro único de origens**), `documents` (tipos de documento), `ownership` (dono no DDD: contrato `OwnershipRules` dos perfis, catálogo, `usage` e resolução por origem (manual > perfis > usage), escopo da busca), `preferences` (**registro único** das configs por pessoa: padrão, validação, resolução), `usage` (evento de uso, canal, limpeza de parâmetros, contagem/tamanho da resposta) |
 | `infra/` | Mundo externo: `db` (pool com keepalive, migrations, extensões, `try_advisory_lock`: trava de sessão entre processos e pods), `rate_limit_store` (`rate_limits` UNLOGGED: contagem do rate limit por janela fixa), `repo_store`, `chunk_store` (busca: motor bm25/fts/fts-legacy detectado no banco), `symbol_store`, `relation_store` (**único** ponto que lê/grava relações; view `effective_relations`), `document_store` (catálogo `documents`: tipo, atributos, páginas ignoradas), `job_store` (fila durável de sync: `lease_next`/`renew`/`release`/`expire_leases`), `enrich_store` (cartões e fila de tarefas `next`/`submit`), `summary_store` (resumos de arquivos e a aplicação deles em `search_symbols`/`search_terms`), `vector_store` (`search_vectors`: vetores dos resumos, perguntas e cartões; índice HNSW parcial por modelo), `test_store` (`test_cases`/`test_scans`: casos de teste e a leitura de cada repo), `graph_store` (`code_edges`/`code_graph_scans`: arestas de chamada e a leitura de cada repo; callers/callees), `auth_store`, `user_store` (pessoas: estado, `attrs` livres e as configs que elas mudaram), `usage_store` (eventos de uso e relatórios do dashboard), `oauth_store` (clientes, códigos e refresh tokens do OAuth do MCP), `config_store` (**fonte da verdade** de orgs, repos avulsos e fontes de docs: `config_entries`), `git`, `github`, `grep` (ripgrep), `oidc` (base) + `google_oidc`/`entra_oidc` (provedores de login; registro em `login`), `llm` (inclui `metered()`: tokens/custo da Voyage por chamada) |
 | `sources/` | Contratos em `base.py`: `RepoSource` (descoberta de repos: `github_org`), `DocSourcePlugin` (fonte de documentação: `fetch`, `documents`, `preview`, `linkers`) e `Linker`. Plugins: `wikijs`, `openapi_s3`; registro em `registry.py` |
+| `profiles/` | Perfis de organização (convenções de uma empresa fora do núcleo). Contrato em `base.py` (`OrgProfile`, `BaseProfile`, `ActiveProfiles`: regras de nome `domain/naming.NameRules`, ruído do exclude, padrões de configuração, tipos de arquivo `domain/file_types`, extratores de fatos, origens de relação, regras do dono no DDD, convenção operação → implementação `impl_convention`, `linkers` próprios e `guide_examples`: exemplos do guia e das tools do MCP), registro em `registry.py` (embutidos + entry points `code_index.profiles`; ativação por `CODE_INDEX_PROFILES`, padrão `senior`). Perfis: `default` (vazio) e `senior/` (pacote isolado: o núcleo só o carrega pelo registro; `sdl.py`: SDL/PDL; `ownership.py`: catálogo do SDL e as origens declared/sibling/api_calls; `api_impl.py`: `<op>Handler`; `linkers.py`: `handler` e `openapi-sdl`, origens sdl/handler; `api_impl.py`: também as rotas `/<svc>/{queries|actions|signals}/<op>` (`contract_routes`); `GUIDE_EXAMPLES`: os exemplos reais do guia). `api.py`: a superfície pública que um perfil importa (o `senior` só importa dali, por import absoluto). Sem perfil com `impl_convention`, a tool MCP `find_api_impl` não é registrada e `/api/v1/api-impls` responde vazio; sem `contract_routes`, as páginas do OpenAPI ficam sem operação |
 | `indexing/` | `content` (máscara de segredos/skip/binários), `context` (linhas inteiras + cabeçalho do embedding), `code_flow` (app CocoIndex), `orchestrator` (sync em etapas), `test_scan` (lê os testes de um clone, sem CocoIndex), `enrich` (coleta do material do cartão, sem LLM), `linkers` (linkers do núcleo + `rebuild_relations`), `call_scan` (tree-sitter nos clones: definições, imports, tipos e chamadas de Java, TS/TSX, JS, Python e Go) |
 | `retrieval/` | `search` (híbrida + rerank), `files` (leitura com máscara) |
 | `services/` | Casos de uso: **único** ponto usado pelas interfaces (`CodeIndexService`, `open_service`). Um módulo por área: `repos`, `apis` (OpenAPI), `wiki`, `docs`, `search`, `sync` (sync direto, fila de jobs e o laço do worker `run_sync_worker`), `enrich`, `auth`, `oauth` (OAuth do MCP), `users` (pessoas e preferências), `usage` (registro de uso, dashboard, desativar pessoa, limpeza), `vectors` (estado e geração sob pedido dos vetores de resumos e cartões), `tests` (casos de teste: leitura no sync, `find_tests`), `graph` (grafo de chamadas: leitura no sync, `call_graph`), `ownership` (domínio/serviço), `rate_limit` (rate limit no Postgres, fail-open com timeout), `db` (`migrate_database` do `db migrate`); `base` tem as dependências e utilitários comuns (inclui `_remove_local` e a trava das leituras dos clones) |
@@ -49,8 +51,11 @@ O executável `code-index` só existe no ambiente do projeto: use `uv run`.
 Fora de `src/`: `deploy/` (Kubernetes: chart Helm em `deploy/helm/code-index`, Cluster do CloudNativePG em
 `deploy/cnpg`, passo a passo em `deploy/README.md`).
 
-Testes: `tests/unit/` (rápidos) e `tests/integration/` (marcados `integration`). Nome de arquivo de teste é único
-entre as duas pastas (sem `__init__.py`, nomes repetidos quebram a coleta).
+Testes: `tests/unit/` (rápidos), `tests/integration/` (marcados `integration`) e `tests/profiles/<perfil>/` (o
+comportamento de um perfil; sai junto com o pacote dele e é ignorada sem o perfil instalado). Nome de arquivo de
+teste é único entre todas as pastas (sem `__init__.py`, nomes repetidos quebram a coleta). Os testes do núcleo usam
+perfis sintéticos (`acme`/`beta`) ou o `default`; teste que depende do perfil ativo nos Settings leva
+`@pytest.mark.profile("senior")` (pulado com `--profiles default`).
 
 Interface web (`frontend/`, React + Tailwind): siga o `DESIGN.md` (paleta quente, tokens, tipografia e movimento).
 Nada de `zinc`/`gray`/branco puro em superfície; o que o produto é está em `PRODUCT.md`.
@@ -62,7 +67,17 @@ fontes de docs: adicionar, filtros, remover) fica em `pages/SourcesPage.tsx` (ab
 
 ## Regras de arquitetura
 
-- Dependências só nesta direção: `interfaces → services → indexing/retrieval/sources → infra → domain/settings`.
+- Dependências só nesta direção: `interfaces → services → indexing/retrieval/sources/profiles → infra → domain/settings`.
+- **Convenção de uma empresa = perfil de organização** (`profiles/`), nunca constante no núcleo: o domain recebe os
+  valores por parâmetro (padrão genérico) e o perfil ativo chega injetado (`open_service` → `Indexer`/serviço,
+  `self.profiles`). A borda de cada processo carrega os perfis uma vez (`services.base.prepare_profiles` no `main` da CLI e
+  no `create_app`) e passa o mesmo objeto ao `open_service(profiles=...)` e ao `build_mcp`; `ownership.resolve`/`coverage`
+  recebem a ordem das origens explícita (`ActiveProfiles.owner_origins`). Ninguém importa `profiles.senior`: só o registro. O `code_flow` lê o perfil de `get_settings()`
+  (mesma exceção do lifespan). Os dados do perfil não são `LogicDep`: mudou um tipo de arquivo (linguagem, regra
+  de declarações) suba a `version` do `process_file`; mudou um extrator de fatos, suba `FACTS_VERSION`.
+  Ativação: `CODE_INDEX_PROFILES` (CSV, na ordem; `default` ou vazio = nenhum; padrão `senior` por enquanto). Dados
+  reais de uma empresa (nomes de repos, bucket, exemplos do guia) ficam só no pacote do perfil, nunca no núcleo nem
+  nos testes do núcleo. Ver "Perfil novo" abaixo.
   O `domain` não importa nada do projeto.
 - Regra de negócio fica em `services/` (ou abaixo dele), nunca em `cli/`/`http/`. CLI e API devem
   se comportar igual.
@@ -81,8 +96,11 @@ fontes de docs: adicionar, filtros, remover) fica em `pages/SourcesPage.tsx` (ab
   (`add`/`put`/`delete`), nunca "regrave tudo". Não existe arquivo de configuração.
 - **Vínculos são relações** (tabela `relations`, chaves `repo:`/`doc:`/`op:`/`code:`). Ligação nova = um
   `Linker` (núcleo em `indexing/linkers.py`, ou da fonte no plugin) que devolve `Relation`s; ele é dono das
-  suas origens e é recalculado no fim de cada sync (`rebuild_relations`, sem custo). Origem nova entra em
-  `domain/relations.ORIGINS` (rótulo, se é contestável): a API e a UI leem de lá.
+  suas origens e é recalculado no fim de cada sync (`rebuild_relations`, sem custo). Origem nova do núcleo entra em
+  `domain/relations.CORE_ORIGINS`; a de um perfil vem do gancho `origins()` (registrada na carga, antes de uma origem
+  conhecida): a API e a UI leem a ordem de `origins_payload()`. O recálculo completo apaga toda origem derivada fora
+  do núcleo que nenhum linker ativo produziu (perfil desligado, origem desconhecida); linha antiga com origem
+  desconhecida continua legível (fica no fim da ordem).
 - **Config por pessoa = uma entrada em `domain/preferences.PREFS`** (sem migration; o banco guarda só o que a
   pessoa mudou). Preferência nunca concede acesso, e só sessão de navegador grava (`PATCH /api/v1/me/settings`).
 - **Usuário é a entidade central** (`users`): tokens apontam para ela (`api_tokens.user_id`) e o uso também
@@ -117,6 +135,36 @@ fontes de docs: adicionar, filtros, remover) fica em `pages/SourcesPage.tsx` (ab
   `eval`, `token create`, `user disable/enable/settings/set/unset`; `serve`, `worker` e `db migrate` sempre usam o banco.
 - Leitura de vínculo só pela view `effective_relations` (via `RelationStore`): ela aplica status, remoções
   aprovadas e repos/páginas que saíram.
+
+### Perfil novo
+
+1. Subclasse de `BaseProfile` (`from code_index.profiles.api import ...`: só dali, com import absoluto), com `name`
+   (o nome em `CODE_INDEX_PROFILES`) e `label`; sobrescreva só os ganchos que precisa: `naming`, `noise_exclude`,
+   `settings_defaults`, `file_types`, `fact_extractors`, `origins`, `ownership`, `impl_convention`,
+   `contract_routes`, `linkers`, `guide_examples` (o que cada um faz: `profiles/base.py`).
+2. O registro valida na carga (`profiles/registry._instantiate`): `name` igual ao do registro; padrões de
+   configuração só dos campos de `PROFILE_SETTINGS`; extratores de fatos sem as seções reservadas ao núcleo
+   (`CORE_FACT_KEYS`) e regras de dono sem as chaves do material do núcleo (`CORE_MATERIAL_KEYS`); toda origem
+   que as regras de dono e os linkers produzem declarada em `origins()` (`OriginPlacement`: antes de uma origem já
+   registrada, nunca `stored`, nunca com nome de outra); linkers com nome único (entre os do perfil, dos outros
+   perfis, do núcleo e das fontes). Erro de contrato = falha na carga, não no sync.
+3. Embutido: uma entrada em `_BUILTIN` de `profiles/registry.py` (`"nome": "modulo:Classe"`). De fora: pacote
+   instalado com entry point (o objeto pode ser a classe, uma fábrica sem argumentos ou a instância):
+
+   ```toml
+   [project.entry-points."code_index.profiles"]
+   senior = "code_index_senior:SeniorProfile"
+   ```
+
+   Entry point com o nome de um embutido o substitui (o embutido nem é importado).
+4. Testes do perfil em `tests/profiles/<nome>/` (ou no pacote dele), com dados sintéticos sempre que der.
+5. Mudou um tipo de arquivo ou a regra de declarações: suba a `version` do `process_file`; mudou um extrator de
+   fatos: suba `FACTS_VERSION`. Confira o efeito com `sync --dry-run` (sem custo).
+
+Saída do `senior` do repositório: mover `profiles/senior/` e `tests/profiles/senior/` para um pacote com o entry
+point acima, tirar a entrada `"senior"` de `_BUILTIN`, trocar o padrão de `Settings.profiles` para `["default"]`
+e definir `CODE_INDEX_PROFILES=senior` no `.env`/`values` do deploy da empresa (imagem com o pacote instalado:
+`deploy/README.md`).
 
 ## Custo (Voyage): não gaste tokens sem pedir
 

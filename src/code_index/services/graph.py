@@ -14,7 +14,7 @@ from typing import Any
 
 from ..domain.code_graph import EXTRACTOR_VERSION, INFERRED_VIAS
 from ..indexing.call_scan import scan_calls
-from ..indexing.orchestrator import configured_repos, repo_for_row
+from ..indexing.orchestrator import configured_repos
 from ..infra.graph_store import GraphStore
 from .base import ServiceBase
 
@@ -56,7 +56,7 @@ class GraphMixin(ServiceBase):
         for row in sorted(rows.values(), key=lambda r: r.name):
             if row.kind != "code" or row.ignored or not row.indexed:
                 continue
-            repo = repo_for_row(row, orgs, manual)
+            repo = self._repo_for_row(row, orgs, manual)
             root = repo.local_path(self.settings.repos_dir)
             if not root.is_dir():
                 continue

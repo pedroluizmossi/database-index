@@ -1,7 +1,7 @@
 """Vínculos entre documentação e repos (puro, determinístico, sem I/O).
 
 Lado do repo — apelidos (aliases), de fontes que existem em qualquer stack:
-  nome do repo (org__repo, repo, repo sem prefixo curto), package.json, pom.xml, pyproject.toml,
+  nome do repo (org__repo, repo, repo sem prefixo curto quando o perfil define um), package.json, pom.xml, pyproject.toml,
   setup.cfg, go.mod, Cargo.toml, settings.gradle e catalog-info.yaml (Backstage).
 Lado da página — menções:
   regra explícita da fonte (`links`: caminho → repos), tags da página, links para o GitHub e termos do texto.
@@ -20,6 +20,8 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 import yaml
+
+from .naming import NameRules
 
 MANIFESTS = {
     "package.json", "pom.xml", "pyproject.toml", "setup.cfg", "go.mod", "Cargo.toml",
@@ -41,14 +43,15 @@ def alias_is_strong(alias: str) -> bool:
     return (len(a) >= 8 and bool(re.search(r"[-_./@]", a))) or len(a) >= 14
 
 
-def repo_name_aliases(repo: str) -> list[tuple[str, str]]:
-    """org__snr-email-backend -> org__snr-email-backend, org/snr-email-backend, snr-email-backend, email-backend."""
+def repo_name_aliases(repo: str, naming: NameRules = NameRules()) -> list[tuple[str, str]]:
+    """org__ms-email-backend -> org__ms-email-backend, org/ms-email-backend, ms-email-backend e, se o perfil trata
+    prefixos curtos (`NameRules.alias_prefix_max` >= 2), email-backend."""
     out = [(repo.lower(), "name")]
     org, sep, short = repo.partition("__")
     if sep:
         out += [(f"{org}/{short}".lower(), "name"), (short.lower(), "name")]
         parts = short.split("-", 1)
-        if len(parts) == 2 and len(parts[0]) <= 4 and parts[1]:  # prefixo curto: snr-, ms-, lib-...
+        if naming.alias_prefix_max and len(parts) == 2 and len(parts[0]) <= naming.alias_prefix_max and parts[1]:
             out.append((parts[1].lower(), "name"))
     return list(dict.fromkeys(out))
 

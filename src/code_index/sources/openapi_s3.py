@@ -8,6 +8,7 @@ import logging
 import posixpath
 import re
 import xml.etree.ElementTree as ET
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 from pathlib import Path
@@ -17,9 +18,11 @@ import asyncpg
 import httpx
 import yaml
 
+from ..domain.contracts import ContractRoutes
 from ..domain.doc_links import parse_front_matter
 from ..domain.documents import API_OPERATION, API_OVERVIEW, API_TYPES, DocumentMeta
 from ..domain.models import DocSource
+from ..domain.naming import NameRules
 from ..domain.relations import DESCRIBES, DOCUMENTS, Relation, op_key, repo_key
 from ..settings import Settings
 from .base import Linker
@@ -100,14 +103,14 @@ class SwaggerObject:
     etag: str
     modified: str
     size: int
-    bucket_url: str = "https://s3.amazonaws.com/br-com-senior-ecossistema-api"
+    bucket_url: str = ""  # catálogo de onde veio (OPENAPI_BUCKET_URL ou o padrão do perfil)
 
     @property
     def url(self) -> str:
         return f"{self.bucket_url.rstrip('/')}/{quote(self.key, safe='')}"
 
 
-async def list_objects(client: httpx.AsyncClient, bucket_url: str = "https://s3.amazonaws.com/br-com-senior-ecossistema-api") -> list[SwaggerObject]:
+async def list_objects(client: httpx.AsyncClient, bucket_url: str) -> list[SwaggerObject]:
     """Lista todas as páginas do bucket, sem baixar ou indexar os arquivos."""
     items: list[SwaggerObject] = []
     token: str | None = None
@@ -381,23 +384,26 @@ async def sync_source(source: DocSource, dest: Path, settings: Settings, only: f
 
 # ------------------------------------------------------------------ plugin
 
-_OP_PATH = re.compile(r"^/([^/\s]+)/(queries|actions|signals)/([A-Za-z_]\w*)$")
-_OP_KIND = {"queries": "query", "actions": "action", "signals": "signal"}
 _MANIFEST_NAME = ".openapi-manifest.json"
 
 
-def _operation_attrs(title: str, service: str) -> dict[str, str]:
-    """'POST /email/queries/listBlacklistedEmails' (título que esta fonte grava) → método, caminho e operação."""
+def _operation_attrs(title: str, service: str, routes: ContractRoutes = ContractRoutes()) -> dict[str, str]:
+    """'POST /pedidos/queries/listarPedidos' (título que esta fonte grava) → método, caminho e, se a rota segue a
+    convenção de contrato dos perfis ativos (`routes`), o grupo (`kind`) e a operação."""
     method, _, http_path = title.strip().partition(" ")
     attrs = {"method": method.upper(), "http_path": http_path.strip()}
-    m = _OP_PATH.match(attrs["http_path"])
-    if m and m.group(1).lower() == service.lower():
-        attrs.update(kind=_OP_KIND[m.group(2)], operation=m.group(3))
+    found = routes.operation(attrs["http_path"], service)
+    if found:
+        attrs.update(kind=found[0], operation=found[1])
     return attrs
 
 
 class OpenApiPlugin:
-    """Swagger 2.0 publicado num bucket S3: uma página por operação + visão geral por serviço."""
+    """Swagger 2.0 publicado num bucket S3: uma página por operação + visão geral por serviço.
+
+    Formato do bucket (deste plugin): objetos `<domínio>_<serviço>.swagger.(yaml|yml|json)` na raiz. O que é
+    convenção da organização vem dos perfis: o bucket padrão (`openapi_bucket_url`), as rotas das operações de
+    contrato (`ContractRoutes`, em `documents`) e o prefixo/sufixos dos repos (`NameRules`, em `linkers`)."""
 
     type = "openapi_s3"
     label = "OpenAPI (S3)"
@@ -418,7 +424,8 @@ class OpenApiPlugin:
                            "updated_at": x.modified} for x in selected[:cap]],
                 "truncated": len(selected) > cap}
 
-    def documents(self, source: DocSource, dest: Path) -> list[DocumentMeta]:
+    def documents(self, source: DocSource, dest: Path, *,
+                  routes: ContractRoutes = ContractRoutes()) -> list[DocumentMeta]:
         try:
             manifest = json.loads((dest / _MANIFEST_NAME).read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -439,7 +446,7 @@ class OpenApiPlugin:
                 overview = rel.endswith("/__overview.md")
                 attrs: dict[str, object] = {"domain": domain, "service": service}
                 if not overview:
-                    attrs.update(_operation_attrs(title, service))
+                    attrs.update(_operation_attrs(title, service, routes))
                 out.append(DocumentMeta(
                     path=rel, type=API_OVERVIEW if overview else API_OPERATION, title=title,
                     url=str(meta.get("url") or ""), tags=tuple(str(t) for t in meta.get("tags") or []),
@@ -447,8 +454,9 @@ class OpenApiPlugin:
                 ))
         return out
 
-    def linkers(self) -> list[Linker]:
-        return [DescribesLinker(), ServiceNameLinker(), SdlLinker()]
+    def linkers(self, naming: NameRules) -> list[Linker]:
+        # SDL → repo depende do contrato da organização: é linker do perfil (`openapi-sdl` do `senior`).
+        return [DescribesLinker(), ServiceNameLinker(naming.repo_prefixes, naming.service_suffixes)]
 
 
 class DescribesLinker:
@@ -469,31 +477,59 @@ class DescribesLinker:
                          evidence={"kind": r["kind"]}) for r in rows]
 
 
+def _pg_prefix_regex(prefixes: Sequence[str]) -> str | None:
+    """Regex (Postgres ARE) que casa um dos prefixos literais no início do nome; None sem prefixos."""
+    if not prefixes:
+        return None
+    return "^(" + "|".join(re.sub(r"([.^$*+?()\[\]{}|\\])", r"\\\1", p) for p in prefixes) + ")"
+
+
+def _pg_suffix_regex(suffixes: Sequence[str]) -> str | None:
+    """Regex (Postgres ARE) que casa um dos sufixos literais no fim do nome; None sem sufixos."""
+    if not suffixes:
+        return None
+    return "(" + "|".join(re.sub(r"([.^$*+?()\[\]{}|\\])", r"\\\1", s) for s in suffixes) + ")$"
+
+
 class ServiceNameLinker:
-    """Páginas de um serviço de API → o único repo de código com o mesmo nome (sem `snr-`, separadores e
-    sufixo -service/-backend). Ambíguo (2+ repos) → nenhum vínculo."""
+    """Páginas de um serviço de API → o único repo de código com o mesmo nome (sem o prefixo dos repos da
+    organização, `NameRules.repo_prefixes` do perfil, e sem separadores). Com sufixos de serviço no perfil
+    (`NameRules.service_suffixes`, ex.: service/backend), o nome sem o sufixo também casa (com prioridade menor que
+    o nome exato). Ambíguo (2+ repos) → nenhum vínculo."""
 
     name = "openapi-service-name"
     origins = frozenset({"service"})
 
+    def __init__(self, repo_prefixes: Sequence[str] = (), service_suffixes: Sequence[str] = ()) -> None:
+        self._prefix_regex = _pg_prefix_regex([p.lower() for p in repo_prefixes])
+        self._suffix_regex = _pg_suffix_regex([s.lower() for s in service_suffixes])
+
     async def run(self, conn: asyncpg.Connection, settings: Settings) -> list[Relation]:
         s = f'"{settings.pg_schema}"'
+        short_name = "lower(regexp_replace(r.name, '^.*__', ''))"
+        args: list[Any] = [sorted(API_TYPES)]
+        if self._prefix_regex is not None:
+            args.append(self._prefix_regex)
+            short_name = f"regexp_replace({short_name}, ${len(args)}, '')"
+        match = "repo_name = service_name"
+        if self._suffix_regex is not None:
+            args.append(self._suffix_regex)
+            sfx = f"${len(args)}::text"
+            match = (f"(repo_name = service_name OR ("
+                     f"length(regexp_replace(service_name, {sfx}, '')) >= 4 AND "
+                     f"regexp_replace(repo_name, {sfx}, '') = regexp_replace(service_name, {sfx}, '')))")
         rows = await conn.fetch(
             f"""WITH services AS (
                   SELECT DISTINCT attrs->>'service' AS service FROM {s}.documents
                   WHERE present AND type = ANY($1::text[])
                 ), names AS (
                   SELECT services.service, r.name,
-                         regexp_replace(regexp_replace(lower(regexp_replace(r.name, '^.*__', '')), '^snr-', ''),
-                                        '[^a-z0-9]', '', 'g') AS repo_name,
+                         regexp_replace({short_name}, '[^a-z0-9]', '', 'g') AS repo_name,
                          regexp_replace(lower(services.service), '[^a-z0-9]', '', 'g') AS service_name
                   FROM services CROSS JOIN {s}.repos r WHERE r.kind = 'code' AND NOT r.ignored
                 ), candidates AS (
                   SELECT service, name, CASE WHEN repo_name = service_name THEN 0 ELSE 1 END AS rank FROM names
-                  WHERE length(service_name) >= 4 AND (repo_name = service_name OR (
-                      length(regexp_replace(service_name, '(service|backend)$', '')) >= 4 AND
-                      regexp_replace(repo_name, '(service|backend)$', '') =
-                      regexp_replace(service_name, '(service|backend)$', '')))
+                  WHERE length(service_name) >= 4 AND {match}
                 ), best AS (
                   SELECT service, min(name) AS repo FROM (
                     SELECT service, name, rank, min(rank) OVER (PARTITION BY service) AS best_rank FROM candidates
@@ -502,29 +538,7 @@ class ServiceNameLinker:
                 SELECT d.key, best.repo, best.service FROM {s}.documents d
                 JOIN best ON best.service = d.attrs->>'service'
                 WHERE d.present AND d.type = ANY($1::text[])""",
-            sorted(API_TYPES),
+            *args,
         )
         return [Relation(r["key"], repo_key(r["repo"]), DOCUMENTS, "service", evidence={"service": r["service"]})
-                for r in rows]
-
-
-class SdlLinker:
-    """Páginas de um serviço de API → repos cujo `.sdl` declara o mesmo domain/service."""
-
-    name = "openapi-sdl"
-    origins = frozenset({"sdl"})
-
-    async def run(self, conn: asyncpg.Connection, settings: Settings) -> list[Relation]:
-        s = f'"{settings.pg_schema}"'
-        rows = await conn.fetch(
-            f"""SELECT DISTINCT d.key, c.repo, sdl->>'path' AS sdl_path
-                FROM {s}.repo_cards c
-                CROSS JOIN LATERAL jsonb_array_elements(c.material->'facts'->'sdl') sdl
-                JOIN {s}.documents d ON d.present AND d.type = ANY($1::text[])
-                     AND lower(d.attrs->>'domain') = lower(sdl->>'domain')
-                     AND lower(d.attrs->>'service') = lower(sdl->>'service')
-                JOIN {s}.repos r ON r.name = c.repo AND r.kind = 'code' AND NOT r.ignored""",
-            sorted(API_TYPES),
-        )
-        return [Relation(r["key"], repo_key(r["repo"]), DOCUMENTS, "sdl", evidence={"sdl": r["sdl_path"]})
                 for r in rows]

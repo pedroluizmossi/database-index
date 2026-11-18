@@ -14,7 +14,7 @@ from typing import Any
 
 from ..domain.models import Hit, SymbolHit
 from ..indexing.content import file_language
-from ..indexing.orchestrator import configured_repos, repo_for_row
+from ..indexing.orchestrator import configured_repos
 from ..infra.grep import GrepResult, GrepTarget
 from ..infra.summary_store import SummaryStore
 from ..infra.test_store import TestStore
@@ -95,7 +95,7 @@ class SearchMixin(OwnershipMixin):
             max_docs=max_docs,
         )
         for h in hits:  # regras de máscara que só valem na saída (ver retrieval/redaction)
-            h.code = mask_output(h.code, h.language)
+            h.code = mask_output(h.code, h.language, self.profiles.file_types)
         await self.annotate_owners(hits)
         await self.annotate_summaries(hits)
         await self.annotate_tests(hits)
@@ -135,7 +135,8 @@ class SearchMixin(OwnershipMixin):
         Aceita o nome como nas outras consultas: 'org__repo', 'org/repo' ou só 'repo'."""
         repo = (await self._resolve_repos([repo]) or [repo])[0]
         root = await self._local_path(repo)
-        return await asyncio.to_thread(retrieval_files.read_file, root, repo, path, start_line, end_line)
+        return await asyncio.to_thread(retrieval_files.read_file, root, repo, path, start_line, end_line,
+                                       self.profiles.file_types)
 
     @staticmethod
     def rerank_variants() -> list[dict[str, Any]]:
@@ -293,7 +294,7 @@ class SearchMixin(OwnershipMixin):
         for row in rows.values():
             if row.ignored or (wanted is not None and row.name not in wanted):
                 continue
-            repo = repo_for_row(row, orgs, manual)
+            repo = self._repo_for_row(row, orgs, manual)
             root = repo.local_path(self.settings.repos_dir)
             if root.is_dir():
                 excludes = without_test_excludes(repo.all_excludes) if include_tests else repo.all_excludes
@@ -308,7 +309,8 @@ class SearchMixin(OwnershipMixin):
             except OSError:
                 return None
             # `redact` preserva a contagem de linhas; split("\n") numera como o rg (splitlines quebraria em \r, \x0c...)
-            return mask_output(text, file_language(path.name)).split("\n")
+            types = self.profiles.file_types
+            return mask_output(text, file_language(path.name, types), types).split("\n")
 
         async def mask(path: Path) -> list[str] | None:
             """Arquivo inteiro mascarado (uma chave PEM só é reconhecida inteira)."""

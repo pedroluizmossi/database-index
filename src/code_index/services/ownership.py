@@ -1,7 +1,9 @@
 """Dono do código no DDD: catálogo de domínios/serviços, atribuição manual e o escopo da busca.
 
 A inferência (fase 1, sem LLM) roda no linker `ownership` a cada sync; aqui ficam a leitura (resolvida por
-origem, ver domain/ownership.py) e a escrita manual, que vale na hora e vence a inferência.
+origem, ver domain/ownership.py) e a escrita manual, que vale na hora e vence a inferência. O catálogo e a ordem
+das origens vêm das regras de dono dos perfis ativos (`self.profiles`); sem perfil, o catálogo tem só o domínio
+transversal e o que pessoas criaram.
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ _CACHE_SECONDS = 60.0
 class OwnershipState:
     resolved: dict[str, Resolved]
     catalog: Catalog
-    sdl_services: set[tuple[str, str]]   # serviços declarados em algum .sdl (os outros foram criados à mão)
+    profile_services: set[tuple[str, str]]   # serviços do catálogo dos perfis (os outros foram criados à mão)
     built_at: float
 
 
@@ -42,20 +44,24 @@ class OwnershipMixin(ServiceBase):
         rows = await self._relations.owner_rows()
         assignments = [Assignment(r["src"], owner, r["origin"], r["confidence"], r["evidence"])
                        for r in rows if (owner := owner_from_key(r["dst"])) is not None]
-        resolved = resolve(assignments)
-        sdl_rows = await self._enrich.sdl_catalog_rows()
-        catalog = build_catalog({r["repo"]: r["sdl"] for r in sdl_rows}, {r["repo"]: r["labels"] for r in sdl_rows})
-        sdl_services = set(catalog.services)
+        order = self.profiles.owner_origins
+        resolved = resolve(assignments, order)
+        rules = self.profiles.ownership_rules
+        rows = await self._enrich.ownership_catalog_rows(
+            sorted({s for r in rules for s in r.fact_sections}), sorted({k for r in rules for k in r.material_keys}))
+        catalog = build_catalog(rules, {r["repo"]: r["facts"] for r in rows}, {r["repo"]: r["own"] for r in rows})
+        profile_services = set(catalog.services)
         catalog.add(Owner(TRANSVERSAL), domain_label=TRANSVERSAL_LABEL)
         for a in assignments:  # donos criados à mão entram no catálogo
             if not catalog.has(a.owner):
                 catalog.add(a.owner)
-        state = OwnershipState(resolved, catalog, sdl_services, time.monotonic())
+        state = OwnershipState(resolved, catalog, profile_services, time.monotonic())
         self._owner_cache = state
         return state
 
     async def ownership_catalog(self) -> dict[str, Any]:
-        """Domínios e serviços (do SDL e os criados à mão), quantos repos cada um tem e a cobertura."""
+        """Domínios e serviços (do catálogo dos perfis e os criados à mão), quantos repos cada um tem e a
+        cobertura. `manual` em um serviço: fora do catálogo dos perfis (criado na atribuição manual)."""
         state = await self._ownership()
         code_repos = self._code_repo_names(await self._repos.all_rows())
         repo_level = {split_entity(k)[0]: r.owners for k, r in state.resolved.items() if k.startswith("repo:")}
@@ -68,9 +74,10 @@ class OwnershipMixin(ServiceBase):
                     continue
                 n = sum(1 for owners in repo_level.values() if Owner(dom, svc) in owners)
                 services.append({"name": svc, "label": info.label, "repos": n,
-                                 "declared_in": sorted(info.repos)[:10], "manual": (dom, svc) not in state.sdl_services})
+                                 "declared_in": sorted(info.repos)[:10],
+                                 "manual": (dom, svc) not in state.profile_services})
             domains.append({"name": name, "label": label, "repos": len(in_domain), "services": services})
-        return {"domains": domains, "coverage": coverage(code_repos, state.resolved)}
+        return {"domains": domains, "coverage": coverage(code_repos, state.resolved, self.profiles.owner_origins)}
 
     async def ownership_list(
         self,

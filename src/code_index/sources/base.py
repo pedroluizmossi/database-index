@@ -19,8 +19,10 @@ from typing import Any, Protocol
 
 import asyncpg
 
+from code_index.domain.contracts import ContractRoutes
 from code_index.domain.documents import DocumentMeta
 from code_index.domain.models import DiscoveredRepo, DocSource
+from code_index.domain.naming import NameRules
 from code_index.domain.relations import Relation
 from code_index.settings import Settings
 
@@ -61,14 +63,17 @@ class DocSourcePlugin(Protocol):
         """Baixa só o que mudou para `dest` e devolve a revisão (muda quando o conteúdo muda)."""
         ...
 
-    def documents(self, source: DocSource, dest: Path) -> list[DocumentMeta]:
-        """Descreve os documentos materializados em `dest` (síncrono; lê só arquivos locais)."""
+    def documents(self, source: DocSource, dest: Path, *,
+                  routes: ContractRoutes = ContractRoutes()) -> list[DocumentMeta]:
+        """Descreve os documentos materializados em `dest` (síncrono; lê só arquivos locais). `routes`: rotas das
+        operações de contrato dos perfis ativos (`ContractRoutes`), para a fonte que descreve APIs; parâmetro opcional
+        (plugin sem ele recebe a chamada sem as rotas)."""
         ...
 
     async def preview(self, source: DocSource, settings: Settings, *, limit: int) -> dict[str, Any]:
         """O que entraria na indexação, sem baixar conteúdo nem gerar embeddings."""
         ...
 
-    def linkers(self) -> Sequence[Linker]:
-        """Linkers próprios da fonte (podem ser nenhum)."""
+    def linkers(self, naming: NameRules) -> Sequence[Linker]:
+        """Linkers próprios da fonte (podem ser nenhum). `naming`: regras de nome dos repos dos perfis ativos."""
         ...

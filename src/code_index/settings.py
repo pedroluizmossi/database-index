@@ -30,6 +30,14 @@ def _default_credentials_file() -> Path:
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=_ENV_FILE, extra="ignore", frozen=True, populate_by_name=True)
 
+    # Perfis de organização ativos, em ordem (CSV; profiles/registry.py): convenções da empresa fora do núcleo
+    # (nomes dos repos, ruído a excluir, padrões de configuração). Vazio ou "default" = comportamento genérico.
+    # Padrão "senior" por enquanto, para não mudar o índice existente. Plano: quando o perfil sair do repositório
+    # (pacote próprio com entry point), o padrão vira ["default"] e o deploy da empresa define CODE_INDEX_PROFILES.
+    profiles: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["senior"], validation_alias="CODE_INDEX_PROFILES"
+    )
+
     # Pasta base para caminhos relativos
     base_dir: Path = Field(
         default_factory=lambda: Path(_ENV_FILE).parent if _ENV_FILE else Path.cwd(),
@@ -98,7 +106,8 @@ class Settings(BaseSettings):
     wikijs_allowed_hosts: Annotated[list[str], NoDecode] = Field(
         default_factory=list, validation_alias="CODE_INDEX_WIKIJS_ALLOWED_HOSTS"
     )
-    openapi_bucket_url: str = Field("https://s3.amazonaws.com/br-com-senior-ecossistema-api", validation_alias="OPENAPI_BUCKET_URL")
+    # Catálogo OpenAPI (fonte openapi_s3). Vazio: o padrão do perfil de organização ativo (profiles/), se houver.
+    openapi_bucket_url: str | None = Field(None, validation_alias="OPENAPI_BUCKET_URL")
     openapi_ref_max_documents: int = Field(32, ge=0, le=256, validation_alias="OPENAPI_REF_MAX_DOCUMENTS")
     openapi_ref_max_bytes: int = Field(4 * 1024 * 1024, ge=1024, validation_alias="OPENAPI_REF_MAX_BYTES")
     # Página que cita mais repos que isto (índice, lista de times...) não liga por simples menção
@@ -186,7 +195,7 @@ class Settings(BaseSettings):
     remote_timeout_seconds: float = Field(60.0, gt=0, le=3600, validation_alias="CODE_INDEX_REMOTE_TIMEOUT")
 
     @field_validator("admin_emails", "allowed_hosts", "google_allowed_emails", "azure_allowed_emails",
-                     "oauth_redirect_uris", "wikijs_allowed_hosts", mode="before")
+                     "oauth_redirect_uris", "wikijs_allowed_hosts", "profiles", mode="before")
     @classmethod
     def _split_csv(cls, v: object) -> object:
         """Aceita lista JSON ou texto separado por vírgula (ex.: `a@x.com,b@x.com`)."""
@@ -195,6 +204,12 @@ class Settings(BaseSettings):
                 return json.loads(v)
             return [x.strip() for x in v.split(",") if x.strip()]
         return v
+
+    @field_validator("openapi_bucket_url", mode="before")
+    @classmethod
+    def _empty_is_none(cls, v: object) -> object:
+        """`OPENAPI_BUCKET_URL=` (vazio) = não definido: vale o padrão do perfil."""
+        return None if isinstance(v, str) and not v.strip() else v
 
     @model_validator(mode="after")
     def _resolve_paths(self) -> "Settings":

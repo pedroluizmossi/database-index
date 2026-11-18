@@ -14,7 +14,7 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from .relations import ORIGIN_BY_NAME, CONTESTABLE
+from .relations import is_contestable as _origin_contestable, origin_description
 
 DOC_BATCH = 8
 EXCERPT_CHARS = 1500
@@ -23,7 +23,6 @@ LINK_BASIS = ("pagina_cita", "assunto")
 LINK_CONFIDENCE = ("alta", "media", "baixa")
 VERDICTS = ("manter", "remover")
 SCOPES = ("todas", "sem-vinculo", "varios")
-_ORIGIN_LABEL = {o.name: o.description for o in ORIGIN_BY_NAME.values()}
 _FRONT = re.compile(r"\A---\n.*?\n---\n", re.S)
 
 
@@ -96,7 +95,7 @@ def render_doc_task(
         if links:
             lines.append("VÍNCULOS ATUAIS:")
             for repo, origins in sorted(links.items()):
-                label = ", ".join(_ORIGIN_LABEL.get(o, o) for o in origins)
+                label = ", ".join(origin_description(o) for o in origins)
                 mark = "[contestável]" if is_contestable(origins) else "[só contexto]"
                 lines.append(f"  {repo} ({label}) {mark}")
         else:
@@ -115,7 +114,7 @@ def render_doc_task(
 
 def is_contestable(origins: Sequence[str]) -> bool:
     """Só vínculos que vêm APENAS de heurística (tag, link, menção) podem ser contestados."""
-    return bool(origins) and all(o in CONTESTABLE for o in origins)
+    return bool(origins) and all(_origin_contestable(o) for o in origins)
 
 
 def _resolve(value: str, known: Sequence[str]) -> str | None:

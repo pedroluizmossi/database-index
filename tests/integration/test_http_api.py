@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import asyncpg
 import httpx
 import httpx2
 import pytest
@@ -78,6 +79,9 @@ def server(int_settings: Settings, fake_llm: Any, tmp_path: Any) -> Iterator[Ser
     settings = int_settings.model_copy(update={
         "auth_secret": SecretStr("s" * 48), "public_url": url, "http_port": port,
         "admin_emails": [ADMIN_EMAIL], "rate_limit_search_per_min": 3,
+        # Os testes de rate limit contam cada requisição: banco lento (suíte inteira rodando) não pode cair no
+        # fail-open (padrão 0,5 s) e liberar uma requisição sem contar. O fail-open tem testes próprios.
+        "rate_limit_db_timeout_s": 5.0,
         "google_client_id": "teste.apps.googleusercontent.com", "google_client_secret": SecretStr("x"),
         "google_allowed_emails": [USER_EMAIL],
     })
@@ -158,6 +162,19 @@ def test_openapi_scopes_e_previa(server: Server, monkeypatch: pytest.MonkeyPatch
     assert reader.post("/api/v1/openapi/preview", json={"domain": "platform", "services": []}).status_code == 400
     assert reader.post("/api/v1/openapi/index", json=selection).status_code == 403
     assert client(server, "indexador").post("/api/v1/openapi/index", json=selection).status_code == 403
+
+
+def test_openapi_catalogo_nao_configurado(server: Server, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sem perfil de organização e sem OPENAPI_BUCKET_URL: 400 com a mensagem, não 500."""
+    from code_index.profiles.registry import load_profiles
+
+    assert not server.settings.openapi_bucket_url
+    monkeypatch.setattr(server.srv.config.app.state.service, "profiles", load_profiles(["default"]))
+    reader = client(server, "leitor")
+    resp = reader.get("/api/v1/openapi/catalog")
+    assert resp.status_code == 400 and "OPENAPI_BUCKET_URL" in resp.json()["detail"]
+    preview = reader.post("/api/v1/openapi/preview", json={"domain": "platform", "services": ["scheduler"]})
+    assert preview.status_code == 400 and "OPENAPI_BUCKET_URL" in preview.json()["detail"]
 
 
 def test_cartao_do_repo_pela_api(server: Server) -> None:
@@ -351,8 +368,25 @@ def test_configuracoes_pelo_operador_local(int_settings: Settings, fake_llm: Any
     asyncio.run(scenario())
 
 
+async def _db_epoch(settings: Settings) -> float:
+    conn = await asyncpg.connect(settings.database_url)
+    try:
+        return float(await conn.fetchval("SELECT extract(epoch FROM now())"))
+    finally:
+        await conn.close()
+
+
+def _longe_da_virada(settings: Settings, window: float = 60.0, margin: float = 5.0) -> None:
+    """O rate limit usa janela fixa alinhada ao relógio do Postgres: requisições dos dois lados da virada caem em
+    janelas diferentes e a contagem recomeça no meio do teste. Perto da virada, espera a janela nova começar."""
+    left = window - asyncio.run(_db_epoch(settings)) % window
+    if left < margin:
+        time.sleep(left + 0.2)
+
+
 def test_rate_limit_de_busca(server: Server) -> None:
     c = client(server, "leitor")
+    _longe_da_virada(server.settings)
     codes = [c.post("/api/v1/search", json={"query": "ola mundo", "mode": "keyword"}).status_code for _ in range(4)]
     assert codes == [200, 200, 200, 429]
 
@@ -399,6 +433,7 @@ async def _mcp_buscas(server: Server, token: str, n: int) -> list[Any]:
 
 
 def test_rate_limit_das_tools_mcp(server: Server) -> None:
+    _longe_da_virada(server.settings)
     res = asyncio.run(_mcp_buscas(server, "leitor", 4))  # rate_limit_search_per_min = 3
     assert [r.is_error for r in res] == [False, False, False, True]
     assert "limite de requisições" in res[-1].content[0].text
@@ -441,9 +476,17 @@ def test_mcp_exige_token(server: Server) -> None:
     assert client(server, "revogado", **hdrs).post("/mcp", json=init).status_code == 401
 
 
+def _has_impl_convention() -> bool:
+    from code_index.services.base import prepare_profiles
+    from code_index.settings import get_settings
+
+    return prepare_profiles(get_settings()).impl_convention is not None
+
+
 def test_mcp_so_expoe_leitura(server: Server) -> None:
     tools, search, symbol, grep = asyncio.run(_mcp(server, "leitor"))
-    assert tools == ["search_code", "read_file_lines", "list_repos", "list_domains", "find_repos", "find_api_impl",
+    impl = ["find_api_impl"] if _has_impl_convention() else []  # só com perfil que ofereça a convenção
+    assert tools == ["search_code", "read_file_lines", "list_repos", "list_domains", "find_repos", *impl,
                      "related", "repo_card", "find_symbol", "grep_code", "find_tests", "find_callers",
                      "find_callees"]
     assert not search.is_error and not symbol.is_error and not grep.is_error
@@ -473,8 +516,9 @@ def test_mcp_serve_guia_de_uso(server: Server) -> None:
     assert prompts == ["guia_de_uso", "investigar"]
     assert guia.startswith("# Guia de uso do code-index") and guia == recurso
     for tool in ("search_code", "find_symbol", "grep_code", "read_file_lines", "list_repos", "find_repos", "repo_card",
-                 "find_api_impl", "related", "find_tests", "find_callers", "find_callees"):
+                 "related", "find_tests", "find_callers", "find_callees"):
         assert tool in guia
+    assert ("find_api_impl" in guia) is _has_impl_convention()  # sem convenção, a tool some do guia
     assert investigar.endswith("Pergunta: onde validamos o captcha?")
 
 

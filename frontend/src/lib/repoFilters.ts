@@ -1,9 +1,9 @@
 import type { OwnerOrigin, RepoStatusValue } from "../api/types";
-import { ORIGIN_LABEL, validOwner } from "./ownership";
+import { validOrigin, validOwner } from "./ownership";
 
 /**
  * Filtros da página Repositórios, guardados no hash da URL:
- * `#repos?status=pending&dominio=hcm&origem=sibling&confianca=media&push=novo&q=texto`.
+ * `#repos?status=pending&dominio=hcm&origem=manual&confianca=media&push=novo&q=texto`.
  * Chaves em português; valores ruins caem no padrão, sem erro. Outras páginas (Indexação) usam `reposHash`
  * para abrir a lista já filtrada.
  */
@@ -15,7 +15,6 @@ export type Confidence = "alta" | "media" | "baixa";
 export type ConfidenceFilter = "" | Confidence;
 export const CONFIDENCE_LABEL: Record<Confidence, string> = { alta: "alta", media: "média", baixa: "baixa" };
 export const CONFIDENCE_VALUES = Object.keys(CONFIDENCE_LABEL) as Confidence[];
-export const ORIGIN_VALUES = Object.keys(ORIGIN_LABEL) as OwnerOrigin[];
 export const STATUS_VALUES: StatusFilter[] = ["all", "indexed", "pending", "error", "ignored"];
 export const SEARCH_MAX = 200;
 
@@ -59,12 +58,12 @@ export function readFiltersFromHash(): Filters {
   const params = new URLSearchParams(hash.slice(at + 1));
   const status = params.get(HASH_KEYS.status) as StatusFilter | null;
   const domain = params.get(HASH_KEYS.domain) ?? "";
-  const origin = params.get(HASH_KEYS.origin) as OwnerOrigin | null;
+  const origin = params.get(HASH_KEYS.origin);
   const confidence = params.get(HASH_KEYS.confidence) as Confidence | null;
   return {
     status: status && STATUS_VALUES.includes(status) ? status : "all",
     domain: domain === NO_OWNER || validOwner(domain) ? domain : ALL_OWNERS,
-    origin: origin && ORIGIN_VALUES.includes(origin) ? origin : "",
+    origin: origin && validOrigin(origin) ? origin : "",
     confidence: confidence && CONFIDENCE_VALUES.includes(confidence) ? confidence : "",
     outdated: params.get(HASH_KEYS.outdated) === OUTDATED_VALUE,
     search: (params.get(HASH_KEYS.search) ?? "").slice(0, SEARCH_MAX),

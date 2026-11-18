@@ -7,6 +7,7 @@ atual (`card_input_hash <> input_hash`) e sem reserva ativa. Uma reserva (lease)
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -14,11 +15,19 @@ from typing import Any
 import asyncpg
 
 from ..settings import Settings
+from ..domain.contracts import CONTRACTS_SECTION
 from ..domain.documents import WIKI_PAGE
 from ..domain.relations import doc_key
 from .relation_store import RelationStore
 
 TEXT_TYPES = (WIKI_PAGE,)  # documentos que agents revisam (páginas de texto)
+
+
+def facts_subset_sql(material: str, sections_param: str) -> str:
+    """Expressão SQL (jsonb ou NULL) com só as seções `sections_param` (text[]) dos fatos de `material`, sem as
+    vazias. Evita trazer os fatos inteiros quando as regras de dono leem uma seção."""
+    return f"""(SELECT jsonb_object_agg(k, {material}->'facts'->k) FROM unnest({sections_param}::text[]) k
+                WHERE coalesce({material}->'facts'->k, 'null'::jsonb) NOT IN ('null'::jsonb, '[]'::jsonb, '{{}}'::jsonb))"""
 
 
 @dataclass(frozen=True)
@@ -121,19 +130,27 @@ class EnrichStore:
         )
         return {r["repo"]: {**json.loads(r["card"]), "stale": r["stale"]} for r in rows}
 
-    async def sdl_catalog_rows(self) -> list[dict[str, Any]]:
-        """Serviços do `.sdl` e rótulos de cada repo (para o catálogo de domínios/serviços)."""
+    async def ownership_catalog_rows(self, sections: Sequence[str], keys: Sequence[str]) -> list[dict[str, Any]]:
+        """Para o catálogo de domínios/serviços das regras de dono dos perfis: de cada cartão, só as seções
+        `sections` dos fatos (as preenchidas) e as chaves `keys` da seção `ownership` do material. Só cartões com
+        alguma das seções preenchida (sem seção pedida: todos). Sem nada pedido (nenhuma regra): nenhum."""
+        if not sections and not keys:
+            return []
         rows = await self._pool.fetch(
-            f"""SELECT repo, material->'facts'->'sdl' AS sdl, material->'ownership'->'sdl_labels' AS labels
-                FROM {self._cards}
-                WHERE jsonb_array_length(coalesce(material->'facts'->'sdl', '[]'::jsonb)) > 0"""
+            f"""SELECT repo, facts, own FROM (
+                  SELECT repo, {facts_subset_sql('material', '$1')} AS facts,
+                         (SELECT jsonb_object_agg(k, material->'ownership'->k) FROM unnest($2::text[]) k
+                          WHERE material->'ownership' ? k) AS own
+                  FROM {self._cards}) x
+                WHERE $3::bool OR facts IS NOT NULL""",
+            list(sections), list(keys), not sections,
         )
-        return [{"repo": r["repo"], "sdl": json.loads(r["sdl"]),
-                 "labels": json.loads(r["labels"]) if r["labels"] else {}} for r in rows]
+        return [{"repo": r["repo"], "facts": json.loads(r["facts"]) if r["facts"] else {},
+                 "own": json.loads(r["own"]) if r["own"] else {}} for r in rows]
 
     async def find(self, query: str, *, limit: int = 10) -> list[dict[str, Any]]:
-        """Repos cujo cartão (ou fatos: nome, SDL) casa com a consulta. Full-text do Postgres, sem LLM.
-        Pesos: nome e tags (A) > capacidades, glossário e SDL (B) > resumo (C). Termos em OU."""
+        """Repos cujo cartão (ou fatos: nome, contratos de API) casa com a consulta. Full-text do Postgres, sem LLM.
+        Pesos: nome e tags (A) > capacidades, glossário e operações dos contratos (B) > resumo (C). Termos em OU."""
         doc = f"""
             setweight(to_tsvector('portuguese', {_fold("replace(c.repo, '__', ' ')")}), 'A') ||
             setweight(to_tsvector('portuguese', {_fold(_arr("c.card->'domain_tags'"))}), 'A') ||
@@ -141,7 +158,7 @@ class EnrichStore:
             setweight(to_tsvector('portuguese', {_fold("coalesce((SELECT string_agg((s->>'service') || ' ' || "
                                                         "array_to_string(ARRAY(SELECT jsonb_array_elements_text(s->'queries') "
                                                         "UNION ALL SELECT jsonb_array_elements_text(s->'actions')), ' '), ' ') "
-                                                        "FROM jsonb_array_elements(c.material->'facts'->'sdl') s), '')")}), 'B') ||
+                                                        f"FROM jsonb_array_elements(c.material->'facts'->'{CONTRACTS_SECTION}') s), '')")}), 'B') ||
             setweight(to_tsvector('portuguese', {_fold("coalesce(c.card->>'summary', '')")}), 'C')"""
         rows = await self._pool.fetch(
             f"""WITH q AS (
@@ -162,13 +179,13 @@ class EnrichStore:
                         "kind": card.get("kind"), "tags": card.get("domain_tags", []), "stale": r["stale"]})
         return out
 
-    async def sdl_operation_count(self) -> int:
-        """Operações (query/action/signal) declaradas nos .sdl dos repos."""
+    async def contract_operation_count(self) -> int:
+        """Operações (query/action/signal) declaradas nos contratos de API dos repos (seção de contratos dos fatos)."""
         return int(await self._pool.fetchval(
             f"""SELECT coalesce(sum(jsonb_array_length(coalesce(s->'queries', '[]'::jsonb))
                                  + jsonb_array_length(coalesce(s->'actions', '[]'::jsonb))
                                  + jsonb_array_length(coalesce(s->'signals', '[]'::jsonb))), 0)
-                FROM {self._cards} c, jsonb_array_elements(c.material->'facts'->'sdl') s"""))
+                FROM {self._cards} c, jsonb_array_elements(c.material->'facts'->'{CONTRACTS_SECTION}') s"""))
 
     # ------------------------------------------------------------ fila
 
@@ -355,7 +372,7 @@ class EnrichStore:
                        count(*) FILTER (WHERE c.card IS NOT NULL AND c.card_input_hash = c.input_hash) AS cards_ok,
                        count(*) FILTER (WHERE c.card IS NOT NULL AND c.card_input_hash <> c.input_hash) AS cards_stale,
                        count(*) FILTER (WHERE c.repo IS NOT NULL AND c.card IS NULL) AS cards_missing,
-                       count(*) FILTER (WHERE jsonb_array_length(c.material->'facts'->'sdl') > 0) AS with_sdl
+                       count(*) FILTER (WHERE jsonb_array_length(c.material->'facts'->'{CONTRACTS_SECTION}') > 0) AS with_contracts
                 FROM {self._repos} r LEFT JOIN {self._cards} c ON c.repo = r.name
                 WHERE r.kind = 'code' AND NOT r.ignored AND r.revision IS NOT NULL"""
         )
@@ -369,6 +386,7 @@ class EnrichStore:
         )
         return {
             **dict(row),
+            "with_sdl": row["with_contracts"],  # nome antigo (CLI remota de versões anteriores)
             "tasks": {r["status"]: int(r["n"]) for r in tasks},
             "rejections": sum(int(r["rejections"] or 0) for r in tasks),
             "leased": [dict(r) | {"id": str(r["id"])} for r in leased],

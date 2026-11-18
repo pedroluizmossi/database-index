@@ -6,7 +6,12 @@ diretório (ex.: `**/test`) poda a árvore inteira abaixo dele.
 
 from __future__ import annotations
 
-DEFAULT_INCLUDE = [
+from collections.abc import Sequence
+
+# Include padrão do núcleo em dois blocos: os globs dos tipos de arquivo dos perfis de organização
+# (OrgProfile.file_types) entram entre eles (`default_include`). Posição fixa: a lista final faz parte da chave de
+# memo do CocoIndex (Repo.include), e mudar a ordem revarreria todos os repos.
+_INCLUDE_CODE_AND_DOCS = [
     "**/*.py", "**/*.pyi", "**/*.js", "**/*.jsx", "**/*.ts", "**/*.tsx", "**/*.mjs",
     "**/*.java", "**/*.kt", "**/*.kts", "**/*.scala", "**/*.go", "**/*.rs",
     "**/*.c", "**/*.h", "**/*.cc", "**/*.cpp", "**/*.hpp", "**/*.cs", "**/*.fs",
@@ -15,13 +20,16 @@ DEFAULT_INCLUDE = [
     "**/*.vue", "**/*.svelte", "**/*.html", "**/*.css", "**/*.scss",
     "**/*.toml", "**/*.yaml", "**/*.yml", "**/*.json", "**/*.xml", "**/*.gradle",
     "**/*.md", "**/*.mdx", "**/*.rst", "**/Dockerfile", "**/Makefile",
-    "**/*.sdl", "**/*.pdl", "**/*.properties",
+]
+_INCLUDE_CONFIG_AND_INFRA = [
+    "**/*.properties",
     # infraestrutura e contratos
     "**/*.tf", "**/*.tfvars", "**/*.hcl", "**/*.proto", "**/*.graphql", "**/*.gql",
     "**/Jenkinsfile", "**/*.groovy", "**/*.tpl",
     # variações de JS/TS e estilos
     "**/*.cjs", "**/*.mts", "**/*.cts", "**/*.less", "**/*.sass",
 ]
+DEFAULT_INCLUDE = _INCLUDE_CODE_AND_DOCS + _INCLUDE_CONFIG_AND_INFRA
 DEFAULT_EXCLUDE = [
     "**/.*", "**/node_modules", "**/vendor", "**/dist", "**/build", "**/target",
     "**/__pycache__", "**/venv", "**/*.min.js", "**/*.min.css", "**/*.lock",
@@ -51,12 +59,30 @@ TEST_EXCLUDE = [
     # Ruby / PHP / Swift
     "**/*_spec.rb", "**/*_test.rb", "**/*Test.php", "**/*Tests.swift", "**/*Test.swift",
 ]
-# Ruído: histórico de versões, especificações OpenAPI (indexadas por outra fonte) e
-# migrations duplicadas por banco (mantemos só PostgreSql).
-_DB_VENDORS = ["H2", "h2", "Oracle", "oracle", "SqlServer", "SQLServer", "sqlserver", "MySql", "MySQL", "mysql"]
+# Ruído: histórico de versões e especificações OpenAPI (indexadas por outra fonte). Ruído próprio de uma
+# organização (ex.: migrations duplicadas por banco) vem do perfil (OrgProfile.noise_exclude, `default_exclude`).
 NOISE_EXCLUDE = [
     "**/CHANGELOG*", "**/CHANGES*", "**/HISTORY*", "**/RELEASE_NOTES*", "**/RELEASE-NOTES*",
     "**/openapi.json", "**/openapi.yaml", "**/openapi.yml", "**/*.openapi.json", "**/*.openapi.yaml",
     "**/swagger.json", "**/swagger.yaml", "**/swagger.yml",
-] + [f"**/{d}/**/{v}" for d in ("migration", "migrations") for v in _DB_VENDORS]
+]
 DEFAULT_EXCLUDE = DEFAULT_EXCLUDE + TEST_EXCLUDE + NOISE_EXCLUDE
+
+
+def default_include(extra_globs: Sequence[str] = ()) -> list[str]:
+    """Include padrão de um repo: o do núcleo com os globs dos tipos de arquivo dos perfis ativos (sem repetir
+    padrões), na posição fixa entre os blocos de código/docs e de configuração/infra."""
+    seen = set(DEFAULT_INCLUDE)
+    extra = [g for g in dict.fromkeys(extra_globs) if g not in seen]
+    return _INCLUDE_CODE_AND_DOCS + extra + _INCLUDE_CONFIG_AND_INFRA
+
+
+def default_exclude(extra_noise: Sequence[str] = ()) -> list[str]:
+    """Exclude padrão de um repo: o do núcleo seguido do ruído dos perfis ativos (sem repetir padrões)."""
+    out = list(DEFAULT_EXCLUDE)
+    seen = set(out)
+    for pattern in extra_noise:
+        if pattern not in seen:
+            seen.add(pattern)
+            out.append(pattern)
+    return out

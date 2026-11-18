@@ -10,6 +10,7 @@ from code_index.domain.doc_links import (
     alias_is_strong, blank_lines, glob_to_like, manifest_aliases, page_mentions, page_path, parse_front_matter,
     repo_name_aliases,
 )
+from code_index.domain.naming import NameRules
 
 
 def matches(path: str, globs: tuple[str, ...]) -> bool:
@@ -17,10 +18,16 @@ def matches(path: str, globs: tuple[str, ...]) -> bool:
 
 
 def test_apelidos_do_nome_do_repo() -> None:
-    assert [a for a, _ in repo_name_aliases("minha-org__snr-email-backend")] == [
-        "minha-org__snr-email-backend", "minha-org/snr-email-backend", "snr-email-backend", "email-backend",
+    curto = NameRules(alias_prefix_max=4)  # perfil que trata 'abc-' como prefixo da organização
+    assert [a for a, _ in repo_name_aliases("minha-org__abc-email-backend", curto)] == [
+        "minha-org__abc-email-backend", "minha-org/abc-email-backend", "abc-email-backend", "email-backend",
     ]
-    assert [a for a, _ in repo_name_aliases("projeto-local")] == ["projeto-local"]
+    assert [a for a, _ in repo_name_aliases("minha-org__email-backend", curto)][-1] == "email-backend"
+    assert [a for a, _ in repo_name_aliases("projeto-local", curto)] == ["projeto-local"]
+    # sem perfil: nenhum prefixo sai do nome
+    assert [a for a, _ in repo_name_aliases("minha-org__abc-email-backend")] == [
+        "minha-org__abc-email-backend", "minha-org/abc-email-backend", "abc-email-backend",
+    ]
 
 
 @pytest.mark.parametrize(

@@ -68,21 +68,22 @@ export interface Repo {
   tags: string[];
   /** O repo mudou desde que o cartão foi escrito. */
   card_stale: boolean;
-  /** Domínio/serviço do DDD dono do repo ('platform/audit'); vazio = sem dono. */
+  /** Domínio/serviço do DDD dono do repo ('vendas/pedidos'); vazio = sem dono. */
   owners: string[];
   owner_origin: OwnerOrigin | null;
   owner_confidence: string | null;
 }
 
-/** De onde veio o dono: manual vence; o resto é inferido (SDL, repo irmão, rotas chamadas, uso de lib). */
-export type OwnerOrigin = "manual" | "declared" | "sibling" | "api_calls" | "usage";
+/** De onde veio o dono: `manual` vence, `usage` é a inferência mais fraca do núcleo e as do meio vêm dos perfis de
+ * organização ativos no servidor. Rótulo, dica e ordem vêm de GET /api/v1/relations/origins (`useOrigins`). */
+export type OwnerOrigin = string;
 
 export interface OwnershipService {
   name: string;
   label: string;
   repos: number;
   declared_in: string[];
-  /** Criado à mão (não existe em nenhum .sdl). */
+  /** Criado à mão (não vem do catálogo dos perfis de organização). */
   manual: boolean;
 }
 
@@ -95,7 +96,7 @@ export interface OwnershipDomain {
 
 export interface OwnershipCatalog {
   domains: OwnershipDomain[];
-  coverage: { repos: number; owned: number; percent: number; by_origin: Partial<Record<OwnerOrigin | "none", number>> };
+  coverage: { repos: number; owned: number; percent: number; by_origin: Partial<Record<OwnerOrigin, number>> };
 }
 
 export interface OwnershipRow {
@@ -109,24 +110,39 @@ export interface OwnershipRow {
   alternatives: { owner: string; origin: OwnerOrigin; confidence: string | null }[];
 }
 
-export interface SdlService {
+/** Grupo de um contrato (do núcleo: query, action, signal, event, entity). */
+export type ContractGroup = string;
+
+/** Serviço declarado num contrato de API, no formato genérico (`contracts` de GET /api/v1/repos/{name}/card). */
+export interface ContractService {
+  /** Rótulo do formato do arquivo, dado pelo perfil de organização que o lê (ex.: ".sdl" no perfil senior). */
+  format: string;
   path: string;
   domain: string;
   service: string;
-  queries: string[];
-  actions: string[];
-  signals: string[];
-  events: string[];
-  entities: string[];
+  /** Grupo → nomes; só os grupos com algum, na ordem do servidor. */
+  groups: Partial<Record<ContractGroup, string[]>>;
+  /** Operações de uso interno. */
   private: string[];
 }
 
-/** Fatos extraídos sem LLM (catalog-info, manifestos, .sdl, .pdl, pastas). */
+/** Perfil de organização ativo no servidor (`profiles` do cartão). Rótulos das origens: GET /api/v1/relations/origins. */
+export interface ActiveProfile {
+  name: string;
+  label: string;
+  origins: string[];
+  /** Formatos de contrato que o perfil lê (ex.: [".sdl"] no perfil senior; vazio no default). */
+  contract_formats: string[];
+}
+
+/** Fatos extraídos sem LLM (catalog-info, manifestos, pastas e as seções dos perfis de organização). */
 export interface RepoFacts {
   language: string | null;
   catalog: Record<string, unknown>;
   artifacts: string[];
-  sdl: SdlService[];
+  /** Seção genérica de contratos (`domain/contracts.CONTRACTS_SECTION`, chave `sdl` por nome histórico), no formato
+   * gravado. Não use: a interface lê `RepoCardInfo.contracts` (formato genérico); a chave sai daqui depois. */
+  sdl?: Record<string, unknown>[];
   properties: { path: string; group: string; properties: string[] }[];
   modules: string[];
   has: string[];
@@ -166,6 +182,8 @@ export interface RepoCardInfo {
   repo: string;
   commit: string | null;
   facts: RepoFacts;
+  /** Serviços de contrato (formato genérico, com o rótulo do formato). */
+  contracts: ContractService[];
   impls: ApiImpl[];
   related: { repo: string; origin: string; basis?: string; why?: string }[];
   card: Card | null;
@@ -173,6 +191,8 @@ export interface RepoCardInfo {
   card_agent: string | null;
   card_at: string | null;
   facts_at: string | null;
+  /** Perfis de organização ativos no servidor. */
+  profiles: ActiveProfile[];
 }
 
 /** GET /api/v1/repos/find */
@@ -522,7 +542,8 @@ export interface AuditEntry {
   client_ip: string | null;
 }
 
-/** Origem de uma relação (manual, agent, llm, explicit, sdl, service, tag, url, mention...). A lista, os
+/** Origem de uma relação (manual, agent, llm, explicit, service, tag, url, mention e as dos perfis, ex.: sdl no
+ * perfil senior). A lista, os
  * rótulos e a ordem vêm de GET /api/v1/relations/origins: o front não precisa conhecer cada uma. */
 export type OriginKind = string;
 
@@ -533,7 +554,11 @@ export interface RelationOrigin {
   description: string;
   contestable: boolean;
   stored: boolean;
+  /** Declarada pelo próprio repo (ex.: o .sdl do repo): sobrepor com atribuição manual pede aviso. */
+  authoritative: boolean;
   order: number;
+  /** Perfil de organização que registrou a origem; null = núcleo. */
+  profile: string | null;
 }
 
 /** Tipo do documento, informado pela fonte (wiki_page, api_operation, api_overview...). */

@@ -13,7 +13,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from ..domain.test_cases import EXTRACTOR_VERSION, group_declarations, link_file
-from ..indexing.orchestrator import configured_repos, repo_for_row
+from ..indexing.orchestrator import configured_repos
 from ..indexing.test_scan import scan_tests
 from ..infra.test_store import TestRow, TestStore
 from ..retrieval.redaction import mask_output
@@ -57,7 +57,7 @@ class TestsMixin(ServiceBase):
         for row in sorted(rows.values(), key=lambda r: r.name):
             if row.kind != "code" or row.ignored or not row.indexed:
                 continue
-            repo = repo_for_row(row, orgs, manual)
+            repo = self._repo_for_row(row, orgs, manual)
             root = repo.local_path(self.settings.repos_dir)
             if not root.is_dir():
                 continue

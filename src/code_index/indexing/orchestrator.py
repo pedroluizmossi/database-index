@@ -18,7 +18,7 @@ import contextlib
 import logging
 import shutil
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from typing import Any
 from pathlib import Path
 
@@ -38,6 +38,8 @@ from ..infra.db import try_advisory_lock
 from ..infra.git import GitClient
 from ..infra.github import GitHubClient
 from ..infra.repo_store import RepoStore
+from ..profiles.base import ActiveProfiles
+from ..profiles.registry import active_profiles
 from ..settings import Settings
 from ..sources.github_org import GitHubOrgSource
 from ..sources.registry import doc_plugin
@@ -67,8 +69,11 @@ class Indexer:
         git: GitClient,
         github: GitHubClient,
         pool: asyncpg.Pool,
+        profiles: ActiveProfiles | None = None,
     ) -> None:
         self._settings = settings
+        # Perfis de organização ativos (None = os de settings.profiles): ruído do exclude padrão dos repos.
+        self._profiles = profiles if profiles is not None else active_profiles(settings)
         self._pool = pool  # trava do sync (advisory lock): o mesmo banco das tabelas de estado
         self._repos = repos
         self._config = config
@@ -460,9 +465,9 @@ class Indexer:
 
     # --- auxiliares ---------------------------------------------------------------
 
-    @staticmethod
-    def _to_repo(row: RepoState, orgs: list[Org], manual: dict[str, Repo]) -> Repo:
-        return repo_for_row(row, orgs, manual)
+    def _to_repo(self, row: RepoState, orgs: list[Org], manual: dict[str, Repo]) -> Repo:
+        return repo_for_row(row, orgs, manual, default_include=self._profiles.default_include,
+                            default_exclude=self._profiles.default_exclude)
 
 
 def _same_source(repo: Repo, url: str | None, path: str | None) -> bool:
@@ -498,17 +503,20 @@ async def configured_repos(config: ConfigStore) -> dict[str, Repo]:
     return repos
 
 
-def repo_for_row(row: RepoState, orgs: list[Org], manual: dict[str, Repo]) -> Repo:
-    """Repo (com pasta e filtros de arquivo) de uma linha da tabela de estado."""
+def repo_for_row(row: RepoState, orgs: list[Org], manual: dict[str, Repo], *,
+                 default_include: Sequence[str], default_exclude: Sequence[str]) -> Repo:
+    """Repo (com pasta e filtros de arquivo) de uma linha da tabela de estado. `default_include`/`default_exclude`:
+    os padrões dos perfis ativos (`ActiveProfiles.default_include`/`default_exclude`), no lugar dos padrões do
+    núcleo de quem não tem filtros próprios."""
     if row.org is None:
-        if row.name in manual:
-            return manual[row.name]
-        return Repo(name=row.name, url=row.url, path=row.path)
-    org = next((o for o in orgs if o.name == row.org), None) or Org(name=row.org)
-    return Repo(
-        name=row.name,
-        url=row.url,
-        include=org.include,
-        exclude=org.exclude,
-        extra_exclude=org.extra_exclude,
-    )
+        repo = manual.get(row.name) or Repo(name=row.name, url=row.url, path=row.path)
+    else:
+        org = next((o for o in orgs if o.name == row.org), None) or Org(name=row.org)
+        repo = Repo(
+            name=row.name,
+            url=row.url,
+            include=org.include,
+            exclude=org.exclude,
+            extra_exclude=org.extra_exclude,
+        )
+    return repo.with_default_include(default_include).with_default_exclude(default_exclude)

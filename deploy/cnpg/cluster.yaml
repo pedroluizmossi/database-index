@@ -1,8 +1,8 @@
 # Postgres do code-index no CloudNativePG (exemplo).
 #
 # Imagem: a de docker/postgres (pgvector/pgvector:pg17 + pg_search), publicada no seu registry:
-#   docker build -t registry.example.com/code-index-postgres:pg17-pgsearch0.26.5 docker/postgres
-#   docker push registry.example.com/code-index-postgres:pg17-pgsearch0.26.5
+#   docker build -t registry.example.com/code-index-postgres:17-pgsearch0.26.5 docker/postgres
+#   docker push registry.example.com/code-index-postgres:17-pgsearch0.26.5
 # Não troque pela paradedb/paradedb (traz um pgvector mais antigo que o do banco: downgrade).
 #
 # A imagem herda o usuário postgres (uid/gid 999) da imagem oficial do Postgres; o CNPG usa 26 por
@@ -16,7 +16,7 @@ metadata:
   name: code-index-db
 spec:
   instances: 2
-  imageName: registry.example.com/code-index-postgres:pg17-pgsearch0.26.5
+  imageName: registry.example.com/code-index-postgres:17-pgsearch0.26.5   # o CNPG exige a tag começando pela versão
   # imagePullSecrets:
   #   - name: registry-cred
   postgresUID: 999

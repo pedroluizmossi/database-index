@@ -13,7 +13,7 @@ como hook do Helm. A api não roda o worker embutido (`CODE_INDEX_SYNC_WORKER_EM
 
 ```bash
 docker build -t registry.example.com/code-index:0.1.0 .
-docker build -t registry.example.com/code-index-postgres:pg17-pgsearch0.26.5 docker/postgres
+docker build -t registry.example.com/code-index-postgres:17-pgsearch0.26.5 docker/postgres
 docker push ...   # as duas
 ```
 
@@ -138,3 +138,34 @@ O CronJob roda `code-index sync` em modo remoto (`CODE_INDEX_URL` = Service inte
   `securityContext`.
 - `helm uninstall` mantém o PVC dos clones (`helm.sh/resource-policy: keep`) e o do CocoIndex
   (volumeClaimTemplate). Apagar o do CocoIndex força reprocessar tudo.
+
+### Migrar um índice existente (máquina local → cluster)
+
+O banco e o estado do CocoIndex (LMDB) andam juntos: leve os dois do **mesmo momento** (sem sync entre a cópia de
+um e a do outro). Banco sem o estado faz o worker se achar na primeira execução: ele tenta criar `code_chunks` e
+todo repo do job falha com `relation "code_chunks" already exists`. Estado sem o banco reprocessa tudo.
+
+O worker lê o estado de `COCOINDEX_DB=/data/state/cocoindex`, e o LMDB fica na subpasta `mdb`. O `.cocoindex/mdb`
+local vai para **`/data/state/cocoindex/mdb`** (não para `/data/state/mdb`). Com o worker parado (o PVC é RWO e o
+LMDB não pode estar aberto):
+
+```bash
+kubectl -n code-index scale sts code-index-worker --replicas=0
+kubectl -n code-index wait --for=delete pod/code-index-worker-0 --timeout=120s
+# pod temporário com o PVC do estado, mesmo uid do worker
+kubectl -n code-index run copia-estado --restart=Never --image=busybox \
+  --overrides='{"spec":{"securityContext":{"runAsUser":10001,"runAsGroup":10001},
+    "containers":[{"name":"copia-estado","image":"busybox","command":["sleep","3600"],
+      "volumeMounts":[{"name":"state","mountPath":"/data/state"}]}],
+    "volumes":[{"name":"state","persistentVolumeClaim":{"claimName":"state-code-index-worker-0"}}]}}'
+kubectl -n code-index wait --for=condition=Ready pod/copia-estado --timeout=120s
+kubectl -n code-index exec copia-estado -- mkdir -p /data/state/cocoindex
+kubectl -n code-index cp .cocoindex/mdb copia-estado:/data/state/cocoindex/mdb
+kubectl -n code-index exec copia-estado -- ls -la /data/state/cocoindex/mdb   # data.mdb e lock.mdb
+kubectl -n code-index delete pod copia-estado
+kubectl -n code-index scale sts code-index-worker --replicas=1
+```
+
+Se o worker já rodou um sync com o estado vazio, `/data/state/cocoindex` existe: renomeie a pasta antes de copiar
+(`mv cocoindex cocoindex.vazio`). Um job que falhou com o erro acima não grava nada no índice: depois da cópia,
+basta indexar de novo.

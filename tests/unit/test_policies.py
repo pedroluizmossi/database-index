@@ -134,6 +134,37 @@ def test_ordem_alterados_depois_pendentes_depois_com_erro() -> None:
     assert remaining == 0
 
 
+def test_so_o_que_mudou_deixa_pendentes_e_erros_de_fora() -> None:
+    org = Org(name="acme")
+    changed = state("acme__old", org="acme", pushed=T0 + timedelta(days=1), indexed_pushed=T0, revision="r1")
+    unchanged = state("acme__same", org="acme", pushed=T0, indexed_pushed=T0 + timedelta(days=1), revision="r2")
+    pending = state("acme__new", org="acme")
+    failed = state("acme__broken", org="acme", error="boom", revision="r3")
+    wiki = replace(state("docs__wiki", revision="docs:abc"), kind="docs")
+    new_wiki = replace(state("docs__nova"), kind="docs")
+    broken_wiki = replace(state("docs__ruim", revision="docs:x", error="fora do ar"), kind="docs")
+    manual = state("avulso", revision="r4")
+
+    names, remaining = pick_batch(
+        rows(failed, pending, changed, unchanged, wiki, new_wiki, broken_wiki, manual), None, [org],
+        {"avulso"}, only_changed=True,
+    )
+
+    assert names[-1] == "docs__wiki"
+    assert sorted(names) == ["acme__old", "avulso", "docs__wiki"]
+    assert remaining == 0
+
+
+def test_so_o_que_mudou_respeita_o_lote() -> None:
+    items = [state(f"acme__r{i}", org="acme", pushed=T0 + timedelta(days=1), indexed_pushed=T0, revision="r")
+             for i in range(3)]
+
+    names, remaining = pick_batch(rows(*items, state("acme__p", org="acme")), 2, [Org(name="acme")],
+                                  only_changed=True)
+
+    assert len(names) == 2 and remaining == 1
+
+
 def test_lote_limita_e_informa_quantos_ficaram_na_fila() -> None:
     items = [state(f"acme__r{i}", org="acme", pushed=T0 + timedelta(hours=i)) for i in range(4)]
 

@@ -25,6 +25,9 @@ class SyncIn(BaseModel):
         None, max_length=200,
         description="fonte de documentação: só estas páginas (sem idioma, ex.: Plataforma/Email); exige um único "
                     "item em repos (ex.: docs__wiki), como o --page da CLI")
+    only_changed: bool = Field(
+        False, description="lote automático só com o que já foi indexado e mudou (push novo, fontes de docs); "
+                           "sem pendentes nem erros")
     dry_run: bool = False
 
 
@@ -43,6 +46,7 @@ async def sync(body: SyncIn, request: Request,
         res = await audited(request, principal, "sync:dry-run", body.model_dump(), svc.sync(
             body.repos or None, batch=batch,
             do_discover=body.discover, full=body.full, dry_run=True, progress=False, allow_register=False,
+            only_changed=body.only_changed,
         ))
         return res.to_dict()
     # Só iniciar uma indexação (custo na Voyage) gasta o balde de sync, que é de poucas por hora.
@@ -52,6 +56,7 @@ async def sync(body: SyncIn, request: Request,
             principal, body.repos or None,
             batch=None if body.all else (settings.default_batch if body.batch is None else body.batch),
             do_discover=body.discover, pull=body.pull, full=body.full, doc_pages=body.pages,
+            only_changed=body.only_changed,
         )
     except (ValueError, RuntimeError, PermissionError) as e:  # 400 pedido inválido, 403 full sem admin, 409 job ativo
         err = http_error(e)

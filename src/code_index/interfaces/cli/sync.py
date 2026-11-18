@@ -50,7 +50,7 @@ async def _cmd_sync(a: argparse.Namespace, settings: Settings) -> None:
             raise ValueError("--no-wait só vale com servidor (modo remoto); localmente o sync roda neste processo")
         if remote is not None and a.no_wait and not a.dry_run:
             _print_queued(await remote.start_sync(a.repos or None, batch=batch, do_discover=not a.no_discover,
-                                                  pull=not a.no_pull, full=a.full))
+                                                  pull=not a.no_pull, full=a.full, only_changed=a.changed))
             return
         res = await svc.sync(
             a.repos or None,
@@ -59,6 +59,7 @@ async def _cmd_sync(a: argparse.Namespace, settings: Settings) -> None:
             pull=not a.no_pull,
             full=a.full,
             dry_run=a.dry_run,
+            only_changed=a.changed,
         )
     if a.dry_run:
         print("seria processado:" if res.selected else "nada a processar.")
@@ -123,6 +124,9 @@ def register(sub: Subparsers, settings: Settings) -> None:
                    help=f"máximo de repos por execução no lote automático (padrão {settings.default_batch}; "
                         "no modo remoto, o do servidor, até 50)")
     s.add_argument("--all", action="store_true", help="sem limite de lote")
+    s.add_argument("--changed", action="store_true",
+                   help="lote automático só com o que já foi indexado e mudou (push novo, fontes de docs); "
+                        "sem pendentes nem erros")
     s.add_argument("--no-discover", action="store_true", help="não consulta a API do GitHub")
     s.add_argument("--no-pull", action="store_true", help="não atualiza os clones")
     s.add_argument("--full", action="store_true", help="reprocessa tudo, ignorando caches (caro!)")

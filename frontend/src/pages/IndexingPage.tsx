@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { ArrowRight, Play, RefreshCw } from "lucide-react";
+import { ArrowRight, GitPullRequestArrow, Play, RefreshCw } from "lucide-react";
 import type { OrgSummary, SyncJob } from "../api/types";
 import { api } from "../api/endpoints";
 import { describeError } from "../api/client";
@@ -22,7 +22,7 @@ const numberFormat = new Intl.NumberFormat("pt-BR");
 /**
  * Operação da indexação, para curadores (index:write): o job ativo (fila ou rodando, tentativa, andamento por
  * repo), o que pede atenção, a cobertura do índice, os vetores de resumos e cartões (pendentes e geração) e o
- * histórico de jobs de todas as fontes. "Indexar lote" e
+ * histórico de jobs de todas as fontes. "Indexar o que mudou" (push novo, páginas novas das wikis), "Indexar lote" e
  * "Atualizar descoberta" (admin) ficam aqui; o catálogo dos repositórios fica em Repositórios.
  */
 export function IndexingPage() {
@@ -40,7 +40,8 @@ export function IndexingPage() {
   const onFinished = useCallback(() => void reload(), [reload]);
   const jobs = useJobs(canSeeJobs, onFinished);
   const [jobDetail, setJobDetail] = useState<SyncJob | null>(null);
-  const [syncOpen, setSyncOpen] = useState(false);
+  // null = fechado; "changed" = só o que mudou; "batch" = lote automático (inclui pendentes e erros)
+  const [syncMode, setSyncMode] = useState<"changed" | "batch" | null>(null);
   const counts = useRepoCounts(repos);
 
   const openRepos = nav?.can("repos") ? (f: Partial<Filters>) => nav.open("repos", reposHash(f)) : undefined;
@@ -61,6 +62,7 @@ export function IndexingPage() {
   }
 
   const busy = jobs.running !== null;
+  const busyTitle = `Já existe uma indexação ${jobs.running?.status === "queued" ? "na fila" : "em andamento"}`;
 
   return (
     <div className="space-y-8">
@@ -85,15 +87,27 @@ export function IndexingPage() {
             Atualizar
           </Button>
           {canIndex && (
-            <Button
-              size="sm"
-              onClick={() => setSyncOpen(true)}
-              disabled={busy}
-              title={busy ? `Já existe uma indexação ${jobs.running?.status === "queued" ? "na fila" : "em andamento"}` : undefined}
-            >
-              <Play className="size-3.5" aria-hidden="true" />
-              Indexar lote
-            </Button>
+            <>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setSyncMode("batch")}
+                disabled={busy}
+                title={busy ? busyTitle : "Lote automático: push novo, depois pendentes (1ª indexação) e erros"}
+              >
+                <Play className="size-3.5" aria-hidden="true" />
+                Indexar lote
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => setSyncMode("changed")}
+                disabled={busy}
+                title={busy ? busyTitle : "Só o que já foi indexado e mudou: push novo e páginas novas ou alteradas das wikis"}
+              >
+                <GitPullRequestArrow className="size-3.5" aria-hidden="true" />
+                Indexar o que mudou
+              </Button>
+            </>
           )}
         </div>
       </div>
@@ -127,9 +141,12 @@ export function IndexingPage() {
 
       <JobDialog job={jobDetail} onClose={() => setJobDetail(null)} />
       <SyncDialog
-        open={syncOpen}
-        onClose={() => setSyncOpen(false)}
+        // Trocar de modo recria o diálogo: o tamanho do lote volta ao padrão do modo.
+        key={syncMode === "changed" ? "changed" : "batch"}
+        open={syncMode !== null}
+        onClose={() => setSyncMode(null)}
         names={null}
+        onlyChanged={syncMode === "changed"}
         onFinished={onFinished}
         onStarted={() => void jobs.refresh()}
       />

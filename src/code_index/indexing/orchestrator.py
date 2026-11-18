@@ -97,6 +97,7 @@ class Indexer:
         allow_register: bool = True,
         doc_pages: frozenset[str] | None = None,
         on_progress: ProgressSink | None = None,
+        only_changed: bool = False,
     ) -> SyncResult:
         """Sincroniza e indexa.
 
@@ -109,6 +110,8 @@ class Indexer:
         allow_register: aceita nomes desconhecidos (URL, 'org/repo', diretório) registrando-os
                como repo avulso. Desligado para chamadas remotas sem scope admin.
         doc_pages: só para fontes de documentação: sincroniza apenas estas páginas (caminho sem idioma).
+        only_changed: no lote automático, só o que já foi indexado e mudou (push novo, fontes de docs); sem
+               pendentes nem erros (`pick_batch`).
         on_progress: recebe retratos do andamento (etapa, e por repo: arquivos e trechos processados).
             Falhas ao publicar não interrompem o sync.
         """
@@ -118,7 +121,8 @@ class Indexer:
             if do_discover and orgs:
                 await self._discover_all(orgs, res)
             rows = await self._load_rows(orgs)
-            res.selected, res.remaining, _ = await self._select(names, rows, batch, orgs, allow_register, dry_run=True)
+            res.selected, res.remaining, _ = await self._select(names, rows, batch, orgs, allow_register, dry_run=True,
+                                                                only_changed=only_changed)
             return res
         tracker = SyncProgress()
         publish = _publisher(tracker, on_progress)
@@ -131,7 +135,8 @@ class Indexer:
             tracker.set_phase("select")
             await publish()
             rows = await self._load_rows(orgs)
-            selected, remaining, rows = await self._select(names, rows, batch, orgs, allow_register)
+            selected, remaining, rows = await self._select(names, rows, batch, orgs, allow_register,
+                                                           only_changed=only_changed)
             res.selected = selected
             res.remaining = remaining
 
@@ -223,6 +228,7 @@ class Indexer:
         allow_register: bool = True,
         *,
         dry_run: bool = False,
+        only_changed: bool = False,
     ) -> tuple[list[str], int, dict[str, RepoState]]:
         """Devolve (selecionados, quantos ficaram para os próximos lotes, linhas atualizadas).
         dry_run: nome desconhecido entra na seleção com o nome que teria, sem ser registrado."""
@@ -244,7 +250,7 @@ class Indexer:
                 selected.append(resolved)
             return list(dict.fromkeys(selected)), 0, rows
         manual_changed = await self._manual_changed(rows)
-        selected, remaining = pick_batch(rows, batch, orgs, manual_changed)
+        selected, remaining = pick_batch(rows, batch, orgs, manual_changed, only_changed=only_changed)
         return selected, remaining, rows
 
     @staticmethod

@@ -152,6 +152,9 @@ def test_sync_all_full_e_vetores_dry_run(server: Server, tmp_path: Any) -> None:
     # prévia com --all (sem limite de lote) e --full (sem custo)
     dry = indexador.post("/api/v1/sync", json={"all": True, "full": True, "discover": False, "dry_run": True})
     assert dry.status_code == 202 and dry.json()["selected"] == ["meu-repo"] and dry.json()["remaining"] == 0
+    # só o que mudou (--changed): repo pendente (1ª indexação) fica de fora
+    dry = indexador.post("/api/v1/sync", json={"only_changed": True, "discover": False, "dry_run": True})
+    assert dry.status_code == 202 and dry.json()["selected"] == []
     # --full ignora os caches (caro): só admin enfileira
     r = indexador.post("/api/v1/sync", json={"repos": ["meu-repo"], "full": True, "discover": False})
     assert r.status_code == 403 and "full" in r.json()["detail"]
@@ -163,6 +166,9 @@ def test_sync_all_full_e_vetores_dry_run(server: Server, tmp_path: Any) -> None:
     job = _wait_job(admin, r.json()["job_id"])
     assert job["params"]["all"] is True and job["params"]["batch"] is None and job["params"]["full"] is True
     assert job["status"] == "done" and list(job["result"]["indexed"]) == ["meu-repo"], job
+    # indexado: diretório local entra sempre no "o que mudou" (revarrer é barato)
+    dry = indexador.post("/api/v1/sync", json={"only_changed": True, "discover": False, "dry_run": True})
+    assert dry.json()["selected"] == ["meu-repo"]
 
     # `vectors embed --dry-run`: conta na hora, sem custo e sem gastar o balde de sync
     assert leitor.post("/api/v1/vectors/embed", json={"dry_run": True}).status_code == 403

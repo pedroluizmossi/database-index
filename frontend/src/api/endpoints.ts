@@ -120,10 +120,15 @@ export const api = {
     postJson<unknown>("/api/v1/docs/links", body),
   removeDocLink: (q: { doc_repo: string; doc_path: string; repo: string }) =>
     sendJson<{ removed: boolean }>("DELETE", `/api/v1/docs/links?${new URLSearchParams(q).toString()}`),
-  syncPreview: (repos: string[] | null, batch: number) =>
-    postJson<SyncResult>("/api/v1/sync", { repos, batch, discover: repos === null, pull: true, dry_run: true }),
-  syncStart: (repos: string[] | null, batch: number) =>
-    postJson<SyncStart>("/api/v1/sync", { repos, batch, discover: repos === null, pull: true, dry_run: false }),
+  // onlyChanged: lote automático só com o que já foi indexado e mudou (push novo, fontes de docs), sem pendentes
+  syncPreview: (repos: string[] | null, batch: number, onlyChanged = false) =>
+    postJson<SyncResult>("/api/v1/sync", {
+      repos, batch, discover: repos === null, pull: true, dry_run: true, only_changed: onlyChanged,
+    }),
+  syncStart: (repos: string[] | null, batch: number, onlyChanged = false) =>
+    postJson<SyncStart>("/api/v1/sync", {
+      repos, batch, discover: repos === null, pull: true, dry_run: false, only_changed: onlyChanged,
+    }),
   syncJob: (id: string) => getJson<SyncJob>(`/api/v1/sync/jobs/${seg(id)}`),
   syncJobs: (limit = 20) => getJson<SyncJob[]>("/api/v1/sync/jobs", { query: { limit } }),
   // vetores das perguntas dos resumos e dos cartões (index:write): o estado não custa; gerar custa na Voyage

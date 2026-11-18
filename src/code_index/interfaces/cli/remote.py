@@ -436,10 +436,11 @@ class RemoteService:
 
     async def start_sync(self, repos: list[str] | None = None, *, batch: int | None | str = "default",
                          do_discover: bool = True, pull: bool = True, full: bool = False,
-                         pages: list[str] | None = None, dry_run: bool = False) -> dict[str, Any]:
+                         pages: list[str] | None = None, dry_run: bool = False,
+                         only_changed: bool = False) -> dict[str, Any]:
         """POST /sync. `batch`: None = sem limite (--all), "default" = padrão do servidor."""
         body: dict[str, Any] = {"repos": repos or None, "discover": do_discover, "pull": pull, "full": full,
-                                "dry_run": dry_run, "all": batch is None}
+                                "dry_run": dry_run, "all": batch is None, "only_changed": only_changed}
         if isinstance(batch, int):
             body["batch"] = batch
         if pages:
@@ -486,9 +487,9 @@ class RemoteService:
 
     async def sync(self, repos: list[str] | None = None, *, batch: int | None | str = "default",
                    do_discover: bool = True, pull: bool = True, full: bool = False, dry_run: bool = False,
-                   **_: Any) -> SyncResult:
+                   only_changed: bool = False, **_: Any) -> SyncResult:
         res = await self.start_sync(repos, batch=batch, do_discover=do_discover, pull=pull, full=full,
-                                    dry_run=dry_run)
+                                    dry_run=dry_run, only_changed=only_changed)
         if dry_run:
             return _build(SyncResult, res)
         return await self.job_result(res["job_id"])

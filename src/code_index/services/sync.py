@@ -55,10 +55,12 @@ class SyncMixin(VectorsMixin, ApisMixin, EnrichMixin, TestsMixin, GraphMixin):
         allow_register: bool = True,
         doc_pages: frozenset[str] | None = None,
         on_progress: ProgressSink | None = None,
+        only_changed: bool = False,
     ) -> SyncResult:
         """Indexa os nomes informados, ou um lote automático.
 
         batch: máximo de repos no lote automático; None = sem limite; "default" = settings.default_batch.
+        only_changed: lote automático só com o que mudou (push novo, fontes de docs), sem pendentes nem erros.
         """
         if isinstance(batch, str):
             batch = self.settings.default_batch
@@ -73,6 +75,7 @@ class SyncMixin(VectorsMixin, ApisMixin, EnrichMixin, TestsMixin, GraphMixin):
             allow_register=allow_register,
             doc_pages=doc_pages,
             on_progress=on_progress,
+            only_changed=only_changed,
         )
         if not dry_run:
             await self._ensure_search_indexes()
@@ -184,17 +187,20 @@ class SyncMixin(VectorsMixin, ApisMixin, EnrichMixin, TestsMixin, GraphMixin):
         doc_pages: list[str] | None = None,
         openapi_domain: str | None = None,
         openapi_services: list[str] | None = None,
+        only_changed: bool = False,
     ) -> JobRecord:
         """Enfileira uma indexação e devolve o job (`queued`, já com id). Quem executa é o worker
         (`run_sync_worker`: embutido no `serve` ou o `code-index worker`). Um job ativo por vez.
 
         `batch` None = sem limite de lote (o `--all` da CLI). `full`: reprocessa ignorando caches (caro; só
-        admin). `doc_pages`: só estas páginas (sem idioma) de UMA fonte de documentação (o `--page` da CLI).
+        admin). `only_changed`: lote automático só com o que mudou. `doc_pages`: só estas páginas (sem idioma) de UMA fonte de documentação (o `--page` da CLI).
         Levanta RuntimeError (ActiveJobExists) se já houver um job na fila ou rodando.
         """
         actor = principal.actor if principal else "operador local"
         params: dict[str, Any] = {"repos": names, "batch": batch, "all": batch is None,
                                   "discover": do_discover, "pull": pull}
+        if only_changed and not names:
+            params["only_changed"] = True
         if full:
             if principal is not None and not principal.has(ADMIN):
                 raise PermissionError("só administradores pedem reprocessamento completo (full): ignora os caches")
@@ -342,6 +348,7 @@ class SyncMixin(VectorsMixin, ApisMixin, EnrichMixin, TestsMixin, GraphMixin):
                     do_discover=bool(params.get("discover", True)), pull=bool(params.get("pull", True)),
                     full=bool(params.get("full", False)), progress=False, allow_register=job.allow_register,
                     doc_pages=frozenset(services) if services is not None else None, on_progress=save_progress,
+                    only_changed=bool(params.get("only_changed", False)),
                 )
             status, result = "done", res.to_dict()
             if res.all_failed:

@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
-from ....domain.auth import ADMIN, SEARCH_READ, Principal
+from ....domain.auth import ADMIN, INDEX_WRITE, SEARCH_READ, Principal
 from ..deps import audited
 from ..security import get_service, require
 
@@ -83,6 +83,23 @@ async def skipped(request: Request, repo: str | None = Query(None, max_length=30
         return await get_service(request).skipped_files(repo, limit=limit)
     except ValueError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from None
+
+
+class EstimateIn(BaseModel):
+    repos: list[str] | None = Field(None, max_length=500, description="só estes (padrão: os não indexados)")
+    org: str | None = None
+    limit: int = Field(100, ge=1, description="máximo de chamadas ao GitHub (teto: GITHUB_ESTIMATE_MAX)")
+    force: bool = Field(False, description="conta de novo quem já foi contado no mesmo push")
+    dry_run: bool = Field(False, description="só diz quantas chamadas faria")
+
+
+@router.post("/api/v1/repos/estimate", tags=["repos"],
+             summary="Estima os arquivos indexáveis pela árvore do GitHub (1 chamada por repo; sem custo de embedding)")
+async def estimate_files(body: EstimateIn, request: Request,
+                         principal: Principal = Depends(require(INDEX_WRITE))) -> dict[str, Any]:
+    return await audited(request, principal, "repo:estimate", body.model_dump(), get_service(request).estimate_files(
+        body.repos, org=body.org, limit=body.limit, force=body.force, dry_run=body.dry_run,
+    ))
 
 
 @router.post("/api/v1/repos", tags=["repos"], status_code=201)

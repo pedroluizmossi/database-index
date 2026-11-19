@@ -126,6 +126,30 @@ def test_saude_e_autenticacao(server: Server) -> None:
     assert client(server).get("/api/v1/me", params={"token": server.tokens["leitor"]}).status_code == 401
 
 
+def test_sistema_so_admin_e_sem_segredos(server: Server, monkeypatch: pytest.MonkeyPatch) -> None:
+    from code_index.infra.github import GitHubClient
+
+    monkeypatch.setattr(GitHubClient, "rate_remaining", lambda self: 4321)  # sem rede
+    assert client(server, "indexador").get("/api/v1/system").status_code == 403
+    res = client(server, "admin-bot").get("/api/v1/system")
+    assert res.status_code == 200
+    body = res.json()
+    flat = {s["name"]: s for g in body["settings"] for s in g["settings"]}
+    # segredo nunca sai: só se está definido
+    assert flat["auth_secret"] == {**flat["auth_secret"], "secret": True, "value": None, "defined": True}
+    assert flat["google_client_secret"]["value"] is None and flat["google_client_secret"]["defined"]
+    assert "s" * 48 not in res.text
+    assert "***@" in flat["database_url"]["value"] or "@" not in flat["database_url"]["value"]
+    assert "remote_token" not in flat                                  # só da CLI
+    assert flat["admin_emails"]["origin"] == "env" or flat["admin_emails"]["value"] == [ADMIN_EMAIL]
+    assert flat["sync_queue_max"]["hint"] and flat["sync_queue_max"]["env"] == "CODE_INDEX_SYNC_QUEUE_MAX"
+    health = body["health"]
+    assert health["github"]["rate_remaining"] == 4321
+    assert health["database"]["migrations"]["count"] > 0 and "vector" in health["database"]["extensions"]
+    assert {m["role"] for m in health["models"]} == {"embedding", "rerank"}
+    assert body["profiles"] is not None
+
+
 def test_scopes(server: Server) -> None:
     leitor, indexador, admin = client(server, "leitor"), client(server, "indexador"), client(server, "admin-bot")
     assert leitor.get("/api/v1/repos").status_code == 200
@@ -458,7 +482,8 @@ async def _mcp(server: Server, token: str) -> tuple[list[str], Any, Any]:
             symbol = await s.call_tool("find_symbol", {"name": "Qualquer"})
             grep = await s.call_tool("grep_code", {"pattern": "ola"})
             find = await s.call_tool("find_repos", {"query": "envio de e-mail"})
-            assert not find.is_error and json.loads(find.content[0].text) == {"results": []}
+            found = json.loads(find.content[0].text)
+            assert not find.is_error and found["results"] == [] and "list_repos" in found["note"]
             card = await s.call_tool("repo_card", {"repo": "nao-existe"})
             assert card.is_error
             for tool in ("find_callers", "find_callees"):   # sem aresta: não é erro, e explica o porquê

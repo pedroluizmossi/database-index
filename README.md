@@ -565,7 +565,10 @@ Não existe mais MCP via stdio.
 Um sync pedido pela API ou pela interface entra numa fila durável no Postgres (`sync_jobs`) e é executado por um
 worker: o embutido no `serve` ou um processo separado (`uv run code-index worker`, que encerra limpo com
 SIGINT/SIGTERM devolvendo o job à fila). Com o worker separado, desligue o embutido e reimplante a API à vontade
-durante uma indexação. Só um job fica ativo (na fila ou rodando) por vez: outro pedido recebe 409. O `code-index
+durante uma indexação. Vários pedidos esperam na fila e um roda por vez, do mais antigo para o mais novo. A fila tem teto
+(`CODE_INDEX_SYNC_QUEUE_MAX`, padrão 10), e um repo que já está num job da fila não entra em outro: os dois casos
+recebem 409. Um job que ainda não começou sai da fila com `code-index sync --cancel ID`, com
+`POST /api/v1/sync/jobs/{id}/cancel` (quem pediu ou admin) ou pelo botão em Indexação. O `code-index
 sync` da CLI continua rodando direto, em primeiro plano; enquanto ele segura a trava, o worker deixa o job na fila.
 
 ```bash
@@ -705,8 +708,8 @@ uv run code-index user disable usuario@x.com      # e `user enable`
 | `GET /api/v1/me` | search:read |
 | `POST /api/v1/search` · `GET /api/v1/files/{repo}/{path}` | search:read |
 | `GET /api/v1/repos` · `GET /api/v1/orgs` | search:read |
-| `POST /api/v1/sync` (enfileira o job; 409 se já há um ativo) · `GET /api/v1/sync/jobs` · `GET /api/v1/sync/jobs/{id}` | index:write |
-| `POST/DELETE /api/v1/repos…` · `POST/PATCH/DELETE /api/v1/orgs…` · `GET /api/v1/audit` | admin |
+| `POST /api/v1/sync` (enfileira o job; 409 com a fila cheia ou repo já na fila) · `GET /api/v1/sync/jobs` · `GET /api/v1/sync/jobs/{id}` · `POST /api/v1/sync/jobs/{id}/cancel` | index:write |
+| `POST/DELETE /api/v1/repos…` · `POST/PATCH/DELETE /api/v1/orgs…` · `GET /api/v1/audit` · `GET /api/v1/system` (configuração efetiva sem segredos, saúde e perfis; aba Sistema) | admin |
 | `GET/POST/DELETE /api/v1/tokens` | sessão do navegador (emitir); dono ou admin (revogar, inclusive clientes OAuth) |
 | `GET /api/v1/me/usage` | search:read (o próprio uso) |
 | `GET /api/v1/usage` · `GET /api/v1/users` | admin |

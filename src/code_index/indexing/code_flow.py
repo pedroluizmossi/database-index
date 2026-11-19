@@ -20,6 +20,7 @@ from typing import Annotated, Any
 
 import asyncpg
 import cocoindex as coco
+import litellm
 from cocoindex.connectors import localfs, postgres
 from cocoindex.ops.litellm import LiteLLMEmbedder
 from cocoindex.ops.text import RecursiveSplitter, detect_code_language
@@ -31,8 +32,13 @@ from ..domain.models import Repo
 from ..infra import llm
 from ..settings import Settings, get_settings
 from .content import CONTENT_LOGIC, file_language, redact, skip_reason
-from .context import Decl, chunk_header, chunk_spans, declarations, full_lines, symbol_names
+from .chunking import (
+    STRUCTURED_LANGS, chunking_for_tokens, enclosing_member, heading_path, markdown_headings, markdown_spans,
+    package_name, structured_spans,
+)
+from .context import Chunking, Decl, chunk_header, chunk_spans, declarations, full_lines, symbol_names
 from ..domain import doc_links
+from ..domain.sync_errors import explain_error
 from ..domain.doc_content import strip_embedded_blobs
 from ..domain.doc_links import (
     MANIFESTS, alias_is_strong, blank_lines, manifest_aliases, page_mentions, page_path, parse_front_matter,
@@ -97,9 +103,17 @@ async def process_chunk(
     language: str,
     id_gen: IdGenerator,
     table: postgres.TableTarget[CodeChunk],
-) -> None:
+) -> str | None:
+    """Embeda e grava o trecho. Devolve None, ou o motivo quando o modelo recusou o texto (erro do pedido, que
+    repetir não resolve: texto maior que o contexto, entrada inválida). Erro de rede/servidor sobe e o arquivo
+    conta como erro (o CocoIndex tenta de novo no próximo sync)."""
     # Cabeçalho (caminho, linguagem, classe envolvente, declarações) dá contexto ao embedding.
-    embedding = await coco.use_context(EMBEDDER).embed(f"{item.header}\n{item.code}", input_type="document")
+    text = f"{item.header}\n{item.code}"
+    limit = get_settings().embed_max_chars  # rede de segurança: só uma linha gigante sozinha passa disso
+    try:
+        embedding = await coco.use_context(EMBEDDER).embed(text[:limit] if limit else text, input_type="document")
+    except litellm.BadRequestError as e:  # inclui ContextWindowExceededError
+        return f"linhas {item.start_line}-{item.end_line}: {explain_error(str(e))}"
     table.declare_row(
         row=CodeChunk(
             repo=repo,
@@ -114,6 +128,7 @@ async def process_chunk(
             embedding=embedding,
         )
     )
+    return None
 
 
 @dataclass
@@ -184,13 +199,14 @@ class DocTargets:
                 self.mentions.__coco_memo_key__(), self.skipped.__coco_memo_key__())
 
 
-@coco.fn(memo=True, version=7)  # 7: linhas das declarações, trechos sem repetição, sdl/pdl
+@coco.fn(memo=True, version=9)  # 9: trechos pela estrutura (seções, blocos de config), alvo em tokens, cabeçalho rico
 async def process_file(
     file: FileLike,
     repo: str,
     root: str,
     kind: str,
     link_rules: tuple[tuple[str, tuple[str, ...]], ...],
+    chunking: Chunking,
     table: postgres.TableTarget[CodeChunk],
     symbols_table: postgres.TableTarget[CodeSymbol],
     doc_targets: DocTargets,
@@ -234,21 +250,32 @@ async def process_file(
             doc_targets.aliases.declare_row(row=RepoAlias(
                 repo=repo, alias=alias, origin=origin, path=path, strong=alias_is_strong(alias),
             ))
-    chunks = _splitter.split(
-        text,
-        chunk_size=1500,
-        min_chunk_size=300,
-        chunk_overlap=200,
-        language=splitter_language,
-    )
     lines = text.split("\n")
     decls = declarations(text, language, file.file_path.path.name, file_types)
     _declare_symbols(symbols_table, repo, path, language, decls, lines)
+    headings = markdown_headings(lines) if language == "markdown" else []
+    if language == "markdown":
+        spans = markdown_spans(lines, chunking)
+    elif language in STRUCTURED_LANGS:
+        spans = structured_spans(lines, language, chunking)
+    else:
+        chunks = _splitter.split(
+            text,
+            chunk_size=chunking.size,
+            min_chunk_size=chunking.min_size,
+            chunk_overlap=chunking.overlap,
+            language=splitter_language,
+        )
+        spans = chunk_spans([(c.start.line, c.end.line, c.end.column) for c in chunks], lines, chunking)
+    package = package_name(text, language)
     items = []
-    for start, end in chunk_spans([(c.start.line, c.end.line, c.end.column) for c in chunks], lines):
-        header = chunk_header(repo, path, language, decls, start, end)
+    for start, end in spans:
+        crumbs = heading_path(headings, start, end) if headings else None
+        header = chunk_header(repo, path, language, decls, start, end, package=package,
+                              member=enclosing_member(lines, decls, start, language),
+                              sections=None if page_title else crumbs)
         if page_title:
-            header += f"\n# página: {page_title}"
+            header += "\n# página: " + " › ".join([page_title, *(crumbs or [])])
         items.append(ChunkInput(
             code=full_lines(lines, start, end),
             header=header,
@@ -257,7 +284,12 @@ async def process_file(
             end_line=end,
         ))
     id_gen = IdGenerator()
-    await coco.map(process_chunk, items, repo, path, language, id_gen, table)
+    refused = [r for r in await coco.map(process_chunk, items, repo, path, language, id_gen, table) if r]
+    if refused:
+        # Visível em "descartados" (tela e `code-index skips`): o resto do arquivo entrou no índice.
+        more = f" (e mais {len(refused) - 1})" if len(refused) > 1 else ""
+        doc_targets.skipped.declare_row(row=SkippedFile(
+            repo=repo, path=path, reason=f"trecho sem embedding, {refused[0]}{more}"[:500], size_bytes=size))
 
 
 def _declare_symbols(
@@ -318,11 +350,12 @@ def _walk_repo(repo: Repo) -> Any:
 async def index_repo(
     repo: Repo,
     revision: str,
+    chunking: Chunking,
     table: postgres.TableTarget[CodeChunk],
     symbols_table: postgres.TableTarget[CodeSymbol],
     doc_targets: DocTargets,
 ) -> None:
-    """Memoizado por (repo, revision): se o commit não mudou, o repo nem é percorrido
+    """Memoizado por (repo, revision, chunking): se o commit e o tamanho dos trechos não mudaram, o repo nem é percorrido
     e as linhas já gravadas são mantidas. Por isso o custo de um sync é proporcional
     aos repos que mudaram, não ao tamanho da org."""
     root = repo.local_path(get_settings().repos_dir)
@@ -334,8 +367,14 @@ async def index_repo(
             ))
     rules = tuple((r.path, r.repos) for r in repo.doc_source.links) if repo.doc_source else ()
     await coco.mount_each(
-        process_file, files.items(), repo.name, str(root), repo.kind, rules, table, symbols_table, doc_targets
+        process_file, files.items(), repo.name, str(root), repo.kind, rules, chunking,
+        table, symbols_table, doc_targets,
     )
+
+
+def chunking_from(settings: Settings) -> Chunking:
+    """Tamanho dos trechos pelas configurações. É argumento do `process_file` (memo): mudar reprocessa."""
+    return chunking_for_tokens(settings.chunk_tokens, settings.chunk_min_tokens, settings.chunk_max_tokens)
 
 
 async def count_repo_files(repo: Repo) -> int:
@@ -385,16 +424,17 @@ async def app_main(repos: list[tuple[Repo, str]]) -> None:
     )
     doc_targets = await _mount_doc_tables(settings)
     tracker = progress.active()
+    chunking = chunking_from(settings)
     for repo, revision in repos:
         subpath = coco.component_subpath("repo", repo.name)
-        if tracker is not None and tracker.tracks(repo.name):
+        if tracker is not None and tracker.tracks(repo.name):  # todos: os pedidos e os que o CocoIndex percorre
             # Contadores próprios do repo (arquivos/trechos) para o progresso do job. O grupo não muda o
             # caminho do componente: nada é reprocessado por causa dele.
             with coco.stats_group(repo.name) as group:
                 tracker.attach(repo.name, group)
-                await coco.mount(subpath, index_repo, repo, revision, table, symbols_table, doc_targets)
+                await coco.mount(subpath, index_repo, repo, revision, chunking, table, symbols_table, doc_targets)
         else:
-            await coco.mount(subpath, index_repo, repo, revision, table, symbols_table, doc_targets)
+            await coco.mount(subpath, index_repo, repo, revision, chunking, table, symbols_table, doc_targets)
 
 
 async def _mount_doc_tables(settings: Settings) -> DocTargets:

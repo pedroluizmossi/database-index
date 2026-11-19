@@ -188,26 +188,36 @@ def symbol_names(decls: list[Decl], start_line: int, end_line: int) -> list[str]
     return list(dict.fromkeys(([enclosing] if enclosing else []) + names))
 
 
-def chunk_header(repo: str, path: str, language: str, decls: list[Decl], start_line: int, end_line: int) -> str:
-    """Cabeçalho do texto embedado. Ex.:
+def chunk_header(repo: str, path: str, language: str, decls: list[Decl], start_line: int, end_line: int, *,
+                 package: str | None = None, member: str | None = None, sections: list[str] | None = None) -> str:
+    """Cabeçalho do texto embedado (só vai ao modelo; o trecho guardado fica limpo). Ex.:
     # org__repo/src/HmacServiceImpl.java (java)
-    # em: HmacServiceImpl · declara: sign, verify
+    # pacote: br.com.exemplo.security
+    # em: HmacServiceImpl › public String sign(String payload) · declara: verify
+
+    `member`: assinatura do método em cujo corpo o trecho começa (trecho do meio de um método grande).
+    `sections`: caminho dos títulos (markdown), no lugar da seção deduzida das declarações.
     """
     before = [d for d in decls if d.line < start_line]
     inside = [d for d in decls if start_line <= d.line <= end_line]
     parts: list[str] = []
 
     enclosing = next((d.name for d in reversed(before) if d.kind == "container"), None)
-    if enclosing:
-        parts.append(f"em: {enclosing}")
-    section = next((d.name for d in reversed(before) if d.kind == "section"), None)
-    if section and not any(d.kind == "section" for d in inside):
-        parts.append(f"seção: {section}")
+    if enclosing or member:
+        parts.append("em: " + " › ".join(p for p in (enclosing, member) if p))
+    if sections:
+        parts.append("seção: " + " › ".join(sections))
+    else:
+        section = next((d.name for d in reversed(before) if d.kind == "section"), None)
+        if section and not any(d.kind == "section" for d in inside):
+            parts.append(f"seção: {section}")
     names = list(dict.fromkeys(d.name for d in inside))[:_MAX_NAMES]
     if names:
         parts.append("declara: " + ", ".join(names))
 
     first = f"# {repo}/{path}" + (f" ({language})" if language else "")
+    if package:
+        first += f"\n# pacote: {package}"
     return first if not parts else first + "\n# " + " · ".join(parts)
 
 
@@ -215,7 +225,46 @@ MIN_CHUNK_CHARS = 120     # trecho menor que isto (ex.: "  }\n}") é fundido ao 
 MAX_MERGED_CHARS = 2400   # ... desde que o resultado não passe disto
 
 
-def chunk_spans(raw: list[tuple[int, int, int]], lines: list[str]) -> list[tuple[int, int]]:
+@dataclass(frozen=True)
+class Chunking:
+    """Tamanho dos trechos, em caracteres. O splitter (tree-sitter) corta nas fronteiras da sintaxe mirando `size`;
+    trecho que, esticado para linhas inteiras, passa de `max_chars` vira janelas de linhas inteiras (com
+    `overlap` caracteres de sobreposição), nunca texto cortado. Faz parte da chave de memo do sync: mudar
+    reprocessa os arquivos (só os textos novos vão ao embedding)."""
+
+    size: int = 1500
+    min_size: int = 300
+    overlap: int = 200
+    max_chars: int = 4500
+
+    def __post_init__(self) -> None:
+        if not 0 < self.min_size <= self.size <= self.max_chars or not 0 <= self.overlap < self.size:
+            raise ValueError("tamanhos de trecho inválidos: 0 < min <= size <= max e 0 <= overlap < size")
+
+
+def line_windows(lines: list[str], start: int, end: int, target: int, overlap: int) -> list[tuple[int, int]]:
+    """Divide as linhas `start..end` em janelas de linhas inteiras de até ~`target` caracteres, cada uma repetindo
+    ~`overlap` caracteres do fim da anterior. Uma linha maior que `target` fica sozinha (inteira)."""
+    out: list[tuple[int, int]] = []
+    i = start
+    while i <= end:
+        size, j = 0, i
+        while j <= end and (j == i or size + len(lines[j - 1]) + 1 <= target):
+            size += len(lines[j - 1]) + 1
+            j += 1
+        out.append((i, j - 1))
+        if j > end:
+            break
+        back, k = 0, j - 1  # recua até ~overlap caracteres, sem voltar ao início da janela
+        while k > i and back + len(lines[k - 1]) + 1 <= overlap:
+            back += len(lines[k - 1]) + 1
+            k -= 1
+        i = k + 1 if k + 1 > i else j
+    return out
+
+
+def chunk_spans(raw: list[tuple[int, int, int]], lines: list[str],
+                chunking: Chunking | None = None) -> list[tuple[int, int]]:
     """Intervalos de linhas (inteiras) dos trechos, a partir de (linha inicial, linha final, coluna final)
     do splitter.
 
@@ -244,4 +293,14 @@ def chunk_spans(raw: list[tuple[int, int, int]], lines: list[str]) -> list[tuple
             out.append((start, end))
     if len(out) > 1 and size(*out[0]) < MIN_CHUNK_CHARS and size(out[0][0], out[1][1]) <= MAX_MERGED_CHARS:
         out[0:2] = [(out[0][0], max(out[0][1], out[1][1]))]
-    return out
+    if chunking is None:
+        return out
+    # Trecho que ficou grande demais ao virar linhas inteiras (o splitter cortou no meio de linhas longas, ou uma
+    # declaração enorme sem ponto de corte): janelas de linhas inteiras, sem perder texto.
+    final: list[tuple[int, int]] = []
+    for start, end in out:
+        if end > start and size(start, end) > chunking.max_chars:
+            final.extend(line_windows(lines, start, end, chunking.size, chunking.overlap))
+        else:
+            final.append((start, end))
+    return final

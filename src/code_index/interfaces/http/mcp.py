@@ -299,16 +299,21 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
 
     @server.tool()
     async def read_file_lines(repo: str, path: str, start_line: int | None = None, end_line: int | None = None,
-                              ctx: Context | None = None) -> str:
+                              ctx: Context | None = None) -> dict:
         """Lê um arquivo (ou intervalo de linhas) de um repositório indexado, com números de linha.
 
         `repo` aceita o nome como em list_repos ('org__repo') ou só 'repo'. Sem intervalo, devolve
         até 2000 linhas e diz como continuar. Arquivos ocultos (.env, .git/...) não são lidos.
         Segredos (senhas, tokens, chaves) aparecem mascarados como ***.
+        Retorna {"repo", "path", "content"}: `content` são as linhas, cada uma com o número na frente.
         """
+        async def fn(svc: CodeIndexService) -> dict:
+            # dict, não str: o SDK embrulha str em {"result": ...} e o cliente recebia JSON dentro de texto.
+            return {"repo": repo, "path": path, "content": await svc.read_file(repo, path, start_line, end_line)}
+
         return await run_tool(
             ctx, "read_file_lines", {"repo": repo, "path": path, "start_line": start_line, "end_line": end_line},
-            "read", None, lambda svc: svc.read_file(repo, path, start_line, end_line),
+            "read", None, fn,
         )
 
     @server.tool()
@@ -372,8 +377,9 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
         """Descobre QUAL repo cuida de um assunto, pelo cartão do repo (resumo, capacidades, tags, operações {ex:contract}).
 
         Use antes de search_code quando não souber o repo: "quem envia e-mail", "serviço de tenants".
-        Devolve {"results": [...]}, cada um com repo, score, summary, kind e tags; filtre search_code por esses repos em seguida.
-        Os cartões são escritos por agents a partir do código: confirme no código antes de afirmar.
+        Devolve {"results": [...], "note"?}, cada um com repo, score, summary, kind, tags e `card` (false = o repo ainda
+        não tem cartão e casou só pelo nome, catálogo ou operações); filtre search_code por esses repos em seguida.
+        Só repos indexados entram. Os cartões são escritos por agents a partir do código: confirme no código.
 
         Args:
             query: assunto ou pergunta, em português ou inglês.
@@ -382,7 +388,16 @@ def build_mcp(settings: Settings, get_service: ServiceGetter, limiter: RateLimit
         limit = max(1, min(limit, 50))
 
         async def fn(svc: CodeIndexService) -> dict:
-            return {"results": await svc.find_repos(query, limit=limit)}
+            hits = await svc.find_repos(query, limit=limit)
+            out: dict[str, Any] = {"results": hits}
+            if not hits:
+                out["note"] = ("nenhum repo indexado casou. A busca olha nome, cartão, catálogo e operações dos "
+                               "contratos (sem sinônimos): tente outras palavras, o nome técnico do serviço, "
+                               "list_repos(name=...) ou search_code com a pergunta.")
+            elif not any(h.get("card") for h in hits):
+                out["note"] = ("nenhum destes repos tem cartão ainda: casaram só pelo nome, catálogo ou operações. "
+                               "Confira com repo_card ou search_code antes de escolher.")
+            return out
 
         return await run_tool(ctx, "find_repos", {"query": query, "limit": limit}, "read", None, fn)
 

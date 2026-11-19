@@ -24,7 +24,7 @@ async def _wait(svc: Any, job_id: str) -> Any:
     """Executa o job pela fila, como o worker (embutido no `serve` ou `code-index worker`)."""
     assert await svc.run_sync_worker(once=True) == 1
     job = await svc.get_job(job_id)
-    assert job.status in ("done", "failed"), job
+    assert job.status in ("done", "failed", "stopped"), job
     return job
 
 
@@ -135,17 +135,106 @@ async def _set(settings: Settings, sql: str, *args: Any) -> None:
         await conn.close()
 
 
-async def test_pedido_enfileira_e_recusa_segundo_ativo(int_settings: Settings, fake_llm: Any) -> None:
+async def test_fila_com_varios_pedidos_teto_repetido_e_cancelamento(
+    int_settings: Settings, tmp_path: Path, fake_llm: Any
+) -> None:
+    from code_index.infra.job_store import AlreadyQueued, QueueFull
+
+    for name in ("a", "b"):
+        (tmp_path / name / "src").mkdir(parents=True)
+        (tmp_path / name / "src" / "x.py").write_text("def f():\n    return 1\n")
+    settings = int_settings.model_copy(update={"sync_queue_max": 3})
+    async with open_service(settings) as svc:
+        await svc.add_repo(str(tmp_path / "a"), name="a")
+        await svc.add_repo(str(tmp_path / "b"), name="b")
+        first = await svc.start_sync(None, None, batch=1, do_discover=False)
+        assert first.status == "queued" and first.attempts == 0 and first.allow_register
+        second = await svc.start_sync(None, ["a"], batch=5, do_discover=False)   # enfileira atrás do primeiro
+        with pytest.raises(AlreadyQueued, match="a"):                           # repo já num job da fila
+            await svc.start_sync(None, ["a", "b"], batch=5, do_discover=False)
+        third = await svc.start_sync(None, ["b"], batch=5, do_discover=False)
+        with pytest.raises(QueueFull):                                          # teto da fila (3)
+            await svc.start_sync(None, None, batch=1, do_discover=False)
+        with pytest.raises(QueueFull):                                          # vale no banco também
+            await svc._jobs.create("outro", {}, max_queued=3)
+
+        canceled = await svc.cancel_job(None, second.id)
+        assert canceled.status == "canceled" and "cancelado" in (canceled.error or "")
+        assert (await svc._jobs.active()).id == first.id                        # o mais antigo primeiro
+
+        # Um rodando por vez: com o primeiro reservado, ninguém leva o terceiro.
+        leased = await svc._jobs.lease_next(worker="w1", lease_seconds=60)
+        assert leased is not None and leased.id == first.id
+        assert await svc._jobs.lease_next(worker="w2", lease_seconds=60) is None
+        assert (await svc._jobs.active()).id == first.id                        # rodando vem antes da fila
+        with pytest.raises(RuntimeError, match="não está na fila"):             # rodando não cancela
+            await svc.cancel_job(None, first.id)
+        await svc._jobs.finish(first.id, status="done", result=None, error=None, worker="w1")
+        nxt = await svc._jobs.lease_next(worker="w2", lease_seconds=60)
+        assert nxt is not None and nxt.id == third.id
+
+
+def _projetos(tmp_path: Path, *names: str) -> None:
+    for name in names:
+        (tmp_path / name / "src").mkdir(parents=True)
+        (tmp_path / name / "src" / "x.py").write_text(f"def {name}():\n    return 1\n")
+
+
+async def test_parar_job_rodando_mantem_o_que_terminou(int_settings: Settings, tmp_path: Path, fake_llm: Any,
+                                                       monkeypatch: Any) -> None:
+    _projetos(tmp_path, "a", "b")
+    async with open_service(int_settings) as svc:
+        await svc.add_repo(str(tmp_path / "a"), name="a")
+        await svc.add_repo(str(tmp_path / "b"), name="b")
+        job = await svc.start_sync(None, ["a", "b"], batch=5, do_discover=False)
+        sync_git = svc._indexer._git.sync
+
+        def git_sync_que_para(repo: Any) -> Any:
+            # o pedido chega durante o download do primeiro repo: o segundo nem é baixado
+            svc._indexer.request_stop("pedido por ana@example.com")
+            return sync_git(repo)
+
+        monkeypatch.setattr(svc._indexer._git, "sync", git_sync_que_para)
+        job = await _wait(svc, job.id)
+        assert job.status == "stopped"
+        assert job.error.startswith("parado por ana@example.com: 0 de 2 repo(s) concluído(s)")
+        assert set(job.result["not_done"]) == {"a", "b"} and job.result["stopped"]
+        rows = {r.name: r for r in await svc.list_repos()}
+        assert rows["a"].status == "pending" and rows["a"].error is None   # não vira erro: só não terminou
+
+
+async def test_pedido_de_parada_pela_api_e_parar_na_fila_cancela(int_settings: Settings, fake_llm: Any) -> None:
     async with open_service(int_settings) as svc:
         job = await svc.start_sync(None, None, batch=1, do_discover=False)
-        assert job.status == "queued" and job.attempts == 0 and job.allow_register
-        with pytest.raises(RuntimeError, match=f"já existe um sync na fila: job {job.id}"):
-            await svc.start_sync(None, None, batch=1, do_discover=False)
-        # A regra vale no banco (índice único), mesmo sem a checagem prévia do serviço.
-        from code_index.infra.job_store import ActiveJobExists
+        assert (await svc.stop_job(None, job.id)).status == "canceled"          # na fila: sai da fila
+        job2 = await svc.start_sync(None, None, batch=1, do_discover=False)
+        leased = await svc._jobs.lease_next(worker="w", lease_seconds=60)
+        assert leased is not None and leased.heartbeat_at is not None
+        stopped = await svc.stop_job(None, job2.id)                             # rodando: pedido gravado
+        assert stopped.stop_requested_at is not None and stopped.stop_requested_by == "operador local"
+        assert await svc._jobs.stop_requested(job2.id) == "operador local"
 
-        with pytest.raises(ActiveJobExists):
-            await svc._jobs.create("outro", {})
+
+async def test_atualizacao_do_sistema_devolve_o_resto_a_fila(int_settings: Settings, tmp_path: Path, fake_llm: Any,
+                                                              monkeypatch: Any) -> None:
+    _projetos(tmp_path, "a", "b")
+    async with open_service(int_settings) as svc:
+        await svc.add_repo(str(tmp_path / "a"), name="a")
+        await svc.add_repo(str(tmp_path / "b"), name="b")
+        job = await svc.start_sync(None, ["a", "b"], batch=5, do_discover=False)
+        sync_git = svc._indexer._git.sync
+
+        def git_sync_no_deploy(repo: Any) -> Any:
+            svc._draining = True
+            svc._indexer.request_stop("atualização do sistema (o worker está reiniciando)")
+            return sync_git(repo)
+
+        monkeypatch.setattr(svc._indexer._git, "sync", git_sync_no_deploy)
+        assert await svc.run_sync_worker(once=True) == 1
+        svc._draining = False
+        back = await svc.get_job(job.id)
+        assert back.status == "queued" and back.attempts == 0                    # não conta tentativa
+        assert "atualização do sistema" in back.error and back.params["repos"] == ["a", "b"]
 
 
 async def test_reserva_atomica_so_um_worker_leva(int_settings: Settings, fake_llm: Any) -> None:
@@ -216,7 +305,8 @@ async def test_erro_inesperado_tenta_de_novo_ate_o_limite(int_settings: Settings
 
 
 async def test_encerramento_limpo_devolve_o_job(int_settings: Settings, fake_llm: Any) -> None:
-    settings = int_settings.model_copy(update={"sync_job_lease_seconds": 0.3})
+    # o sync falso ignora o pedido de parada: passada a drenagem, cai no cancelamento (o job inteiro volta)
+    settings = int_settings.model_copy(update={"sync_job_lease_seconds": 0.3, "sync_worker_drain_seconds": 0.5})
     async with open_service(settings) as svc:
         started = asyncio.Event()
         leases: list[Any] = []

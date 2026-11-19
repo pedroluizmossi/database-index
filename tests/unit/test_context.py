@@ -179,6 +179,39 @@ def test_spans_funde_trecho_pequeno_ao_anterior_e_ao_proximo() -> None:
     assert chunk_spans([(1, 2, 1), (3, 42, 50)], lines2) == [(1, 42)]
 
 
+def test_trecho_grande_vira_janelas_de_linhas_inteiras() -> None:
+    from code_index.indexing.context import Chunking, chunk_spans, full_lines
+
+    lines = [f"    valor_{i} = calcula(entrada, {i}, 'texto de exemplo')" for i in range(300)]  # ~50 chars/linha
+    chunking = Chunking(size=1500, min_size=300, overlap=200, max_chars=4500)
+    spans = chunk_spans([(1, 300, 60)], lines, chunking)  # o splitter devolveu um bloco enorme
+    assert len(spans) > 3
+    assert spans[0][0] == 1 and spans[-1][1] == 300                     # cobre tudo
+    assert all(len(full_lines(lines, s, e)) <= 1500 for s, e in spans)   # cada janela no tamanho
+    assert all(spans[i + 1][0] <= spans[i][1] for i in range(len(spans) - 1))  # com sobreposição
+    assert all(spans[i + 1][0] > spans[i][0] for i in range(len(spans) - 1))   # sempre avança
+    # sem chunking (ou dentro do limite): como antes
+    assert chunk_spans([(1, 300, 60)], lines) == [(1, 300)]
+
+
+def test_linha_maior_que_a_janela_fica_inteira_e_sozinha() -> None:
+    from code_index.indexing.context import line_windows
+
+    lines = ["a" * 10, "b" * 5000, "c" * 10]
+    assert line_windows(lines, 1, 3, 1500, 200) == [(1, 1), (2, 2), (3, 3)]
+
+
+def test_chunking_invalido() -> None:
+    import pytest
+
+    from code_index.indexing.context import Chunking
+
+    with pytest.raises(ValueError):
+        Chunking(size=1500, min_size=300, overlap=1500, max_chars=4500)
+    with pytest.raises(ValueError):
+        Chunking(size=5000, min_size=300, overlap=200, max_chars=4500)
+
+
 def test_spans_arquivo_pequeno_inteiro_continua() -> None:
     from code_index.indexing.context import chunk_spans
 

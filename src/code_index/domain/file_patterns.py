@@ -63,6 +63,8 @@ TEST_EXCLUDE = [
 # organização (ex.: migrations duplicadas por banco) vem do perfil (OrgProfile.noise_exclude, `default_exclude`).
 NOISE_EXCLUDE = [
     "**/CHANGELOG*", "**/CHANGES*", "**/HISTORY*", "**/RELEASE_NOTES*", "**/RELEASE-NOTES*",
+    # WordPress: núcleo e plugins/arquivos de terceiros (o código do site fica em wp-content/themes)
+    "**/wp-admin", "**/wp-includes", "**/wp-content/plugins", "**/wp-content/languages", "**/wp-content/uploads",
     "**/openapi.json", "**/openapi.yaml", "**/openapi.yml", "**/*.openapi.json", "**/*.openapi.yaml",
     "**/swagger.json", "**/swagger.yaml", "**/swagger.yml",
 ]

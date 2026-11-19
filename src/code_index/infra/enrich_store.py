@@ -7,6 +7,8 @@ atual (`card_input_hash <> input_hash`) e sem reserva ativa. Uma reserva (lease)
 from __future__ import annotations
 
 import json
+import re
+import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -66,6 +68,31 @@ _ACCENTS_TO = "aaaaaeeeeiiiiooooouuuucn"
 def _fold(sql_text: str) -> str:
     """Expressão SQL: minúsculas, sem acento e sem hífen (para casar 'notificação' com 'notificacao')."""
     return f"translate(lower({sql_text}), '{_ACCENTS_FROM}-_', '{_ACCENTS_TO}  ')"
+
+
+def _camel(sql_text: str) -> str:
+    """Expressão SQL: o texto e, em seguida, o mesmo texto com camelCase separado ('getTenant' -> 'get Tenant')."""
+    return f"(({sql_text}) || ' ' || regexp_replace({sql_text}, '([a-z0-9])([A-Z])', '\\1 \\2', 'g'))"
+
+
+# Palavras que não dizem o assunto ("quem cuida do serviço de X"): na consulta do find_repos casariam com todo
+# repo `*-service`/`*-backend`. Sem acento e minúsculas.
+GENERIC_REPO_WORDS = frozenset({
+    "quem", "cuida", "cuidam", "faz", "fazem", "qual", "quais", "onde", "repo", "repos", "repositorio",
+    "repositorios", "servico", "servicos", "service", "services", "sistema", "sistemas", "backend", "frontend",
+    "api", "apis", "projeto", "modulo", "microsservico", "microservico", "microservice",
+})
+
+
+def repo_query(query: str) -> str:
+    """A consulta sem as palavras genéricas (`GENERIC_REPO_WORDS`); se só sobrarem genéricas, fica como veio."""
+    words = re.findall(r"[\w-]+", query)
+    keep = [w for w in words if _ascii_fold(w) not in GENERIC_REPO_WORDS]
+    return " ".join(keep) if keep else query
+
+
+def _ascii_fold(word: str) -> str:
+    return unicodedata.normalize("NFKD", word.lower()).encode("ascii", "ignore").decode()
 
 
 def _arr(path: str) -> str:
@@ -149,16 +176,23 @@ class EnrichStore:
                  "own": json.loads(r["own"]) if r["own"] else {}} for r in rows]
 
     async def find(self, query: str, *, limit: int = 10) -> list[dict[str, Any]]:
-        """Repos cujo cartão (ou fatos: nome, contratos de API) casa com a consulta. Full-text do Postgres, sem LLM.
-        Pesos: nome e tags (A) > capacidades, glossário e operações dos contratos (B) > resumo (C). Termos em OU."""
+        """Repos cujo cartão (ou fatos: nome, catálogo, contratos de API, artefatos) casa com a consulta. Full-text do
+        Postgres, sem LLM. Pesos: nome e tags (A) > capacidades, glossário, catálogo e operações/entidades dos
+        contratos (B) > resumo (C). Termos em OU; palavras genéricas ("serviço", "repo", "quem cuida") saem da consulta,
+        senão casariam com todo `*-service`. Nomes em camelCase entram também separados ("registerNamedUsers" casa
+        com "named users")."""
+        contracts = ("coalesce((SELECT string_agg((s->>'service') || ' ' || "
+                     "array_to_string(ARRAY(SELECT jsonb_array_elements_text(s->k) "
+                     "FROM unnest(ARRAY['queries','actions','signals','events','entities']) k), ' '), ' ') "
+                     f"FROM jsonb_array_elements(c.material->'facts'->'{CONTRACTS_SECTION}') s), '')")
+        facts = (f"{contracts} || ' ' || coalesce(c.material->'facts'->'catalog'->>'name', '') || ' ' || "
+                 "coalesce(c.material->'facts'->'catalog'->>'description', '') || ' ' || "
+                 + _arr("c.material->'facts'->'artifacts'"))
         doc = f"""
             setweight(to_tsvector('portuguese', {_fold("replace(c.repo, '__', ' ')")}), 'A') ||
             setweight(to_tsvector('portuguese', {_fold(_arr("c.card->'domain_tags'"))}), 'A') ||
             setweight(to_tsvector('portuguese', {_fold(_arr("c.card->'capabilities'") + " || ' ' || " + _arr("c.card->'glossary'"))}), 'B') ||
-            setweight(to_tsvector('portuguese', {_fold("coalesce((SELECT string_agg((s->>'service') || ' ' || "
-                                                        "array_to_string(ARRAY(SELECT jsonb_array_elements_text(s->'queries') "
-                                                        "UNION ALL SELECT jsonb_array_elements_text(s->'actions')), ' '), ' ') "
-                                                        f"FROM jsonb_array_elements(c.material->'facts'->'{CONTRACTS_SECTION}') s), '')")}), 'B') ||
+            setweight(to_tsvector('portuguese', {_fold(_camel(facts))}), 'B') ||
             setweight(to_tsvector('portuguese', {_fold("coalesce(c.card->>'summary', '')")}), 'C')"""
         rows = await self._pool.fetch(
             f"""WITH q AS (
@@ -170,13 +204,14 @@ class EnrichStore:
                 FROM {self._cards} c JOIN {self._repos} r ON r.name = c.repo, q
                 WHERE q.q IS NOT NULL AND NOT r.ignored AND ({doc}) @@ q.q
                 ORDER BY score DESC, c.repo LIMIT $2""",
-            query, max(1, min(limit, 50)),
+            repo_query(query), max(1, min(limit, 50)),
         )
         out = []
         for r in rows:
             card = json.loads(r["card"]) if r["card"] else {}
             out.append({"repo": r["repo"], "score": round(float(r["score"]), 4), "summary": card.get("summary"),
-                        "kind": card.get("kind"), "tags": card.get("domain_tags", []), "stale": r["stale"]})
+                        "kind": card.get("kind"), "tags": card.get("domain_tags", []), "stale": r["stale"],
+                        "card": bool(card)})
         return out
 
     async def contract_operation_count(self) -> int:

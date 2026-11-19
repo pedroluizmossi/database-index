@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
 from .models import Org, RepoState
@@ -33,9 +33,12 @@ def normalize_source(source: str) -> tuple[str | None, str | None]:
     return None, None
 
 
-def resolve_name(name: str, known: Iterable[str]) -> str | None:
+def resolve_name(name: str, known: Iterable[str], prefixes: Sequence[str] = ()) -> str | None:
     """Aceita 'org__repo', 'org/repo' ou só 'repo' (se não for ambíguo).
 
+    `prefixes`: prefixos dos nomes dos repos da organização (`NameRules.repo_prefixes` dos perfis ativos). Só
+    quando nada casou, tenta o nome com cada prefixo ('pedidos' → 'org__acme-pedidos'): quem pede pelo nome sem o
+    prefixo da empresa acha o repo, e um nome que já resolvia nunca muda.
     Retorna o nome conhecido, ou None. Levanta ValueError se ambíguo.
     """
     known = set(known)
@@ -46,6 +49,9 @@ def resolve_name(name: str, known: Iterable[str]) -> str | None:
         if cand in known:
             return cand
     suffix = sorted(n for n in known if n.endswith("__" + name))
+    if not suffix and "/" not in name and "__" not in name:
+        wanted = {"__" + p + name for p in prefixes if p and not name.startswith(p)}
+        suffix = sorted(n for n in known if any(n.endswith(w) for w in wanted))
     if len(suffix) > 1:
         raise ValueError(f"nome ambíguo {name!r}: {', '.join(suffix)}")
     return suffix[0] if suffix else None

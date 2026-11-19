@@ -10,6 +10,7 @@ import { NavigationContext, type Navigation } from "./lib/navigation";
 import { SettingsPage } from "./pages/SettingsPage";
 import { LoginPage } from "./pages/LoginPage";
 import { AuditPage } from "./pages/AuditPage";
+import { SystemPage } from "./pages/SystemPage";
 import { DocsPage } from "./pages/DocsPage";
 import { ApisPage } from "./pages/ApisPage";
 import { ReposPage } from "./pages/ReposPage";
@@ -42,7 +43,7 @@ export default function App() {
   );
 }
 
-const TAB_IDS: Tab[] = ["search", "repos", "docs", "apis", "xray", "indexing", "sources", "tokens", "usage", "users", "audit", "settings"];
+const TAB_IDS: Tab[] = ["search", "repos", "docs", "apis", "xray", "indexing", "sources", "tokens", "usage", "users", "audit", "system", "settings"];
 
 function Workspace() {
   const { session } = useAuth();
@@ -93,6 +94,7 @@ function Workspace() {
     usage: <UsagePage email={usageEmail} onEmail={filterUsage} />,
     users: <UsersPage onOpenUsage={filterUsage} />,
     audit: <AuditPage />,
+    system: <SystemPage />,
     settings: <SettingsPage />,
   }[current];
 

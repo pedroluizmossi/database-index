@@ -58,7 +58,7 @@ async def sync(body: SyncIn, request: Request,
             do_discover=body.discover, pull=body.pull, full=body.full, doc_pages=body.pages,
             only_changed=body.only_changed,
         )
-    except (ValueError, RuntimeError, PermissionError) as e:  # 400 pedido inválido, 403 full sem admin, 409 job ativo
+    except (ValueError, RuntimeError, PermissionError) as e:  # 400 pedido inválido, 403 full sem admin, 409 fila cheia/repetido
         err = http_error(e)
         await svc.audit(principal, "sync:start", params=body.model_dump(), status=err.status_code,
                         client_ip=client_ip(request))
@@ -72,6 +72,25 @@ async def sync(body: SyncIn, request: Request,
 async def sync_jobs(request: Request, limit: int = Query(50, ge=1, le=200),
                     _: Principal = Depends(require(INDEX_WRITE))) -> list[dict[str, Any]]:
     return [j.to_dict() for j in await get_service(request).list_jobs(limit)]
+
+
+@router.post("/api/v1/sync/jobs/{job_id}/cancel", tags=["sync"],
+             summary="Tira da fila um job que ainda não começou (quem pediu ou admin)")
+async def cancel_sync_job(job_id: str, request: Request,
+                          principal: Principal = Depends(require(INDEX_WRITE))) -> dict[str, Any]:
+    job = await audited(request, principal, "sync:cancel", {"job": job_id},
+                        get_service(request).cancel_job(principal, job_id))
+    return job.to_dict()
+
+
+@router.post("/api/v1/sync/jobs/{job_id}/stop", tags=["sync"],
+             summary="Para um job sem perder o que foi feito: na fila sai da fila; rodando, os repos prontos ficam "
+                     "indexados e os demais voltam a pendentes (quem pediu ou admin)")
+async def stop_sync_job(job_id: str, request: Request,
+                        principal: Principal = Depends(require(INDEX_WRITE))) -> dict[str, Any]:
+    job = await audited(request, principal, "sync:stop", {"job": job_id},
+                        get_service(request).stop_job(principal, job_id))
+    return job.to_dict()
 
 
 @router.get("/api/v1/sync/jobs/{job_id}", tags=["sync"])

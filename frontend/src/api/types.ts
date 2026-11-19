@@ -58,6 +58,10 @@ export interface Repo {
   error: string | null;
   /** Tamanho do repositório no GitHub, em KB (inclui o histórico do git). */
   size_kb: number | null;
+  /** Arquivos que entrariam no índice, pela árvore do GitHub (`code-index repo estimate`); null = não contado. */
+  files_estimate: number | null;
+  /** O GitHub cortou a árvore (repo enorme): a estimativa é um mínimo. */
+  files_estimate_truncated: boolean;
   /** "code" (repo git) ou "docs" (wiki). */
   kind: string;
   /** Arquivos descartados na indexação (acima do limite de tamanho, binários...). */
@@ -406,6 +410,10 @@ export interface SyncResult {
   errors: Record<string, string>;
   discovered: Record<string, OrgDiscovery>;
   remaining: number;
+  /** Motivo, se o job foi parado no meio (botão "Parar" ou atualização do sistema). */
+  stopped?: string | null;
+  /** Repos pedidos que não terminaram por causa da parada (continuam pendentes). */
+  not_done?: string[];
 }
 
 export interface OrgDiscovery {
@@ -415,7 +423,7 @@ export interface OrgDiscovery {
 }
 
 export type SyncPhase = "discover" | "select" | "fetch" | "index" | "finish";
-export type RepoProgressStatus = "queued" | "fetching" | "indexing" | "done" | "error" | "skipped";
+export type RepoProgressStatus = "queued" | "fetching" | "indexing" | "checking" | "done" | "error" | "skipped";
 
 export interface RepoProgress {
   name: string;
@@ -439,14 +447,21 @@ export interface SyncProgress {
   files_total: number;
   files_done: number;
   seconds: number;
+  /** Detalhe da etapa (ex.: "lendo os casos de teste dos clones"). */
+  step?: string | null;
+  /** Última mudança de verdade no andamento (ISO). Sem mudança por muito tempo = possível travamento. */
+  activity_at?: string | null;
   repos: RepoProgress[];
+  /** Repos já indexados, não pedidos, que estão sendo refeitos (regras de indexação mudaram). */
+  others?: { repos: number; files: number; reason: string | null; list: (RepoProgress & { files_redone: number })[] };
 }
 
 export interface SyncJob {
   id: string;
   requested_by: string;
   params?: { repos?: string[] | null; batch?: number | null; discover?: boolean; pull?: boolean; openapi_domain?: string | null };
-  status: "queued" | "running" | "done" | "failed";
+  /** `canceled`: tirado da fila antes de começar. */
+  status: "queued" | "running" | "done" | "failed" | "canceled" | "stopped";
   /** Quando foi pedido (entrou na fila). */
   started_at: string;
   finished_at: string | null;
@@ -462,6 +477,51 @@ export interface SyncJob {
   worker?: string | null;
   /** Início da tentativa atual (ou da última). */
   run_started_at?: string | null;
+  /** Alguém pediu para parar (o worker confere a cada ~5 s). */
+  stop_requested_at?: string | null;
+  stop_requested_by?: string | null;
+  /** Último sinal do worker (renovação do lease). */
+  heartbeat_at?: string | null;
+}
+
+/** Uma configuração do servidor (GET /api/v1/system). Segredo: `value` sempre null, só `defined`. */
+export interface SystemSetting {
+  name: string;
+  env: string;
+  /** `env`: ambiente ou .env; `profile:<nome>`: padrão de um perfil ativo; `default`: padrão do núcleo. */
+  origin: string;
+  secret: boolean;
+  hint: string | null;
+  value: unknown;
+  defined: boolean;
+}
+
+export interface SystemModelHealth {
+  role: "embedding" | "rerank";
+  model: string;
+  api_base: string | null;
+  status: "ok" | "warning" | "error" | "hosted" | "off";
+  detail: string;
+}
+
+export interface SystemInfo {
+  app: { version: string | null; python: string; host: string; worker_embedded: boolean };
+  health: {
+    models: SystemModelHealth[];
+    github: { token: boolean; rate_remaining: number | null; reserve: number; estimate_max: number };
+    database: {
+      version: string;
+      bytes: number;
+      schema: string;
+      extensions: Record<string, string>;
+      tables: { name: string; bytes: number; rows: number }[];
+      migrations: { count: number; last: string | null; last_applied_at: string | null };
+      queue: Partial<Record<"queued" | "running", number>>;
+    } | null;
+    disks: { label: string; path: string; total: number; used: number; free: number }[];
+  };
+  profiles: { name: string; label: string; origins: string[]; contract_formats: string[] }[];
+  settings: { id: string; label: string; settings: SystemSetting[] }[];
 }
 
 export interface SyncStart {

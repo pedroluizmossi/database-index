@@ -35,7 +35,10 @@ NAMING = NameRules(
 
 # Migrations duplicadas por banco (mantemos só PostgreSql).
 _DB_VENDORS = ["H2", "h2", "Oracle", "oracle", "SqlServer", "SQLServer", "sqlserver", "MySql", "MySQL", "mysql"]
-NOISE_EXCLUDE = tuple(f"**/{d}/**/{v}" for d in ("migration", "migrations") for v in _DB_VENDORS)
+NOISE_EXCLUDE = (
+    *(f"**/{d}/**/{v}" for d in ("migration", "migrations") for v in _DB_VENDORS),
+    "**/*-integrated-test",  # módulos de teste integrado do legado (asas-*-integrated-test): fora do TEST_EXCLUDE
+)
 
 # Catálogo público das especificações OpenAPI da plataforma (<domínio>_<serviço>.swagger.yaml).
 OPENAPI_BUCKET_URL = "https://s3.amazonaws.com/br-com-senior-ecossistema-api"

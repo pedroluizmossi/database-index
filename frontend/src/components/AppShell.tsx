@@ -15,6 +15,7 @@ import {
   Plug,
   ScrollText,
   Search,
+  Server,
   SearchCode,
   Settings,
   Sun,
@@ -31,7 +32,7 @@ import { usePrefs } from "../data/PrefsProvider";
 import { cx } from "../lib/utils";
 import { IndexingIndicator, useActiveJob } from "./IndexingIndicator";
 
-export type Tab = "search" | "repos" | "docs" | "apis" | "xray" | "indexing" | "sources" | "tokens" | "usage" | "users" | "audit" | "settings";
+export type Tab = "search" | "repos" | "docs" | "apis" | "xray" | "indexing" | "sources" | "tokens" | "usage" | "users" | "audit" | "system" | "settings";
 
 type Group = "explore" | "curate" | "account" | "admin";
 
@@ -47,7 +48,7 @@ const GROUP_ORDER: Group[] = ["explore", "curate", "account", "admin"];
 
 /**
  * Itens do menu visíveis para a sessão: indexação (cobertura, fila e histórico de jobs) com index:write; tokens só
- * com login no navegador; uso, usuários e auditoria só para admin.
+ * com login no navegador; uso, usuários, auditoria e sistema só para admin.
  */
 export function tabsFor(session: Session | null): TabDef[] {
   const tabs: TabDef[] = [
@@ -67,6 +68,7 @@ export function tabsFor(session: Session | null): TabDef[] {
       { id: "usage", label: "Uso", icon: BarChart3, group: "admin" },
       { id: "users", label: "Usuários", icon: Users, group: "admin" },
       { id: "audit", label: "Auditoria", icon: ScrollText, group: "admin" },
+      { id: "system", label: "Sistema", icon: Server, group: "admin" },
     );
   }
   return tabs;

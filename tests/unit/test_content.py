@@ -209,6 +209,13 @@ def test_minificado_e_descartado() -> None:
     assert skip_reason("app.min.js", "javascript", "var a=1;" * 2000 + "\n" + "b();" * 2000) == "minificado"
 
 
+def test_linha_gigante_que_e_quase_todo_o_arquivo_e_minificado() -> None:
+    # JS gerado com cabeçalho: a média por linha é baixa, mas a linha gigante é quase todo o arquivo
+    text = "/* licença */\n" * 20 + "var a=" + "1+" * 11000 + "1;\n" + "export default a;\n"
+    assert skip_reason("settings.js", "javascript", text) == "minificado"
+    assert skip_reason("Gerada.java", "java", "class G {" + "int x;" * 4000 + "}") == "minificado"
+
+
 def test_linha_longa_isolada_nao_e_minificado() -> None:
     text = "x = 1\n" * 400 + "S = '" + "a" * 3000 + "'\n"
     assert skip_reason("app.py", "python", text) is None

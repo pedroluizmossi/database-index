@@ -179,6 +179,10 @@ e definir `CODE_INDEX_PROFILES=senior` no `.env`/`values` do deploy da empresa (
 - **Resumo desatualizado** (`file_summaries.stale`, recalculado no fim do sync e a cada entrega) vota com
   `SEARCH_STALE_SUMMARY_FACTOR` na busca e aparece como `summary_stale` nos resultados. Leia o estado pela coluna,
   nunca recalcule o hash dos arquivos na consulta de busca.
+- `code-index repo estimate` (e `POST /api/v1/repos/estimate`) conta os arquivos indexáveis dos repos não indexados pela
+  árvore do GitHub: sem custo de Voyage, mas 1 chamada da cota REST por repo. Nunca roda sozinho (nem na descoberta,
+  nem no sync); tem teto por pedido (`--limit`, máx. `GITHUB_ESTIMATE_MAX`), pula quem já foi contado no mesmo push
+  e para antes de a cota cair abaixo de `GITHUB_RATE_RESERVE`. Confira com `--dry-run` antes.
 - Fontes de documentação (`docs__*`, `kind = "docs"`) também embedam páginas: não rode `index docs__...`
   contra a wiki real sem pedir. `docs add` só lista as páginas (sem custo de Voyage).
 - Não indexe repos inteiros "para testar". Prefira os testes de integração, que usam

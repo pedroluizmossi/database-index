@@ -156,6 +156,7 @@ def looks_binary(text: str) -> bool:
 _MINIFIED_MIN_BYTES = 2000
 _MINIFIED_AVG_LINE = 400
 _MINIFIED_LONGEST = 2000
+_MINIFIED_LONG_SHARE = 0.7  # ... ou as linhas longas são quase todo o arquivo (bundle com cabeçalho de licença)
 
 
 def looks_minified(text: str) -> bool:
@@ -167,7 +168,15 @@ def looks_minified(text: str) -> bool:
         return False
     lines = text.split("\n")
     longest = max(len(line) for line in lines)
-    return longest >= _MINIFIED_LONGEST and len(text) / len(lines) >= _MINIFIED_AVG_LINE
+    if longest < _MINIFIED_LONGEST:
+        return False
+    if len(text) / len(lines) >= _MINIFIED_AVG_LINE:
+        return True
+    # Uma linha gigante (JS gerado, JSON de mock, classe gerada numa linha) com poucas linhas normais em volta: a
+    # média por linha fica baixa, mas o arquivo é quase todo a linha. Uma string longa isolada num arquivo de código
+    # normal continua entrando.
+    long_chars = sum(len(line) for line in lines if len(line) >= _MINIFIED_LONGEST)
+    return long_chars >= _MINIFIED_LONG_SHARE * len(text)
 
 
 def file_language(filename: str, types: FileTypes = NO_FILE_TYPES) -> str:

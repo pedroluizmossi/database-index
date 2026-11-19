@@ -31,6 +31,7 @@ from ..infra.rate_limit_store import RateLimitStore
 from ..infra.relation_store import RelationStore
 from ..infra.repo_store import RepoStore
 from ..infra.symbol_store import SymbolStore
+from ..infra.system_store import SystemStore
 from ..infra.usage_store import UsageStore
 from ..infra.user_store import UserStore
 from ..profiles.base import ActiveProfiles
@@ -84,8 +85,10 @@ class ServiceBase:
         usage: UsageStore,
         rate_limits: RateLimitStore | None = None,
         profiles: ActiveProfiles | None = None,
+        system: SystemStore | None = None,
     ) -> None:
         self.settings = settings
+        self._system = system
         # Perfis de organização ativos (profiles/): convenções da empresa. None = os de settings.profiles.
         self.profiles = profiles if profiles is not None else active_profiles(settings)
         self._repos = repos
@@ -148,13 +151,14 @@ class ServiceBase:
         return self.settings.repos_dir / repo
 
     async def _resolve_repos(self, repos: Sequence[str] | None) -> list[str] | None:
-        """Aceita 'org__repo', 'org/repo' ou só 'repo'. Nome desconhecido → ValueError."""
+        """Aceita 'org__repo', 'org/repo' ou só 'repo' (com ou sem o prefixo da organização, pelos perfis ativos).
+        Nome desconhecido → ValueError."""
         if not repos:
             return None
         known = (await self._repos.all_rows()).keys()
         out = []
         for name in repos:
-            resolved = resolve_name(name, known)
+            resolved = resolve_name(name, known, self.profiles.naming.repo_prefixes)
             if resolved is None:
                 raise ValueError(f"repositório desconhecido: {name}")
             out.append(resolved)
@@ -281,6 +285,8 @@ def _to_status(r: RepoState, n_files: int, n_chunks: int, n_skipped: int = 0) ->
         chunks=n_chunks,
         error=r.error,
         size_kb=r.size_kb,
+        files_estimate=r.files_estimate,
+        files_estimate_truncated=r.files_estimate_truncated,
         kind=r.kind,
         skipped=n_skipped,
     )

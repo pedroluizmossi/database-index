@@ -99,6 +99,15 @@ class RepoStore:
                 name, commit, revision, pushed_at,
             )
 
+    async def set_files_estimate(self, name: str, files: int, truncated: bool, pushed_at: datetime | None) -> None:
+        """Grava a estimativa de arquivos indexáveis (árvore do GitHub) e o push que foi contado."""
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                f"""UPDATE {self._t} SET files_estimate = $2, files_estimate_truncated = $3, files_estimate_at = now(),
+                        files_estimate_pushed_at = $4 WHERE name = $1""",
+                name, files, truncated, pushed_at,
+            )
+
     async def mark_error(self, name: str, error: str) -> None:
         async with self._pool.acquire() as conn:
             await conn.execute(

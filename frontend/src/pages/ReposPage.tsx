@@ -31,6 +31,7 @@ import { RepoCardDialog } from "../components/RepoCardDialog";
 import { RepoSummariesLink } from "../components/summaries";
 import { OwnerDialog } from "../components/OwnerDialog";
 import { originHint, originLabel, ownerMatches } from "../lib/ownership";
+import { ESTIMATE_HINT, formatRepoFiles, formatSize, repoFiles } from "../lib/repoSize";
 import { useOrigins } from "../components/docs";
 import {
   ALL_OWNERS,
@@ -99,12 +100,14 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
   const jobs = useJobs(canSeeJobs, onFinished);
   // Selo ao vivo na linha: o status gravado do repo só muda quando o lote inteiro termina.
   const live = useMemo(() => {
-    const job = jobs.running;
-    if (!job) return new Map<string, RepoProgress["status"]>();
+    const out = new Map<string, RepoProgress["status"]>();
     // Na fila: os repos pedidos aparecem como "na fila" (o andamento gravado seria de uma tentativa anterior).
-    if (job.status === "queued") return new Map((job.params?.repos ?? []).map((name) => [name, "queued" as const]));
-    return new Map((job.progress?.repos ?? []).map((p) => [p.name, p.status] as const));
-  }, [jobs.running]);
+    const waiting = [...jobs.queue, ...(jobs.running?.status === "queued" ? [jobs.running] : [])];
+    for (const job of waiting) for (const name of job.params?.repos ?? []) out.set(name, "queued");
+    const job = jobs.running;
+    if (job && job.status === "running") for (const p of job.progress?.repos ?? []) out.set(p.name, p.status);
+    return out;
+  }, [jobs.running, jobs.queue]);
 
   async function unignore(r: Repo) {
     try {
@@ -544,8 +547,7 @@ export function ReposPage({ onXray }: { onXray: (target: XrayTarget) => void }) 
                 size="sm"
                 className="shrink-0 px-2.5 sm:px-3"
                 onClick={() => setSyncOpen({ names: [...selected].sort() })}
-                disabled={jobs.running !== null}
-                title={jobs.running ? "Já existe uma indexação na fila ou em andamento (acompanhe em Indexação)" : undefined}
+                title={jobs.running ? "Já existe uma indexação ativa: este pedido vai para a fila atrás dela" : undefined}
               >
                 <Play className="size-3.5" aria-hidden="true" />
                 <span className="sm:hidden">Indexar</span>
@@ -912,7 +914,18 @@ function RepoRow({ repo: r, live, actions, selection, onXray }: { repo: Repo; li
         <OwnerCell repo={r} onOwn={ownerAction(actions, r)} />
       </td>
       <td className="hidden px-4 py-3 text-stone-600 @[70rem]:table-cell dark:text-stone-300">{r.language ?? "—"}</td>
-      <td className="hidden px-4 py-3 text-right tabular-nums @6xl:table-cell">{numberFormat.format(r.files)}</td>
+      <td className="hidden px-4 py-3 text-right tabular-nums @6xl:table-cell">
+        {repoFiles(r).prefix ? (
+          <span title={ESTIMATE_HINT} className="text-stone-500 dark:text-stone-400">{formatRepoFiles(r)}</span>
+        ) : (
+          <span title={r.status === "indexed" ? undefined : "Sem estimativa. Conte com: code-index repo estimate"}>{formatRepoFiles(r)}</span>
+        )}
+        {r.size_kb ? (
+          <span className="block text-xs text-stone-500 dark:text-stone-400" title="Tamanho no GitHub (inclui o histórico do git)">
+            {formatSize(r.size_kb)}
+          </span>
+        ) : null}
+      </td>
       <td className="px-4 py-3 text-right tabular-nums">{numberFormat.format(r.chunks)}</td>
       <td className="hidden px-4 py-3 font-mono text-xs text-stone-500 @[80rem]:table-cell dark:text-stone-400">{r.commit ?? "—"}</td>
       <td className="hidden px-4 py-3 @3xl:table-cell">
@@ -1077,7 +1090,10 @@ function RepoCard({ repo: r, live, actions, selection, onXray }: { repo: Repo; l
         </div>
         <div>
           <dt className="text-stone-500 dark:text-stone-400">Arquivos</dt>
-          <dd className="font-medium tabular-nums">{numberFormat.format(r.files)}</dd>
+          <dd className="font-medium tabular-nums" title={repoFiles(r).prefix ? ESTIMATE_HINT : undefined}>
+            {formatRepoFiles(r)}
+            {r.size_kb ? <span className="ml-1 font-normal text-stone-500 dark:text-stone-400">· {formatSize(r.size_kb)}</span> : null}
+          </dd>
         </div>
         <div>
           <dt className="text-stone-500 dark:text-stone-400">Trechos</dt>
@@ -1304,7 +1320,7 @@ function compare(a: Repo, b: Repo, key: SortKey): number {
     case "language":
       return (a.language ?? "").localeCompare(b.language ?? "");
     case "files":
-      return a.files - b.files;
+      return (repoFiles(a).value ?? -1) - (repoFiles(b).value ?? -1);
     case "chunks":
       return a.chunks - b.chunks;
     case "indexed_at":

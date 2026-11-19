@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import fnmatch
+import re
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -24,6 +27,32 @@ def _paginate(client: httpx.Client, url: str) -> list[dict[str, Any]]:
         out.extend(r.json())
         next_url = r.links.get("next", {}).get("url")
     return out
+
+
+_SLUG = re.compile(r"https://github\.com/([\w.-]+)/([\w.-]+?)(?:\.git)?/?$")
+
+
+def github_slug(url: str | None) -> str | None:
+    """'dono/repo' de uma URL https do github.com; None para outro host ou pasta local."""
+    m = _SLUG.match(url or "")
+    return f"{m[1]}/{m[2]}" if m else None
+
+
+class GitHubRateLimited(RuntimeError):
+    """A cota da API REST do GitHub acabou (ou chegou à reserva)."""
+
+
+@dataclass(frozen=True)
+class RepoTree:
+    """Arquivos de um ramo pela API (sem clonar): (caminho, bytes) dos blobs, sem links simbólicos nem submódulos."""
+
+    files: list[tuple[str, int]]
+    truncated: bool  # o GitHub corta árvores enormes (~100 mil entradas ou 7 MB)
+
+
+def _remaining(r: httpx.Response) -> int | None:
+    value = r.headers.get("x-ratelimit-remaining")
+    return int(value) if value and value.isdigit() else None
 
 
 class GitHubClient:
@@ -53,6 +82,30 @@ class GitHubClient:
         if login and login.lower() == name.lower():
             return f"{API}/user/repos?per_page=100&affiliation=owner&visibility=all"
         return f"{API}/users/{name}/repos?per_page=100&type=owner"
+
+    def rate_remaining(self) -> int | None:
+        """Chamadas que restam na cota REST (GET /rate_limit não gasta cota). None se não deu para saber."""
+        with httpx.Client(headers=self._headers(), timeout=30) as client:
+            r = client.get(f"{API}/rate_limit")
+        if r.status_code != 200:
+            return None
+        value = (r.json().get("resources") or {}).get("core", {}).get("remaining")
+        return value if isinstance(value, int) else None
+
+    def repo_tree(self, slug: str, ref: str) -> tuple[RepoTree | None, int | None]:
+        """Árvore recursiva de um ramo (UMA chamada à API) e a cota que sobrou. None: repo vazio ou ramo sumiu."""
+        with httpx.Client(headers=self._headers(), timeout=60) as client:
+            r = client.get(f"{API}/repos/{slug}/git/trees/{quote(ref, safe='')}", params={"recursive": "1"})
+        remaining = _remaining(r)
+        if r.status_code in (403, 429) and (remaining == 0 or r.status_code == 429):
+            raise GitHubRateLimited("cota da API do GitHub esgotada")
+        if r.status_code in (404, 409):
+            return None, remaining
+        r.raise_for_status()
+        data = r.json()
+        files = [(e["path"], int(e.get("size") or 0)) for e in data.get("tree", [])
+                 if e.get("type") == "blob" and e.get("mode") != "120000"]
+        return RepoTree(files, bool(data.get("truncated"))), remaining
 
     def list_org_repos(self, org: Org) -> list[DiscoveredRepo]:
         """Lista os repositórios visíveis para o token, já aplicando os filtros da org."""

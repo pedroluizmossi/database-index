@@ -10,7 +10,7 @@ import { useNavigation } from "../lib/navigation";
 import { reposHash, type Filters } from "../lib/repoFilters";
 import { cx, plural } from "../lib/utils";
 import { useToast } from "../components/Toaster";
-import { ActiveJobPanel, JobDialog, JobsPanel, useJobs } from "../components/JobsPanel";
+import { ActiveJobPanel, JobDialog, JobsPanel, QueuePanel, useJobs } from "../components/JobsPanel";
 import { IndexCoverage, useRepoCounts, type RepoCounts } from "../components/IndexCoverage";
 import { SyncDialog } from "../components/SyncDialog";
 import { VectorsPanel } from "../components/VectorsPanel";
@@ -61,8 +61,29 @@ export function IndexingPage() {
     }
   }
 
-  const busy = jobs.running !== null;
-  const busyTitle = `Já existe uma indexação ${jobs.running?.status === "queued" ? "na fila" : "em andamento"}`;
+  // Com job ativo, um pedido novo entra na fila atrás dele (o servidor recusa além do teto da fila).
+  const waiting = jobs.running ? jobs.queue.length + 1 : 0;
+  const queueHint = waiting ? ` (vai para a fila: ${waiting} ${plural(waiting, "job", "jobs")} na frente)` : "";
+
+  async function stop(job: SyncJob) {
+    await api.syncStop(job.id);
+    push({
+      tone: "info",
+      title: "Parada pedida",
+      description: "O worker termina o que está em andamento (percebe em até ~5 s). Os repos prontos ficam indexados.",
+    });
+    await jobs.refresh();
+  }
+
+  async function cancel(job: SyncJob) {
+    try {
+      await api.syncCancel(job.id);
+      push({ tone: "success", title: "Job tirado da fila" });
+    } catch (err) {
+      push({ tone: "error", title: "Não consegui cancelar", description: describeError(err) });
+    }
+    await jobs.refresh();
+  }
 
   return (
     <div className="space-y-8">
@@ -92,8 +113,7 @@ export function IndexingPage() {
                 variant="secondary"
                 size="sm"
                 onClick={() => setSyncMode("batch")}
-                disabled={busy}
-                title={busy ? busyTitle : "Lote automático: push novo, depois pendentes (1ª indexação) e erros"}
+                title={`Lote automático: push novo, depois pendentes (1ª indexação) e erros${queueHint}`}
               >
                 <Play className="size-3.5" aria-hidden="true" />
                 Indexar lote
@@ -101,8 +121,7 @@ export function IndexingPage() {
               <Button
                 size="sm"
                 onClick={() => setSyncMode("changed")}
-                disabled={busy}
-                title={busy ? busyTitle : "Só o que já foi indexado e mudou: push novo e páginas novas ou alteradas das wikis"}
+                title={`Só o que já foi indexado e mudou: push novo e páginas novas ou alteradas das wikis${queueHint}`}
               >
                 <GitPullRequestArrow className="size-3.5" aria-hidden="true" />
                 Indexar o que mudou
@@ -119,7 +138,10 @@ export function IndexingPage() {
         {jobs.jobs === null && jobs.error === null ? (
           <Skeleton className="h-14 w-full rounded-xl" />
         ) : (
-          <ActiveJobPanel job={jobs.running} onOpen={setJobDetail} />
+          <>
+            <ActiveJobPanel job={jobs.running} onOpen={setJobDetail} onStop={canIndex ? stop : undefined} />
+            <QueuePanel queue={jobs.queue} onOpen={setJobDetail} onCancel={canIndex ? cancel : undefined} />
+          </>
         )}
       </section>
 

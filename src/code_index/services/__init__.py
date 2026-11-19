@@ -31,6 +31,7 @@ from ..infra.oauth_store import OAuthStore
 from ..infra.rate_limit_store import RateLimitStore
 from ..infra.repo_store import RepoStore
 from ..infra.symbol_store import SymbolStore
+from ..infra.system_store import SystemStore
 from ..infra.usage_store import UsageStore
 from ..infra.user_store import UserStore
 from ..profiles.base import ActiveProfiles
@@ -48,6 +49,7 @@ from .rate_limit import RateLimitMixin
 from .repos import ReposMixin
 from .search import SearchMixin
 from .sync import SyncMixin
+from .system import SystemMixin
 from .usage import UsageMixin
 from .users import UsersMixin
 from .vectors import VectorsMixin
@@ -57,7 +59,7 @@ log = logging.getLogger(__name__)
 
 
 class CodeIndexService(SyncMixin, VectorsMixin, ReposMixin, DocsMixin, WikiMixin, SearchMixin, ApisMixin, EnrichMixin, AuthMixin,
-                       OAuthMixin, OwnershipMixin, UsersMixin, UsageMixin, RateLimitMixin, ServiceBase):
+                       OAuthMixin, OwnershipMixin, UsersMixin, UsageMixin, RateLimitMixin, SystemMixin, ServiceBase):
     """Casos de uso do índice. Construído por `open_service()`, que cuida do ciclo de vida.
     Cada área fica num módulo deste pacote; as interfaces só conhecem esta classe."""
 
@@ -112,6 +114,7 @@ async def open_service(settings: Settings | None = None, *,
                 usage=UsageStore(pool, settings),
                 rate_limits=RateLimitStore(pool, settings),
                 profiles=profiles,
+                system=SystemStore(pool, settings),
             )
             await svc._ensure_search_indexes()
             await svc.ensure_relations()

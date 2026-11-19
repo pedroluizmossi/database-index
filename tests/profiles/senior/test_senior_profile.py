@@ -45,9 +45,19 @@ def test_senior_mesmas_regras_de_nome_de_antes() -> None:
     assert out == ["o__email-web"]
 
 
+def test_senior_nome_do_repo_sem_snr() -> None:
+    from code_index.domain.policies import resolve_name
+
+    prefixes = load_profiles(["senior"]).naming.repo_prefixes
+    known = ["senior-sistemas__snr-scheduler-service", "senior-sistemas__snr-scheduler-frontend"]
+    assert resolve_name("scheduler-service", known, prefixes) == "senior-sistemas__snr-scheduler-service"
+    assert resolve_name("snr-scheduler-service", known, prefixes) == "senior-sistemas__snr-scheduler-service"
+
+
 def test_senior_mesmo_exclude_padrao_de_antes() -> None:
     vendors = ["H2", "h2", "Oracle", "oracle", "SqlServer", "SQLServer", "sqlserver", "MySql", "MySQL", "mysql"]
-    antes = DEFAULT_EXCLUDE + [f"**/{d}/**/{v}" for d in ("migration", "migrations") for v in vendors]
+    antes = DEFAULT_EXCLUDE + [f"**/{d}/**/{v}" for d in ("migration", "migrations") for v in vendors] \
+        + ["**/*-integrated-test"]
     active = load_profiles(["senior"])
     assert list(active.default_exclude) == antes  # mesma ordem: a chave de memo do CocoIndex não muda
     assert set(TEST_EXCLUDE) <= set(antes) and set(NOISE_EXCLUDE) <= set(antes)

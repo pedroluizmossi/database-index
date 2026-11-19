@@ -25,6 +25,7 @@ from pathlib import Path
 import asyncpg
 import cocoindex as coco
 
+from ..domain.sync_errors import explain_error
 from ..domain.models import Org, Repo, RepoState, SyncResult
 from ..domain.policies import (
     name_from_path,
@@ -79,6 +80,9 @@ class Indexer:
         self._config = config
         self._git = git
         self._github = github
+        self._stop_reason: str | None = None   # parada pedida (botão "Parar" ou atualização do sistema)
+        self._tracker: SyncProgress | None = None
+        self._in_pipeline = False
 
     async def discover(self, orgs: list[Org] | None = None) -> dict[str, dict]:
         """Redescobre os repos das orgs (sem clonar nem indexar)."""
@@ -121,6 +125,7 @@ class Indexer:
             Falhas ao publicar não interrompem o sync.
         """
         res = SyncResult()
+        self._stop_reason = None
         if dry_run:
             orgs = await self._config.orgs()
             if do_discover and orgs:
@@ -130,7 +135,37 @@ class Indexer:
                                                                 only_changed=only_changed)
             return res
         tracker = SyncProgress()
+        self._tracker = tracker
         publish = _publisher(tracker, on_progress)
+        try:
+            return await self._sync_locked(names, res, tracker, publish, batch=batch, do_discover=do_discover,
+                                           pull=pull, full=full, progress=progress, allow_register=allow_register,
+                                           doc_pages=doc_pages, only_changed=only_changed)
+        finally:
+            self._tracker = None
+            self._stop_reason = None
+
+    def request_stop(self, reason: str) -> bool:
+        """Pede para o sync em andamento parar sem perder o que já foi feito: entre um download e outro, ou (na
+        indexação) pelo cancelamento do próprio CocoIndex, que guarda os arquivos já processados. False se não há
+        sync rodando neste processo."""
+        tracker = self._tracker
+        if tracker is None:
+            return False
+        if self._stop_reason is None:
+            self._stop_reason = reason
+            tracker.set_stopping(reason)
+            log.warning("parada pedida: %s", reason)
+            if self._in_pipeline:
+                from cocoindex._internal import core as coco_core
+
+                coco_core.cancel_all()
+        return True
+
+    async def _sync_locked(self, names: list[str] | None, res: SyncResult, tracker: SyncProgress,
+                           publish: Callable[[], Awaitable[None]], *, batch: int | None, do_discover: bool, pull: bool,
+                           full: bool, progress: bool, allow_register: bool, doc_pages: frozenset[str] | None,
+                           only_changed: bool) -> SyncResult:
         async with self.exclusive():
             orgs = await self._config.orgs()
             if do_discover and orgs:
@@ -156,17 +191,29 @@ class Indexer:
             plan = self._plan(rows, revisions, orgs, manual)
             if not selected:
                 log.info("nenhum repo para sincronizar; aplicando apenas remoções pendentes")
-            await self._count_files(plan, revisions, tracker)
-            tracker.set_phase("index")
-            await publish()
-            pipeline_error = await self._run_pipeline(plan, progress=progress, full=full, tracker=tracker, publish=publish)
+            pipeline_error: str | None = None
+            if self._stop_reason is None:
+                await self._count_files(plan, revisions, tracker)
+                tracker.set_phase("index")
+                await publish()
+                pipeline_error = await self._run_pipeline(plan, progress=progress, full=full, tracker=tracker,
+                                                          publish=publish)
             tracker.set_phase("finish")
             await publish()
+            if self._stop_reason is not None:
+                done = tracker.done_names()
+                res.stopped = self._stop_reason
+                res.not_done = [n for n in selected if n not in done and n not in res.errors]
+                revisions = {n: r for n, r in revisions.items() if n in done}  # só os que terminaram contam
+                pipeline_error = None
+                for name in res.not_done:
+                    tracker.update(name, status="skipped", error="não terminou: o job foi parado")
             await self._record(rows, revisions, res, pipeline_error)
             for name, msg in res.errors.items():
                 tracker.update(name, status="error", error=msg.splitlines()[0][:300] if msg else msg)
             await publish()
-            await self._prune_orphan_folders()
+            if self._stop_reason is None:
+                await self._prune_orphan_folders()
         return res
 
     async def _prune_orphan_folders(self) -> None:
@@ -175,6 +222,16 @@ class Indexer:
         documentação; o resto fica. Roda sob a trava do sync (nenhum sync lendo os clones)."""
         root = self._settings.repos_dir
         if not root.is_dir():
+            return
+        # A pasta de clones pode ser compartilhada por outro índice (outro schema, ex.: um teste com outro modelo):
+        # o que é órfão para um é clone do outro. Só limpa a pasta que pertence a este schema (marcador na raiz);
+        # sem marcador, marca e não apaga nada nesta rodada.
+        owner = await asyncio.to_thread(_claim_repos_dir, root, self._settings.pg_schema)
+        if owner is None:
+            return
+        if owner != self._settings.pg_schema:
+            log.warning("pastas órfãs não apagadas: %s pertence ao schema %r (este é %r); use outra "
+                        "CODE_INDEX_REPOS_DIR para cada índice", root, owner, self._settings.pg_schema)
             return
         known = set(await self._repos.all_rows()) | set(await configured_repos(self._config))
         for entry in await asyncio.to_thread(lambda: sorted(root.iterdir())):
@@ -240,7 +297,7 @@ class Indexer:
         if names:
             selected: list[str] = []
             for n in names:
-                resolved = resolve_name(n, rows)
+                resolved = resolve_name(n, rows, self._profiles.naming.repo_prefixes)
                 if resolved is None:
                     if not allow_register:
                         raise PermissionError(f"repo desconhecido: {n} (só admins registram repos novos)")
@@ -320,6 +377,8 @@ class Indexer:
         """Git sync dos selecionados. Devolve {nome: (commit, revisão)} dos que deram certo."""
         revisions: dict[str, tuple[str | None, str]] = {}
         for name in selected:
+            if self._stop_reason is not None:  # parada pedida: os que faltam não são baixados
+                break
             if tracker is not None and publish is not None:
                 tracker.update(name, status="fetching")
                 await publish()
@@ -343,9 +402,9 @@ class Indexer:
                     tracker.update(name, status="queued")
             except Exception as e:  # noqa: BLE001
                 log.error("git sync falhou para %s: %s", name, e)
-                res.errors[name] = str(e)
+                res.errors[name] = explain_error(str(e))
                 if tracker is not None:
-                    tracker.update(name, status="error", error=str(e).splitlines()[0][:300] if str(e) else None)
+                    tracker.update(name, status="error", error=res.errors[name][:300])
         return revisions
 
     async def _count_files(
@@ -417,8 +476,12 @@ class Indexer:
         # import tardio: só carrega o CocoIndex quando indexar
         from .code_flow import build_app
 
+        from cocoindex._internal import core as coco_core
+
         error: str | None = None
         progress_mod.set_active(tracker)
+        coco_core.reset_global_cancellation()  # uma parada anterior não pode cancelar esta rodada
+        self._in_pipeline = True
         try:
             run = asyncio.ensure_future(asyncio.to_thread(
                 build_app(plan).update_blocking,
@@ -432,9 +495,14 @@ class Indexer:
                     await publish()
             run.result()
         except Exception as e:
-            log.exception("pipeline falhou")
-            error = f"pipeline: {e}"
+            if self._stop_reason is not None:
+                log.warning("indexação interrompida: %s", self._stop_reason)
+            else:
+                log.exception("pipeline falhou")
+                error = f"indexação: {explain_error(str(e))}"
         finally:
+            self._in_pipeline = False
+            coco_core.reset_global_cancellation()
             progress_mod.set_active(None)
             # Finaliza o lifespan (fecha pool do Postgres e sessões HTTP do LiteLLM);
             # o ambiente é recriado sob demanda no próximo sync (watch/MCP).
@@ -465,9 +533,30 @@ class Indexer:
 
     # --- auxiliares ---------------------------------------------------------------
 
+    @property
+    def github(self) -> GitHubClient:
+        return self._github
+
     def _to_repo(self, row: RepoState, orgs: list[Org], manual: dict[str, Repo]) -> Repo:
         return repo_for_row(row, orgs, manual, default_include=self._profiles.default_include,
                             default_exclude=self._profiles.default_exclude)
+
+
+REPOS_DIR_OWNER = ".code-index-schema"
+
+
+def _claim_repos_dir(root: Path, schema: str) -> str | None:
+    """Dono da pasta de clones (schema que pode apagar órfãs nela). Sem marcador, grava este schema e devolve None
+    (primeira rodada: não apaga nada até a pasta ter dono)."""
+    marker = root / REPOS_DIR_OWNER
+    try:
+        return marker.read_text(encoding="utf-8").strip() or None
+    except FileNotFoundError:
+        try:
+            marker.write_text(schema + "\n", encoding="utf-8")
+        except OSError as e:
+            log.warning("não consegui marcar %s como do schema %r: %s", root, schema, e)
+        return None
 
 
 def _same_source(repo: Repo, url: str | None, path: str | None) -> bool:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections import Counter
 from collections.abc import Sequence
@@ -11,6 +12,8 @@ from typing import Any, Literal
 
 from ..domain.models import Org, Repo, RepoStatus
 from ..domain.policies import name_from_path, name_from_url, normalize_source
+from ..indexing.estimate import count_indexable
+from ..infra.github import GitHubRateLimited, github_slug
 from ..retrieval.redaction import mask_output
 
 from .base import _to_status
@@ -103,6 +106,82 @@ class ReposMixin(OwnershipMixin):
                 st.summary = mask_output(card.get("summary") or "", "markdown") or None
                 st.tags = list(card.get("domain_tags") or [])
                 st.card_stale = bool(card.get("stale"))
+        return out
+
+    async def estimate_files(
+        self,
+        repos: Sequence[str] | None = None,
+        *,
+        org: str | None = None,
+        limit: int = 100,
+        force: bool = False,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Conta os arquivos que entrariam no índice pela árvore do GitHub (1 chamada por repo; sem clone nem
+        embedding). Nunca roda sozinho (nem na descoberta nem no sync). Travas contra gastar a cota por engano:
+        só repos não indexados (sem `repos`), pula quem já foi contado no mesmo push (sem `force`), no máximo
+        `limit` chamadas (teto `GITHUB_ESTIMATE_MAX`) e para antes de a cota cair abaixo de `GITHUB_RATE_RESERVE`.
+        `dry_run`: só diz quantas chamadas faria (sem gastar cota)."""
+        cap = self.settings.github_estimate_max
+        if not 1 <= limit <= cap:
+            raise ValueError(f"limit deve estar entre 1 e {cap} (GITHUB_ESTIMATE_MAX)")
+        explicit = await self._resolve_repos(repos)
+        rows = await self._repos.all_rows()
+        candidates, cached, unsupported = [], 0, 0
+        for r in sorted(rows.values(), key=lambda r: r.name):
+            if explicit is not None:
+                if r.name not in explicit:
+                    continue
+            elif r.indexed or r.ignored or r.kind != "code" or (org and r.org != org):
+                continue
+            if github_slug(r.url) is None:
+                unsupported += 1
+                continue
+            if not force and r.files_estimate_at is not None and r.files_estimate_pushed_at == r.pushed_at:
+                cached += 1
+                continue
+            candidates.append(r)
+        gh = self._indexer.github
+        reserve = self.settings.github_rate_reserve
+        remaining = await asyncio.to_thread(gh.rate_remaining)
+        budget = min(limit, len(candidates))
+        if remaining is not None:
+            budget = max(0, min(budget, remaining - reserve))
+        out: dict[str, Any] = {
+            "candidates": len(candidates), "cached": cached, "unsupported": unsupported, "calls": budget,
+            "rate_remaining": remaining, "reserve": reserve, "estimated": [], "errors": [], "stopped": None,
+        }
+        if budget < min(limit, len(candidates)):
+            out["stopped"] = f"reserva da cota do GitHub ({reserve})"
+        if dry_run or budget == 0:
+            out["left"] = len(candidates)
+            return out
+        orgs = await self._config.orgs()
+        manual = {r.name: r for r in await self._config.repos()}
+        done = 0
+        for r in candidates[:budget]:
+            slug = github_slug(r.url)
+            assert slug is not None
+            try:
+                tree, remaining = await asyncio.to_thread(gh.repo_tree, slug, r.default_branch or "HEAD")
+            except GitHubRateLimited as e:
+                out["stopped"] = str(e)
+                break
+            except Exception as e:  # noqa: BLE001 - um repo com erro não para os outros
+                out["errors"].append({"name": r.name, "error": str(e)[:300]})
+                done += 1
+                continue
+            done += 1
+            files = 0 if tree is None else await asyncio.to_thread(
+                count_indexable, tree.files, self._repo_for_row(r, orgs, manual),
+                max_bytes=self.settings.max_file_bytes)
+            truncated = bool(tree and tree.truncated)
+            await self._repos.set_files_estimate(r.name, files, truncated, r.pushed_at)
+            out["estimated"].append({"name": r.name, "files": files, "truncated": truncated})
+            if remaining is not None and remaining <= reserve:
+                out["stopped"] = f"reserva da cota do GitHub ({reserve})"
+                break
+        out["calls"], out["rate_remaining"], out["left"] = done, remaining, len(candidates) - done
         return out
 
     async def find_repos(self, query: str, *, limit: int = 10) -> list[dict[str, Any]]:

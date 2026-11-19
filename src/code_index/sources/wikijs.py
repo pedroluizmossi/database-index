@@ -114,10 +114,35 @@ def wikijs_token(settings: Settings, url: str) -> str | None:
     return settings.wikijs_token.get_secret_value() if settings.wikijs_token else None
 
 
+def token_expired_at(token: str, *, now: float | None = None) -> str | None:
+    """Se o token é um JWT já vencido (campo `exp`), a data do vencimento (UTC); senão None (API key sem `exp`,
+    token válido ou que não é JWT)."""
+    import base64
+    import json
+    import time
+    from datetime import UTC, datetime
+
+    parts = token.removeprefix("Bearer ").split(".")
+    if len(parts) != 3:
+        return None
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)))
+    except (ValueError, TypeError):
+        return None
+    exp = payload.get("exp") if isinstance(payload, dict) else None
+    if not isinstance(exp, (int, float)) or exp > (now if now is not None else time.time()):
+        return None
+    return datetime.fromtimestamp(exp, UTC).strftime("%d/%m/%Y %H:%M UTC")
+
+
 class WikiJsClient:
     def __init__(self, base_url: str, token: str | None, *, http: httpx.AsyncClient | None = None) -> None:
         if not token:
             raise WikiJsError("defina WIKIJS_TOKEN (API key de leitura do Wiki.js) no .env")
+        # Token de sessão (JWT) vencido às vezes ainda é aceito: só vira explicação quando o Wiki.js recusar.
+        expired = token_expired_at(token)
+        self._hint = (f" O token (WIKIJS_TOKEN) venceu em {expired}: use uma API key de Administração → API Access "
+                      "(token de sessão do navegador vale só 30 minutos).") if expired else ""
         self._endpoint = base_url.rstrip("/") + "/graphql"
         self._headers = {"Authorization": f"Bearer {token}"}
         self._http = http
@@ -126,20 +151,23 @@ class WikiJsClient:
         client = self._http or httpx.AsyncClient(timeout=60)
         try:
             r = await client.post(self._endpoint, json={"query": query, "variables": variables}, headers=self._headers)
+        except httpx.TimeoutException:
+            raise WikiJsError("o Wiki.js não respondeu a tempo (timeout); tente de novo" + self._hint) from None
         except httpx.HTTPError as e:
-            raise WikiJsError(f"falha ao falar com o Wiki.js: {e}") from None
+            detail = str(e) or type(e).__name__
+            raise WikiJsError(f"falha ao falar com o Wiki.js: {detail}" + self._hint) from None
         finally:
             if self._http is None:
                 await client.aclose()
         if r.status_code in (401, 403):
-            raise WikiJsError("o Wiki.js recusou o token (WIKIJS_TOKEN inválido ou sem permissão de leitura)")
+            raise WikiJsError("o Wiki.js recusou o token (WIKIJS_TOKEN inválido ou sem permissão de leitura)." + self._hint)
         if r.status_code != 200:
             raise WikiJsError(f"Wiki.js respondeu HTTP {r.status_code}")
         body = r.json()
         if body.get("errors"):
             msg = body["errors"][0].get("message", "erro desconhecido")
             if msg == "Forbidden":
-                raise WikiJsError("o Wiki.js recusou o token (sem permissão para listar/ler páginas)")
+                raise WikiJsError("o Wiki.js recusou o token (sem permissão para listar/ler páginas)." + self._hint)
             raise WikiJsError(f"erro do Wiki.js: {msg}")
         return body["data"]
 

@@ -5,6 +5,7 @@ import { describeError } from "../api/client";
 import type { DocsPreview, Repo, SyncJob, SyncResult } from "../api/types";
 import { useIndex } from "../data/IndexProvider";
 import { useNavigation } from "../lib/navigation";
+import { formatRepoFiles, formatSize, repoFiles } from "../lib/repoSize";
 import { formatDateTime, jobActive, plural, repoShortName, timeAgo } from "../lib/utils";
 import { useToast } from "./Toaster";
 import { Dialog } from "./Dialog";
@@ -31,11 +32,6 @@ const POLL_MS = 2000;
 const MAX_BATCH = 50;
 const numberFormat = new Intl.NumberFormat("pt-BR");
 
-function formatSize(kb: number | null | undefined): string {
-  if (!kb) return "—";
-  if (kb < 1024) return `${numberFormat.format(kb)} KB`;
-  return `${(kb / 1024).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} MB`;
-}
 
 /** O que acontece com cada repo ao indexar. */
 /** Prévia de uma wiki: quantas páginas entrariam, por raiz, e a lista (sem baixar conteúdo). */
@@ -216,6 +212,10 @@ export function SyncDialog({ open, onClose, names, onlyChanged = false, defaultB
   const details = selected.map((name) => ({ name, repo: byName.get(name) }));
   const firstTime = details.filter((d) => plan(d.repo).tone === "accent").length;
   const totalKb = details.reduce((sum, d) => sum + (d.repo?.size_kb ?? 0), 0);
+  const codeDetails = details.filter((d) => d.repo?.kind !== "docs");
+  const counted = codeDetails.map((d) => (d.repo ? repoFiles(d.repo) : { value: null, prefix: "" as const }));
+  const totalFiles = counted.reduce((sum, c) => sum + (c.value ?? 0), 0);
+  const filesPartial = counted.some((c) => c.value == null || c.prefix === "≥");
   const languages = [...new Set(details.map((d) => d.repo?.language).filter(Boolean))] as string[];
   const onlyDocs = details.length > 0 && details.every((d) => d.repo?.kind === "docs");
 
@@ -313,10 +313,15 @@ export function SyncDialog({ open, onClose, names, onlyChanged = false, defaultB
           ) : (
             <>
               {!onlyDocs && (
-                <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <dl className="grid grid-cols-2 gap-3 sm:grid-cols-5">
                   <Stat label="Repositórios" value={numberFormat.format(selected.length)} />
                   <Stat label="1ª indexação" value={numberFormat.format(firstTime)} />
                   <Stat label="Tamanho no GitHub" value={formatSize(totalKb)} hint="inclui histórico do git" />
+                  <Stat
+                    label="Arquivos"
+                    value={codeDetails.length ? `${filesPartial ? "≥" : "~"}${numberFormat.format(totalFiles)}` : "—"}
+                    hint={filesPartial ? "há repos sem estimativa: code-index repo estimate" : "índice + estimativa do GitHub"}
+                  />
                   <Stat label="Linguagens" value={languages.length ? languages.slice(0, 3).join(", ") : "—"} />
                 </dl>
               )}
@@ -335,7 +340,7 @@ export function SyncDialog({ open, onClose, names, onlyChanged = false, defaultB
                           <p className="truncate text-xs text-stone-500 dark:text-stone-400">
                             {repo?.kind === "docs"
                               ? "documentação externa (wiki)"
-                              : `${repo?.org ?? "repositório avulso"} · ${repo?.language ?? "linguagem desconhecida"} · ${formatSize(repo?.size_kb)}`}
+                              : `${repo?.org ?? "repositório avulso"} · ${repo?.language ?? "linguagem desconhecida"} · ${formatSize(repo?.size_kb)}${repo && repoFiles(repo).value != null ? ` · ${formatRepoFiles(repo)} arquivos` : ""}`}
                           </p>
                         </div>
                         <Badge tone={p.tone}>{p.label}</Badge>

@@ -19,6 +19,8 @@ from pydantic import AliasChoices, Field, SecretStr, field_validator, model_vali
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 _ENV_FILE = find_dotenv(usecwd=True) or None
+# Chave fictícia para servidores de modelos próprios (EMBED_API_BASE/RERANK_API_BASE) que não conferem chave.
+LOCAL_API_KEY = "local"
 
 
 def _default_credentials_file() -> Path:
@@ -60,7 +62,22 @@ class Settings(BaseSettings):
     embed_model: str = Field("voyage/voyage-code-4", validation_alias="EMBED_MODEL")
     embed_dimensions: int | None = Field(None, validation_alias="EMBED_DIMENSIONS")
     embed_max_inflight: int = Field(4, validation_alias="EMBED_MAX_INFLIGHT")
+    # Servidor de modelos próprio (OpenAI-compatível: llama-swap/llama-server, vLLM...). Com ele, EMBED_MODEL vem
+    # no formato do LiteLLM para o provedor (ex.: "openai/qwen3-embedding"). O endereço fica fora da chave de memo
+    # dos embeddings: trocar de host (localhost ↔ cluster) não reembeda nada.
+    embed_api_base: str | None = Field(None, validation_alias="EMBED_API_BASE")
+    # Prefixo das CONSULTAS (não dos trechos). Modelos com instrução assimétrica pedem um (Qwen3-Embedding:
+    # "Instruct: <tarefa>\nQuery: "); a Voyage usa input_type e dispensa. Mudar o prefixo não reembeda o índice.
+    embed_query_prefix: str = Field("", validation_alias="EMBED_QUERY_PREFIX")
+    # Prefixo dos DOCUMENTOS (trechos, resumos, cartões), para modelos treinados com instrução nos dois lados
+    # (voyage-4-nano: "Represent the document for retrieval: "). Mudar reembeda o índice (é parte da chave de memo).
+    embed_document_prefix: str = Field("", validation_alias="EMBED_DOCUMENT_PREFIX")
+    # Corta o vetor nas N primeiras dimensões e renormaliza (modelos Matryoshka: voyage-4-nano devolve 2048 e o
+    # índice HNSW do pgvector aceita até 2000). Feito aqui, não no servidor (o llama-server não corta). Vazio = inteiro.
+    embed_truncate_dims: int | None = Field(None, ge=1, validation_alias="EMBED_TRUNCATE_DIMS")
     rerank_model: str = Field("voyage/rerank-2.5", validation_alias="RERANK_MODEL")  # vazio desliga
+    # Servidor de rerank próprio (ex.: llama-server --reranking): RERANK_MODEL="hosted_vllm/bge-reranker".
+    rerank_api_base: str | None = Field(None, validation_alias="RERANK_API_BASE")
     rerank_candidates: int = Field(40, validation_alias="RERANK_CANDIDATES")
     # Busca com filtro (repos, domínio, tipo, linguagem, caminho) sobre até N trechos: vetor exato em vez do
     # HNSW (que perde resultados quando o filtro é seletivo). Acima disso, HNSW com varredura iterativa.
@@ -98,6 +115,10 @@ class Settings(BaseSettings):
 
     # GitHub
     github_token: str | None = Field(None, validation_alias=AliasChoices("GITHUB_TOKEN", "GH_TOKEN"))
+    # `repo estimate` (contagem de arquivos pela árvore do GitHub, 1 chamada por repo): teto de chamadas por pedido e
+    # a cota REST que nunca é gasta (sobra para a descoberta e o clone dos syncs).
+    github_estimate_max: int = Field(500, ge=1, le=5000, validation_alias="GITHUB_ESTIMATE_MAX")
+    github_rate_reserve: int = Field(1000, ge=0, validation_alias="GITHUB_RATE_RESERVE")
 
     # Wiki.js (fontes [[docs]]): API key de leitura, criada em Administração → API Access
     wikijs_token: SecretStr | None = Field(None, validation_alias="WIKIJS_TOKEN")
@@ -123,10 +144,25 @@ class Settings(BaseSettings):
     # Indexação
     default_batch: int = Field(10, validation_alias="CODE_INDEX_BATCH")
     max_file_bytes: int = 512 * 1024
+    # Trechos, em tokens: a estrutura (método, classe, seção, bloco de config) decide onde cortar; o alvo diz até onde
+    # juntar peças vizinhas. ~800 tokens = um método inteiro na maioria dos casos, e 10 resultados (~8k tokens) cabem
+    # no contexto do agent. Peças abaixo do mínimo se juntam; acima do máximo viram janelas de linhas inteiras.
+    # Mudar reprocessa todos os arquivos (com a Voyage, reembedar custa).
+    chunk_tokens: int = Field(800, ge=100, le=8000, validation_alias="CHUNK_TOKENS")
+    chunk_min_tokens: int = Field(200, ge=20, validation_alias="CHUNK_MIN_TOKENS")
+    chunk_max_tokens: int = Field(1500, ge=100, validation_alias="CHUNK_MAX_TOKENS")
+    # Rede de segurança do embedding: corta o texto enviado ao modelo (o trecho gravado fica inteiro). Só pega uma
+    # linha sozinha maior que isso (as janelas não partem linhas). 0 = sem corte (a Voyage já trunca do lado dela).
+    embed_max_chars: int = Field(0, ge=0, validation_alias="EMBED_MAX_CHARS")
 
     # Fila de sync (jobs pedidos pela API/interface): o `serve` roda o worker embutido por padrão; desligado,
     # só o `code-index worker` (outro processo) executa os jobs. Os dois usam o mesmo código e a mesma fila.
     sync_worker_embedded: bool = Field(True, validation_alias="CODE_INDEX_SYNC_WORKER_EMBEDDED")
+    # Teto de jobs esperando na fila (um roda por vez): pedido além disso é recusado (409).
+    sync_queue_max: int = Field(10, ge=1, le=100, validation_alias="CODE_INDEX_SYNC_QUEUE_MAX")
+    # Ao sair (atualização do sistema), o worker para o job sem perder nada e espera até isto antes de cancelar; fica
+    # abaixo do terminationGracePeriodSeconds do pod (120 s no chart).
+    sync_worker_drain_seconds: float = Field(90.0, ge=0, le=3600, validation_alias="SYNC_WORKER_DRAIN_SECONDS")
     # Lease de um job reservado; o worker o renova a cada 1/3 disso. Vencido = worker caiu: o job volta à fila.
     sync_job_lease_seconds: float = Field(120.0, gt=0, le=3600, validation_alias="SYNC_JOB_LEASE_SECONDS")
     # Tentativas (reservas) de um job antes de falhar de vez. Encerramento limpo do worker não conta.
@@ -205,11 +241,17 @@ class Settings(BaseSettings):
             return [x.strip() for x in v.split(",") if x.strip()]
         return v
 
-    @field_validator("openapi_bucket_url", mode="before")
+    @field_validator("openapi_bucket_url", "embed_api_base", "rerank_api_base", "embed_truncate_dims", mode="before")
     @classmethod
     def _empty_is_none(cls, v: object) -> object:
-        """`OPENAPI_BUCKET_URL=` (vazio) = não definido: vale o padrão do perfil."""
+        """Vazio = não definido (`OPENAPI_BUCKET_URL=`: vale o padrão do perfil; `EMBED_API_BASE=`: o do provedor)."""
         return None if isinstance(v, str) and not v.strip() else v
+
+    @field_validator("embed_query_prefix", "embed_document_prefix", mode="before")
+    @classmethod
+    def _escaped_newline(cls, v: object) -> object:
+        """Aceita `\\n` literal (uma linha só no .env/values do Helm) como quebra de linha."""
+        return v.replace("\\n", "\n") if isinstance(v, str) else v
 
     @model_validator(mode="after")
     def _resolve_paths(self) -> "Settings":
@@ -259,8 +301,17 @@ class Settings(BaseSettings):
 
     @property
     def embed_kwargs(self) -> dict:
-        """Parâmetros extras repassados ao LiteLLM em toda chamada de embedding."""
-        return {"dimensions": self.embed_dimensions} if self.embed_dimensions else {}
+        """Parâmetros extras repassados ao LiteLLM em toda chamada de embedding. Com servidor próprio, o endereço e
+        uma chave fictícia (o LiteLLM exige uma para provedores OpenAI-compatíveis; o llama-swap não confere)."""
+        out: dict = {"dimensions": self.embed_dimensions} if self.embed_dimensions else {}
+        if self.embed_api_base:
+            out.update(api_base=self.embed_api_base, api_key=LOCAL_API_KEY)
+        return out
+
+    @property
+    def rerank_kwargs(self) -> dict:
+        """Parâmetros extras do rerank (servidor próprio)."""
+        return {"api_base": self.rerank_api_base, "api_key": LOCAL_API_KEY} if self.rerank_api_base else {}
 
 
 _current: Settings | None = None

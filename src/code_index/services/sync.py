@@ -13,8 +13,9 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from ..domain.auth import ADMIN, Principal
 from ..domain.models import SyncResult
+from ..domain.sync_errors import explain_error
 from ..indexing.orchestrator import ProgressSink, SyncBusy
-from ..infra.job_store import ActiveJobExists, JobRecord
+from ..infra.job_store import JobRecord, QueueFull
 from .enrich import EnrichMixin
 from .apis import ApisMixin
 from .base import ScanBusy
@@ -64,6 +65,22 @@ class SyncMixin(VectorsMixin, ApisMixin, EnrichMixin, TestsMixin, GraphMixin):
         """
         if isinstance(batch, str):
             batch = self.settings.default_batch
+        last: dict[str, Any] = {}
+
+        async def remember(snapshot: dict[str, Any]) -> None:
+            last.clear()
+            last.update(snapshot)
+            if on_progress is not None:
+                await on_progress(snapshot)
+
+        async def step(label: str) -> None:
+            """Etapa final (fatos, vínculos, testes...): publica no job o mesmo retrato, com a etapa atual."""
+            if on_progress is not None and last:
+                from datetime import UTC, datetime
+
+                await on_progress({**last, "phase": "finish", "phase_label": "finalizando", "step": label,
+                                   "activity_at": datetime.now(UTC).isoformat(timespec="seconds")})
+
         result = await self._indexer.sync(
             names,
             batch=batch,
@@ -74,13 +91,16 @@ class SyncMixin(VectorsMixin, ApisMixin, EnrichMixin, TestsMixin, GraphMixin):
             dry_run=dry_run,
             allow_register=allow_register,
             doc_pages=doc_pages,
-            on_progress=on_progress,
+            on_progress=remember,
             only_changed=only_changed,
         )
-        if not dry_run:
+        if not dry_run and not self._draining:  # atualização do sistema: o próximo job faz o fim (é idempotente)
+            await step("garantindo os índices de busca")
             await self._ensure_search_indexes()
-            await self.after_index()
+            await self.after_index(step=step)
         return result
+
+    _draining = False  # o worker está saindo (atualização do sistema): para o job e devolve o resto à fila
 
     # ------------------------------------------------------------ leituras dos clones (sem custo de API)
 
@@ -154,21 +174,31 @@ class SyncMixin(VectorsMixin, ApisMixin, EnrichMixin, TestsMixin, GraphMixin):
             raise ScanFailed(f"leitura {kind} falhou: {run['error']}")
         return dict(run["result"])
 
-    async def after_index(self) -> dict[str, Any]:
+    async def after_index(self, step: Any = None) -> dict[str, Any]:
         """Fatos dos repos cuja revisão mudou + catálogo de documentos + relações derivadas + resumos de
         arquivos de volta nas colunas de busca (o sync regrava os trechos que reprocessa) + casos de teste e grafo de
-        chamadas dos repos que mudaram (lidos dos clones, sem embedding)."""
+        chamadas dos repos que mudaram (lidos dos clones, sem embedding). `step`: avisa a etapa atual (andamento do job)."""
+        async def at(label: str) -> None:
+            if step is not None:
+                await step(label)
+
+        await at("lendo os fatos dos repos (manifestos, SDL, catalog-info)")
         facts = await self.enrich_facts(rebuild=False)
-        out = {"facts": facts, "relations": await self.rebuild_relations(),
-               "summaries": await self.apply_file_summaries()}
+        await at("recalculando os vínculos (repos, docs, APIs, donos)")
+        relations = await self.rebuild_relations()
+        await at("reaplicando os resumos dos arquivos na busca")
+        out = {"facts": facts, "relations": relations, "summaries": await self.apply_file_summaries()}
+        await at("lendo os casos de teste dos clones")
         try:
             out["tests"] = await self.scan_tests()
         except Exception:  # noqa: BLE001 - leitura dos testes é um extra: não derruba o sync
             log.exception("leitura dos casos de teste falhou")
+        await at("atualizando os vetores de resumos e cartões")
         try:
             out["vectors"] = await self.maintain_vectors()   # obsoletos saem; geração só com teto configurado
         except Exception:  # noqa: BLE001 - os vetores extras são um extra: não derrubam o sync
             log.exception("manutenção dos vetores extras falhou")
+        await at("lendo o grafo de chamadas dos clones")
         try:
             out["calls"] = await self.scan_calls()
         except Exception:  # noqa: BLE001 - o grafo de chamadas é um extra: não derruba o sync
@@ -190,11 +220,12 @@ class SyncMixin(VectorsMixin, ApisMixin, EnrichMixin, TestsMixin, GraphMixin):
         only_changed: bool = False,
     ) -> JobRecord:
         """Enfileira uma indexação e devolve o job (`queued`, já com id). Quem executa é o worker
-        (`run_sync_worker`: embutido no `serve` ou o `code-index worker`). Um job ativo por vez.
+        (`run_sync_worker`: embutido no `serve` ou o `code-index worker`). Vários na fila, um rodando por vez.
 
         `batch` None = sem limite de lote (o `--all` da CLI). `full`: reprocessa ignorando caches (caro; só
         admin). `only_changed`: lote automático só com o que mudou. `doc_pages`: só estas páginas (sem idioma) de UMA fonte de documentação (o `--page` da CLI).
-        Levanta RuntimeError (ActiveJobExists) se já houver um job na fila ou rodando.
+        Levanta RuntimeError: QueueFull (fila no teto `CODE_INDEX_SYNC_QUEUE_MAX`) ou AlreadyQueued (repo pedido já
+        está num job da fila).
         """
         actor = principal.actor if principal else "operador local"
         params: dict[str, Any] = {"repos": names, "batch": batch, "all": batch is None,
@@ -221,9 +252,9 @@ class SyncMixin(VectorsMixin, ApisMixin, EnrichMixin, TestsMixin, GraphMixin):
             if not pages or any(".." in p.split("/") for p in pages):
                 raise ValueError("informe caminhos de página válidos, ex.: Plataforma/Email")
             params["repos"], params["doc_pages"] = [source.repo_name], pages
-        active = await self._jobs.active()
-        if active is not None:  # antes de registrar fonte nova (a criação abaixo também recusa, atomicamente)
-            raise ActiveJobExists(active.id, active.status)
+        limit = self.settings.sync_queue_max
+        if await self._jobs.queued_count() >= limit:  # antes de registrar fonte nova (a criação também recusa)
+            raise QueueFull(limit)
         if openapi_domain is not None:
             if principal is not None and not principal.has(ADMIN):
                 raise PermissionError("só administradores registram fontes")
@@ -232,7 +263,7 @@ class SyncMixin(VectorsMixin, ApisMixin, EnrichMixin, TestsMixin, GraphMixin):
             params["openapi_services"] = openapi_services
         # O worker não tem o Principal: guarda só a decisão (admin registra repo desconhecido) e o id do token.
         job_id = await self._jobs.create(
-            actor, params, allow_register=principal is None or principal.has(ADMIN),
+            actor, params, max_queued=limit, allow_register=principal is None or principal.has(ADMIN),
             token_id=principal.token_id if principal else None,
         )
         self._job_wakeup.set()  # acorda o worker embutido, se houver
@@ -283,18 +314,24 @@ class SyncMixin(VectorsMixin, ApisMixin, EnrichMixin, TestsMixin, GraphMixin):
         log.info("worker de sync %s encerrado", worker)
         return ran
 
-    @staticmethod
-    async def _run_until_stop(coro: Coroutine[Any, Any, None], stop: asyncio.Event) -> None:
-        """Roda `coro` até terminar; se `stop` disparar (ou esta task for cancelada), cancela e espera."""
+    async def _run_until_stop(self, coro: Coroutine[Any, Any, None], stop: asyncio.Event) -> None:
+        """Roda `coro` até terminar. Se `stop` disparar (o worker vai sair: atualização do sistema), pede ao sync que
+        pare sem perder nada e espera até `SYNC_WORKER_DRAIN_SECONDS`: os repos prontos ficam indexados e o resto
+        volta à fila. Passado o prazo (ou com a task cancelada), cancela como antes (o job inteiro volta à fila)."""
         task = asyncio.ensure_future(coro)
         stopper = asyncio.ensure_future(stop.wait())
         try:
             await asyncio.wait({task, stopper}, return_when=asyncio.FIRST_COMPLETED)
+            if not task.done():
+                self._draining = True
+                self._indexer.request_stop("atualização do sistema (o worker está reiniciando)")
+                await asyncio.wait({task}, timeout=self.settings.sync_worker_drain_seconds)
         finally:
             stopper.cancel()
             if not task.done():
                 task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+            self._draining = False
 
     async def _wait_for_work(self, stop: asyncio.Event) -> None:
         waiters = {asyncio.ensure_future(self._job_wakeup.wait()), asyncio.ensure_future(stop.wait())}
@@ -305,6 +342,20 @@ class SyncMixin(VectorsMixin, ApisMixin, EnrichMixin, TestsMixin, GraphMixin):
             for w in waiters:
                 w.cancel()
             self._job_wakeup.clear()
+
+    async def _watch_stop(self, job_id: str) -> None:
+        """Confere a cada ~5 s se alguém pediu para parar o job (botão "Parar"); pede a parada ao indexador uma vez."""
+        while True:
+            await asyncio.sleep(5)
+            try:
+                who = await self._jobs.stop_requested(job_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - tenta de novo no próximo intervalo
+                continue
+            if who is not None:
+                self._indexer.request_stop(f"pedido por {who}")
+                return
 
     async def _heartbeat(self, job_id: str, worker: str) -> None:
         lease = self.settings.sync_job_lease_seconds
@@ -336,6 +387,8 @@ class SyncMixin(VectorsMixin, ApisMixin, EnrichMixin, TestsMixin, GraphMixin):
 
         status, result, error = "failed", None, None
         heartbeat = asyncio.create_task(self._heartbeat(job.id, worker))
+        stop_watch = asyncio.create_task(self._watch_stop(job.id))
+        res = None
         try:
             batch = params.get("batch")
             pages = params.get("doc_pages")
@@ -351,7 +404,23 @@ class SyncMixin(VectorsMixin, ApisMixin, EnrichMixin, TestsMixin, GraphMixin):
                     only_changed=bool(params.get("only_changed", False)),
                 )
             status, result = "done", res.to_dict()
-            if res.all_failed:
+            if res.stopped:
+                done, asked = len(res.indexed), len(res.selected)
+                if self._draining and (res.not_done or not res.selected):
+                    # Atualização do sistema: o que terminou fica; o resto volta à fila para o próximo worker.
+                    rest = dict(params, repos=res.not_done) if params.get("repos") else dict(params)
+                    from datetime import datetime
+
+                    note = (f"interrompido pela atualização do sistema às {datetime.now().strftime('%H:%M')}: "
+                            f"{done} de {asked} repo(s) concluído(s); continua com os {len(res.not_done)} restantes")
+                    await self._jobs.requeue(job.id, worker=worker, params=rest, note=note)
+                    log.warning("job de sync %s: %s", job.id, note)
+                    return
+                status = "stopped"
+                error = (f"parado por {res.stopped.removeprefix('pedido por ')}: {done} de {asked} repo(s) concluído(s)"
+                         + (f"; os outros {len(res.not_done)} ficam pendentes (o que já foi processado não será refeito)"
+                            if res.not_done else ""))
+            elif res.all_failed:
                 # Nada foi indexado e todos os selecionados falharam: o job falhou, não "concluiu".
                 status = "failed"
                 error = f"todos os {len(res.selected)} repo(s) falharam; ex.: {res.first_error()[:300]}"
@@ -370,11 +439,12 @@ class SyncMixin(VectorsMixin, ApisMixin, EnrichMixin, TestsMixin, GraphMixin):
             log.exception("job de sync %s falhou (tentativa %d)", job.id, job.attempts)
             if job.attempts < self.settings.sync_job_max_attempts:
                 await self._jobs.release(job.id, worker=worker, count_attempt=True,
-                                         error=f"tentativa {job.attempts} falhou: {str(e)[:500]}")
+                                         error=f"tentativa {job.attempts} falhou: {explain_error(str(e))}")
                 return
-            error = f"falhou após {job.attempts} tentativa(s): {e}"
+            error = f"falhou após {job.attempts} tentativa(s): {explain_error(str(e))}"
         finally:
             heartbeat.cancel()
+            stop_watch.cancel()
         if not await self._jobs.finish(job.id, status=status, result=result, error=error, worker=worker):
             log.error("job de sync %s terminou, mas o lease já era de outro worker: resultado descartado", job.id)
             return
@@ -392,6 +462,38 @@ class SyncMixin(VectorsMixin, ApisMixin, EnrichMixin, TestsMixin, GraphMixin):
             else:
                 log.error("job de sync %s: lease vencido e tentativas esgotadas, marcado como falho", job_id)
         return len(changed)
+
+    async def stop_job(self, principal: Principal | None, job_id: str) -> JobRecord:
+        """Para um job (quem pediu ou admin). Na fila: sai da fila. Rodando: termina o que está em andamento sem
+        perder nada (os repos prontos ficam indexados, os demais voltam a pendentes); o worker confere a cada ~5 s."""
+        job = await self._jobs.get(job_id)
+        if job is None:
+            raise ValueError(f"job não encontrado: {job_id}")
+        if job.status == "queued":
+            return await self.cancel_job(principal, job_id)
+        actor = principal.actor if principal else "operador local"
+        if principal is not None and not principal.has(ADMIN) and job.requested_by != principal.actor:
+            raise PermissionError("só quem pediu o job ou um administrador o para")
+        if not await self._jobs.request_stop(job_id, by=actor):
+            raise RuntimeError(f"o job {job_id} não está rodando ({job.status})")
+        stopped = await self._jobs.get(job_id)
+        assert stopped is not None
+        return stopped
+
+    async def cancel_job(self, principal: Principal | None, job_id: str) -> JobRecord:
+        """Tira da fila um job que ainda não começou (quem pediu ou admin). Rodando não cancela: o sync é
+        incremental, então pará-lo no meio só desperdiça o que já foi feito."""
+        job = await self._jobs.get(job_id)
+        if job is None:
+            raise ValueError(f"job não encontrado: {job_id}")
+        actor = principal.actor if principal else "operador local"
+        if principal is not None and not principal.has(ADMIN) and job.requested_by != principal.actor:
+            raise PermissionError("só quem pediu o job ou um administrador o cancela")
+        if not await self._jobs.cancel(job_id, by=actor):
+            raise RuntimeError(f"o job {job_id} não está na fila ({job.status}): só cancela o que ainda não começou")
+        canceled = await self._jobs.get(job_id)
+        assert canceled is not None
+        return canceled
 
     async def get_job(self, job_id: str) -> JobRecord | None:
         return await self._jobs.get(job_id)

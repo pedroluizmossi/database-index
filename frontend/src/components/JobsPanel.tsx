@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowRight, ChevronRight, Clock, History, LoaderCircle, RotateCcw } from "lucide-react";
+import { AlertTriangle, ArrowRight, ChevronRight, Clock, History, ListOrdered, LoaderCircle, RotateCcw, Square, X } from "lucide-react";
 import { api } from "../api/endpoints";
 import { describeError } from "../api/client";
 import type { RepoProgress, RepoProgressStatus, SyncJob, SyncProgress } from "../api/types";
@@ -7,6 +7,7 @@ import { useIndex } from "../data/IndexProvider";
 import { useNavigation } from "../lib/navigation";
 import { cx, formatDateTime, formatDuration, jobActive, plural, timeAgo } from "../lib/utils";
 import { Dialog } from "./Dialog";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { KindIcon, type EntityKind } from "./kind";
 import { Alert, Badge, Button, EmptyState, Panel, ProgressBar, Skeleton, type BadgeTone } from "./ui";
 
@@ -17,7 +18,18 @@ const STATUS: Record<SyncJob["status"], { label: string; tone: BadgeTone }> = {
   running: { label: "Rodando", tone: "accent" },
   done: { label: "Concluído", tone: "indexed" },
   failed: { label: "Falhou", tone: "error" },
+  canceled: { label: "Cancelado", tone: "neutral" },
+  stopped: { label: "Parado", tone: "warning" },
 };
+
+/** Sem mudança no andamento por mais que isto: aviso de possível travamento. */
+const STALL_MS = 5 * 60 * 1000;
+/** Sem sinal do worker por mais que isto (lease de 120 s, renovado a cada 40 s): worker provavelmente caiu. */
+const SILENT_MS = 3 * 60 * 1000;
+
+function ago(iso: string | null | undefined): number | null {
+  return iso ? Date.now() - Date.parse(iso) : null;
+}
 
 /** Status exibido: um job "done" em que algum repo falhou aparece como "Com erros". */
 function display(job: SyncJob): { label: string; tone: BadgeTone } {
@@ -30,7 +42,10 @@ export interface JobsState {
   jobs: SyncJob[] | null;
   error: string | null;
   loading: boolean;
+  /** Job em destaque: o que roda; sem nenhum rodando, o primeiro da fila. */
   running: SyncJob | null;
+  /** Jobs esperando na fila, do mais antigo (o próximo) ao mais novo, sem o que está em destaque. */
+  queue: SyncJob[];
   refresh: () => Promise<void>;
 }
 
@@ -69,7 +84,12 @@ export function useJobs(enabled: boolean, onJobFinished: () => void): JobsState 
     void refresh();
   }, [refresh]);
 
-  const running = jobs?.find(jobActive) ?? null;
+  const waiting = useMemo(
+    () => (jobs ?? []).filter((j) => j.status === "queued").sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at)),
+    [jobs],
+  );
+  const running = jobs?.find((j) => j.status === "running") ?? waiting[0] ?? null;
+  const queue = useMemo(() => waiting.filter((j) => j.id !== running?.id), [waiting, running]);
 
   // Polling só enquanto há job ativo.
   useEffect(() => {
@@ -78,7 +98,7 @@ export function useJobs(enabled: boolean, onJobFinished: () => void): JobsState 
     return () => window.clearTimeout(timer);
   }, [running, jobs, refresh]);
 
-  return { jobs, error, loading, running, refresh };
+  return { jobs, error, loading, running, queue, refresh };
 }
 
 /** Tempo total desde o pedido (inclui a espera na fila e as tentativas). */
@@ -138,9 +158,9 @@ function filesLabel(done: number, total: number | null): string {
   return total ? `${count.format(done)}/${count.format(total)} arquivos` : `${count.format(done)} arquivos`;
 }
 
-/** Resumo de uma linha do andamento: etapa, repos e arquivos. */
+/** Resumo de uma linha do andamento: etapa (com o detalhe), repos e arquivos. */
 function progressLine(p: SyncProgress): string {
-  const parts = [p.phase_label];
+  const parts = [p.step ? `${p.phase_label}: ${p.step}` : p.phase_label];
   if (p.repos_total > 0) parts.push(`${p.repos_done}/${p.repos_total} repositórios`);
   if (p.phase === "index" || p.phase === "finish") parts.push(filesLabel(p.files_done, p.files_total || null));
   return parts.join(" · ");
@@ -148,6 +168,7 @@ function progressLine(p: SyncProgress): string {
 
 function summary(job: SyncJob): string {
   if (job.status === "queued") return requeueNote(job) ? "de volta à fila, aguardando o worker…" : "na fila, aguardando o worker…";
+  if (job.status === "stopped") return job.error ?? "parado";
   if (job.status === "running") return job.progress ? progressLine(job.progress) : "em andamento…";
   if (job.result) {
     const ok = Object.keys(job.result.indexed).length;
@@ -184,7 +205,17 @@ function WorkerName({ job }: { job: SyncJob }) {
  * Job ativo em destaque (página Indexação): na fila ou rodando, tentativa, worker, etapa e o andamento de cada
  * repositório. Sem job ativo, uma linha dizendo isso.
  */
-export function ActiveJobPanel({ job, onOpen }: { job: SyncJob | null; onOpen: (job: SyncJob) => void }) {
+export function ActiveJobPanel({
+  job,
+  onOpen,
+  onStop,
+}: {
+  job: SyncJob | null;
+  onOpen: (job: SyncJob) => void;
+  /** Quem pode indexar: "Parar" (o servidor confere se é quem pediu ou admin). */
+  onStop?: (job: SyncJob) => Promise<void>;
+}) {
+  const [confirmStop, setConfirmStop] = useState(false);
   if (!job) {
     return (
       <Panel className="flex items-center gap-3 px-5 py-4 text-sm text-stone-500 dark:text-stone-400">
@@ -198,6 +229,11 @@ export function ActiveJobPanel({ job, onOpen }: { job: SyncJob | null; onOpen: (
   const p = queued ? null : (job.progress ?? null);
   const showBar = p !== null && (p.phase === "index" || p.phase === "finish") && p.files_total > 0;
   const attempt = attemptLabel(job);
+  const stopping = !queued && Boolean(job.stop_requested_at);
+  const idle = queued ? null : ago(p?.activity_at ?? job.run_started_at);
+  const silent = queued ? null : ago(job.heartbeat_at);
+  const stalled = idle !== null && idle > STALL_MS;
+  const workerSilent = silent !== null && silent > SILENT_MS;
   return (
     <Panel className="overflow-hidden shadow-[inset_3px_0_0_var(--color-accent-500)]">
       <div role="status" className="space-y-4 py-4 pr-4 pl-5 sm:pr-5 sm:pl-6">
@@ -209,8 +245,8 @@ export function ActiveJobPanel({ job, onOpen }: { job: SyncJob | null; onOpen: (
           )}
           <div className="min-w-0 flex-1">
             <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <Badge tone={STATUS[job.status].tone} dot>
-                {queued ? "Na fila" : "Rodando"}
+              <Badge tone={stopping ? "warning" : STATUS[job.status].tone} dot>
+                {queued ? "Na fila" : stopping ? "Parando…" : "Rodando"}
               </Badge>
               <span className="min-w-0 truncate font-medium">{scopeLabel(job)}</span>
               {attempt && (
@@ -223,12 +259,46 @@ export function ActiveJobPanel({ job, onOpen }: { job: SyncJob | null; onOpen: (
               {queued ? "Aguardando o worker de indexação." : p ? progressLine(p) : "Em andamento…"}
             </p>
           </div>
-          <Button variant="secondary" size="sm" onClick={() => onOpen(job)}>
-            Ver detalhes
-          </Button>
+          <div className="flex shrink-0 gap-2">
+            {onStop && !queued && !stopping && (
+              <Button variant="ghost" size="sm" onClick={() => setConfirmStop(true)} title="Termina o que está em andamento e para">
+                <Square className="size-3.5" aria-hidden="true" />
+                Parar
+              </Button>
+            )}
+            <Button variant="secondary" size="sm" onClick={() => onOpen(job)}>
+              Ver detalhes
+            </Button>
+          </div>
         </div>
 
         <RequeueNote job={job} />
+        {stopping && (
+          <p className="flex items-start gap-2 text-sm text-amber-700 dark:text-amber-300">
+            <Square className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+            <span>
+              Parada pedida por {job.stop_requested_by ?? "alguém"} {timeAgo(job.stop_requested_at ?? null)}: o worker termina o que está em
+              andamento (em até ~5 s para perceber). Os repos prontos ficam indexados; os demais voltam a pendentes.
+            </span>
+          </p>
+        )}
+        {!queued && (workerSilent ? (
+          <p className="flex items-start gap-2 text-sm text-rose-700 dark:text-rose-300">
+            <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+            <span>
+              Sem sinal do worker há {formatDuration(silent ?? 0)}. Ele pode ter caído: o job volta sozinho para a fila quando a
+              reserva vencer (e é retomado sem perder o que já foi feito).
+            </span>
+          </p>
+        ) : stalled ? (
+          <p className="flex items-start gap-2 text-sm text-amber-700 dark:text-amber-300">
+            <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+            <span>
+              Sem avanço há {formatDuration(idle ?? 0)} em "{p ? progressLine(p) : "em andamento"}". O worker está vivo (sinal{" "}
+              {timeAgo(job.heartbeat_at ?? null)}): pode ser uma etapa longa sem contador. Se continuar assim, use "Parar".
+            </span>
+          </p>
+        ) : null)}
 
         <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm sm:grid-cols-4">
           <Item label="Pedido por">{job.requested_by || "—"}</Item>
@@ -241,15 +311,34 @@ export function ActiveJobPanel({ job, onOpen }: { job: SyncJob | null; onOpen: (
           <Item label="Worker">
             <WorkerName job={job} />
           </Item>
+          {!queued && (
+            <Item label="Última atividade">
+              <span title={p?.activity_at ? formatDateTime(p.activity_at) : undefined}>{p?.activity_at ? timeAgo(p.activity_at) : "—"}</span>
+              {job.heartbeat_at && <span className="text-stone-500"> · sinal do worker {timeAgo(job.heartbeat_at)}</span>}
+            </Item>
+          )}
         </dl>
 
         {showBar && p && <ProgressBar value={p.files_done} max={p.files_total} label="Arquivos processados no lote" />}
+        {p?.others && p.others.repos > 0 && <OthersNote others={p.others} />}
         {p && p.repos.length > 0 && (
           <Section title={`Repositórios (${p.repos_done}/${p.repos_total})`}>
             <RepoProgressList repos={p.repos} running />
           </Section>
         )}
       </div>
+      {onStop && (
+        <ConfirmDialog
+          open={confirmStop}
+          onClose={() => setConfirmStop(false)}
+          title="Parar a indexação?"
+          confirmLabel="Parar"
+          onConfirm={() => onStop(job)}
+        >
+          O worker termina o que está em andamento e para. Os repositórios que já terminaram ficam indexados; os demais voltam a
+          pendentes. Nada do que já foi processado será refeito quando você indexar de novo.
+        </ConfirmDialog>
+      )}
     </Panel>
   );
 }
@@ -273,7 +362,9 @@ export function ActiveJobNotice({ job }: { job: SyncJob }) {
         <LoaderCircle className="size-4 shrink-0 animate-spin text-accent-500" aria-hidden="true" />
       )}
       <p className="min-w-0 flex-[1_1_14rem] py-1 sm:truncate">
-        <span className="font-medium">{queued ? "Indexação na fila" : "Indexação em andamento"}</span>
+        <span className="font-medium">
+          {queued ? "Indexação na fila" : job.stop_requested_at ? "Indexação parando" : "Indexação em andamento"}
+        </span>
         <span className="text-stone-500 dark:text-stone-400"> · {p ? progressLine(p) : scopeLabel(job)}</span>
       </p>
       {nav?.can("indexing") && (
@@ -283,6 +374,69 @@ export function ActiveJobNotice({ job }: { job: SyncJob }) {
         </Button>
       )}
     </div>
+  );
+}
+
+/**
+ * Jobs esperando atrás do job em destaque, na ordem em que o worker vai pegá-los. `onCancel`: quem pode indexar
+ * tira um job da fila antes de ele começar (o servidor confere se é quem pediu ou admin).
+ */
+export function QueuePanel({
+  queue,
+  onOpen,
+  onCancel,
+}: {
+  queue: SyncJob[];
+  onOpen: (job: SyncJob) => void;
+  onCancel?: (job: SyncJob) => Promise<void>;
+}) {
+  const [canceling, setCanceling] = useState<string | null>(null);
+  if (queue.length === 0) return null;
+  return (
+    <Panel className="overflow-hidden">
+      <div className="flex items-center gap-2 border-b border-stone-200 px-4 py-3 dark:border-stone-800">
+        <ListOrdered className="size-4 text-stone-500" aria-hidden="true" />
+        <h3 className="font-semibold">Na fila</h3>
+        <span className="text-xs text-stone-500 dark:text-stone-400">
+          {queue.length} {plural(queue.length, "job esperando", "jobs esperando")}; o worker pega um por vez, do mais antigo
+        </span>
+      </div>
+      <ol className="divide-y divide-stone-200 dark:divide-stone-800">
+        {queue.map((job, i) => (
+          <li key={job.id} className="flex items-center gap-3 px-4 py-2.5 text-sm">
+            <span className="w-6 shrink-0 text-right font-mono text-xs text-stone-500 tabular-nums">{i + 1}º</span>
+            <button
+              type="button"
+              onClick={() => onOpen(job)}
+              className="min-w-0 flex-1 truncate text-left outline-none hover:text-accent-700 focus-visible:ring-2 focus-visible:ring-accent-500 dark:hover:text-accent-300"
+              title="Ver detalhes"
+            >
+              <span className="font-medium">{scopeLabel(job)}</span>
+              <span className="text-stone-500 dark:text-stone-400"> · {job.requested_by} · pedido {timeAgo(job.started_at)}</span>
+            </button>
+            {onCancel && (
+              <Button
+                variant="ghost"
+                size="sm"
+                loading={canceling === job.id}
+                onClick={async () => {
+                  setCanceling(job.id);
+                  try {
+                    await onCancel(job);
+                  } finally {
+                    setCanceling(null);
+                  }
+                }}
+                title="Tirar da fila (ainda não começou)"
+              >
+                <X className="size-3.5" aria-hidden="true" />
+                Cancelar
+              </Button>
+            )}
+          </li>
+        ))}
+      </ol>
+    </Panel>
   );
 }
 
@@ -416,7 +570,15 @@ export function JobDialog({ job, onClose }: { job: SyncJob | null; onClose: () =
             </Item>
           </dl>
 
-          {requeueNote(current) ? <RequeueNote job={current} /> : current.error && <Alert>{current.error}</Alert>}
+          {requeueNote(current) ? (
+            <RequeueNote job={current} />
+          ) : (
+            current.error && <Alert tone={current.status === "stopped" ? "info" : "error"}>{current.error}</Alert>
+          )}
+          {current.progress?.step && jobActive(current) && (
+            <p className="text-stone-600 dark:text-stone-300">Etapa atual: {progressLine(current.progress)}</p>
+          )}
+          {current.progress?.others && current.progress.others.repos > 0 && <OthersNote others={current.progress.others} />}
 
           {current.progress && current.progress.repos.length > 0 && (
             <Section title={`Repositórios (${current.progress.repos_done}/${current.progress.repos_total})`}>
@@ -452,6 +614,16 @@ export function JobDialog({ job, onClose }: { job: SyncJob | null; onClose: () =
                   </ul>
                 </Section>
               )}
+              {result.not_done && result.not_done.length > 0 && (
+                <Section title={`Não terminaram (${result.not_done.length})`}>
+                  <p className="text-stone-500 dark:text-stone-400">Continuam pendentes; indexe de novo quando quiser (o que já foi processado não é refeito).</p>
+                  <ul className="font-mono text-xs text-stone-600 dark:text-stone-300">
+                    {result.not_done.map((name) => (
+                      <li key={name} className="truncate">{name}</li>
+                    ))}
+                  </ul>
+                </Section>
+              )}
               {result.remaining > 0 && (
                 <p className="text-stone-500 dark:text-stone-400">{result.remaining} {plural(result.remaining, "repositório ficou", "repositórios ficaram")} para os próximos lotes.</p>
               )}
@@ -473,10 +645,34 @@ const REPO_STATUS: Record<RepoProgressStatus, { label: string; tone: BadgeTone }
   queued: { label: "Na fila", tone: "pending" },
   fetching: { label: "Baixando", tone: "accent" },
   indexing: { label: "Indexando", tone: "accent" },
+  checking: { label: "Refazendo", tone: "accent" },
   done: { label: "Pronto", tone: "indexed" },
   error: { label: "Erro", tone: "error" },
-  skipped: { label: "Pulado", tone: "ignored" },
+  skipped: { label: "Não terminou", tone: "ignored" },
 };
+
+/** Repos já indexados que o job está refazendo sem terem sido pedidos (as regras de indexação mudaram). */
+function OthersNote({ others }: { others: NonNullable<SyncProgress["others"]> }) {
+  return (
+    <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2.5 text-sm dark:border-amber-900/60 dark:bg-amber-950/30">
+      <p className="font-medium text-amber-800 dark:text-amber-200">
+        Também refazendo {others.repos} {plural(others.repos, "repositório já indexado", "repositórios já indexados")} ·{" "}
+        {count.format(others.files)} {plural(others.files, "arquivo", "arquivos")}
+      </p>
+      {others.reason && <p className="text-xs text-amber-800/80 dark:text-amber-200/80">Eles {others.reason}.</p>}
+      <ul className="space-y-0.5 font-mono text-xs text-stone-600 dark:text-stone-300">
+        {others.list.map((r) => (
+          <li key={r.name} className="flex justify-between gap-3">
+            <span className="truncate">{r.name}</span>
+            <span className="shrink-0 tabular-nums">
+              {count.format(r.files_redone)} refeitos{r.status === "done" ? " · pronto" : ""}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
 /** Situação de cada repo do lote: status, barra de arquivos e tempo. */
 function RepoProgressList({ repos, running }: { repos: RepoProgress[]; running: boolean }) {

@@ -113,6 +113,17 @@ def test_resolve_name(name: str, known: list[str], expected: str | None) -> None
     assert resolve_name(name, known) == expected
 
 
+def test_resolve_name_sem_o_prefixo_da_organizacao() -> None:
+    known = ["acme__acme-pedidos", "acme__acme-pedidos-frontend", "acme__pedidos-legado", "beta__x-email", "beta__y-email"]
+    assert resolve_name("pedidos", known, ("acme-",)) == "acme__acme-pedidos"
+    assert resolve_name("pedidos", known) is None                                  # sem perfil: como antes
+    assert resolve_name("acme-pedidos", known, ("acme-",)) == "acme__acme-pedidos"  # com prefixo: como antes
+    assert resolve_name("pedidos-legado", known, ("acme-",)) == "acme__pedidos-legado"  # o nome exato vence
+    assert resolve_name("org/pedidos", known, ("acme-",)) is None                  # só para o nome curto
+    with pytest.raises(ValueError, match="ambíguo"):
+        resolve_name("email", known, ("x-", "y-"))
+
+
 def test_resolve_name_ambiguo_levanta_erro() -> None:
     with pytest.raises(ValueError, match="ambíguo"):
         resolve_name("proj", ["a__proj", "b__proj"])

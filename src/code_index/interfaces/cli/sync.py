@@ -24,6 +24,18 @@ def _print_result(res: SyncResult) -> None:
 
 
 async def _cmd_sync(a: argparse.Namespace, settings: Settings) -> None:
+    if a.stop:
+        async with open_backend(settings) as svc:
+            job = await svc.stop_job(None, a.stop)
+        status = job["status"] if isinstance(job, dict) else job.status
+        print(f"job {a.stop}: {'parada pedida (o worker para em até ~5 s)' if status == 'running' else status}.")
+        return
+    if a.cancel:
+        async with open_backend(settings) as svc:
+            job = await svc.cancel_job(None, a.cancel)
+        status = job["status"] if isinstance(job, dict) else job.status
+        print(f"job {a.cancel}: {status} (tirado da fila).")
+        return
     if a.job:
         await _follow_job(a, settings)
         return
@@ -137,6 +149,9 @@ def register(sub: Subparsers, settings: Settings) -> None:
     s.add_argument("--no-wait", action="store_true",
                    help="modo remoto: só enfileira o job e sai (acompanhe com --job)")
     s.add_argument("--job", metavar="ID", help="modo remoto: acompanha um job já enfileirado até o fim")
+    s.add_argument("--cancel", metavar="ID", help="tira da fila um job que ainda não começou")
+    s.add_argument("--stop", metavar="ID", help="para um job (rodando: os repos prontos ficam indexados, os demais "
+                                                 "voltam a pendentes; na fila: sai da fila)")
     s.set_defaults(fn=_cmd_sync)
 
     w = sub.add_parser("watch", help="sync periódico em lotes")

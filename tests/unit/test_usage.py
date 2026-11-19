@@ -107,7 +107,8 @@ def test_medidor_soma_embedding_e_rerank(monkeypatch: pytest.MonkeyPatch) -> Non
 
     monkeypatch.setattr(llm.litellm, "aembedding", fake_embedding)
     monkeypatch.setattr(llm.litellm, "arerank", fake_rerank)
-    settings = SimpleNamespace(embed_model="m", embed_kwargs={}, rerank_model="r")
+    settings = SimpleNamespace(embed_model="m", embed_kwargs={}, embed_query_prefix="", embed_document_prefix="", embed_truncate_dims=None, embed_api_base=None, rerank_model="r",
+                               rerank_kwargs={})
 
     async def run() -> U.LLMUsage:
         with llm.metered() as meter:
@@ -129,7 +130,7 @@ def test_medidor_tolera_resposta_sem_uso(monkeypatch: pytest.MonkeyPatch) -> Non
         return SimpleNamespace(data=[{"embedding": [0.1]}])
 
     monkeypatch.setattr(llm.litellm, "aembedding", fake_embedding)
-    settings = SimpleNamespace(embed_model="m", embed_kwargs={})
+    settings = SimpleNamespace(embed_model="m", embed_kwargs={}, embed_query_prefix="", embed_document_prefix="", embed_truncate_dims=None, embed_api_base=None)
 
     async def run() -> U.LLMUsage:
         with llm.metered() as meter:

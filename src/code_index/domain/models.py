@@ -174,6 +174,10 @@ class RepoState:
     updated_at: datetime
     language: str | None = None
     kind: str = "code"
+    files_estimate: int | None = None              # arquivos indexáveis pela árvore do GitHub (repo estimate)
+    files_estimate_truncated: bool = False         # o GitHub cortou a árvore: a contagem é um mínimo
+    files_estimate_at: datetime | None = None
+    files_estimate_pushed_at: datetime | None = None  # push contado (mesmo push = não conta de novo)
 
     @property
     def indexed(self) -> bool:
@@ -211,6 +215,8 @@ class RepoStatus:
     chunks: int
     error: str | None
     size_kb: int | None = None   # tamanho do repositório no GitHub (inclui histórico)
+    files_estimate: int | None = None     # arquivos que entrariam no índice, pela árvore do GitHub (repo estimate)
+    files_estimate_truncated: bool = False  # árvore cortada pelo GitHub: a estimativa é um mínimo
     kind: str = "code"
     skipped: int = 0             # arquivos descartados na indexação (tamanho, binário...)
     summary: str | None = None   # resumo do cartão do repo (code-index enrich), se houver
@@ -260,6 +266,8 @@ class SyncResult:
     errors: dict[str, str] = field(default_factory=dict)
     discovered: dict[str, dict] = field(default_factory=dict)      # org -> {new, removed, total}
     remaining: int = 0                                              # candidatos para os próximos lotes
+    stopped: str | None = None    # motivo, se o sync foi parado no meio (pedido ou atualização do sistema)
+    not_done: list[str] = field(default_factory=list)  # pedidos que não terminaram por causa da parada
 
     def to_dict(self) -> dict:
         return asdict(self)

@@ -418,6 +418,12 @@ class RemoteService:
         rows = await self._get("/repos", status=status, org=org, name=name)
         return [_build(RepoStatus, r) for r in rows]
 
+    async def estimate_files(self, repos: list[str] | None = None, *, org: str | None = None, limit: int = 100,
+                             force: bool = False, dry_run: bool = False) -> dict[str, Any]:
+        return await self.call("POST", "/repos/estimate", json={
+            "repos": repos or None, "org": org, "limit": limit, "force": force, "dry_run": dry_run,
+        }, timeout=max(self._timeout, 900.0))
+
     async def find_repos(self, query: str, *, limit: int = 10) -> list[dict[str, Any]]:
         return await self._get("/repos/find", q=query, limit=limit)
 
@@ -483,7 +489,18 @@ class RemoteService:
             return _build(SyncResult, job["result"])
         if job["status"] == "failed":
             raise RemoteError(f"o job {job_id} falhou: {job.get('error') or 'sem detalhes'}")
+        if job["status"] == "stopped":
+            print(f"o job {job_id} foi parado: {job.get('error') or ''}", file=sys.stderr)
+            return _build(SyncResult, job["result"]) if job.get("result") else SyncResult()
+        if job["status"] == "canceled":
+            raise RemoteError(f"o job {job_id} foi cancelado: {job.get('error') or 'tirado da fila'}")
         return SyncResult()
+
+    async def stop_job(self, _principal: Any, job_id: str) -> dict[str, Any]:
+        return await self.call("POST", f"/sync/jobs/{_seg(job_id)}/stop")
+
+    async def cancel_job(self, _principal: Any, job_id: str) -> dict[str, Any]:
+        return await self.call("POST", f"/sync/jobs/{_seg(job_id)}/cancel")
 
     async def sync(self, repos: list[str] | None = None, *, batch: int | None | str = "default",
                    do_discover: bool = True, pull: bool = True, full: bool = False, dry_run: bool = False,

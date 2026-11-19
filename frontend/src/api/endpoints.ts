@@ -26,6 +26,7 @@ import type {
   RepoMatch,
   SearchRequest,
   SyncJob,
+  SystemInfo,
   DocPageRow,
   DocCatalog,
   DocSelectionResult,
@@ -130,6 +131,12 @@ export const api = {
       repos, batch, discover: repos === null, pull: true, dry_run: false, only_changed: onlyChanged,
     }),
   syncJob: (id: string) => getJson<SyncJob>(`/api/v1/sync/jobs/${seg(id)}`),
+  /** Configuração efetiva, saúde e perfis (admin; só leitura, sem custo). */
+  system: () => getJson<SystemInfo>("/api/v1/system"),
+  /** Para um job: na fila sai da fila; rodando, os repos prontos ficam indexados e os demais voltam a pendentes. */
+  syncStop: (id: string) => postJson<SyncJob>(`/api/v1/sync/jobs/${seg(id)}/stop`, undefined),
+  /** Tira da fila um job que ainda não começou (quem pediu ou admin). */
+  syncCancel: (id: string) => postJson<SyncJob>(`/api/v1/sync/jobs/${seg(id)}/cancel`, undefined),
   syncJobs: (limit = 20) => getJson<SyncJob[]>("/api/v1/sync/jobs", { query: { limit } }),
   // vetores das perguntas dos resumos e dos cartões (index:write): o estado não custa; gerar custa na Voyage
   vectorStatus: () => getJson<VectorStatus>("/api/v1/vectors/status"),
